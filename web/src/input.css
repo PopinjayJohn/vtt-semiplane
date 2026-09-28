@@ -9,9 +9,17 @@
  * appears inside a .templ file is still found.
  */
 
-@import "tailwindcss";
-
-/* Class names come from three places, and all three are core-owned.
+/* source(none) is load-bearing, not a preference. Without it Tailwind also runs
+ * automatic source detection, which walks the whole project root and extracts
+ * candidates from every file git does not ignore — including
+ * internal/md/testdata/wikilink-flood.md, a megabyte of wikilinks on a single
+ * unbroken line. That is a single-threaded CPU spin: the build read every file
+ * in the first seconds and then burned 100% CPU with zero further I/O, and it
+ * ran for over fifteen minutes. It was long blamed on the network mount, which
+ * was a false lead — see the footgun in AGENTS.md. The list below is the whole
+ * scan surface, and it is explicit so that the next person cannot widen it.
+ *
+ * Class names come from four places, and all four are core-owned.
  *
  *   internal/web/*.templ   the components
  *   internal/web/*.go      the view helpers
@@ -19,13 +27,10 @@
  *                          for passthrough blocks, callouts and mermaid
  *   web/static/app.js      the app shell
  *
- * Scanning "../../internal" wholesale was the difference between a fast build
- * and an unusable one: it walks internal/md/testdata, whose largest fixture is a
- * megabyte of wikilinks on a single unbroken line, and a line that long is
- * pathological for candidate scanning. The list above is explicit for that
- * reason — it is also what stops the next person from narrowing it to the
- * components alone and silently dropping every class the renderer emits.
+ * Narrowing this list to the components alone silently drops every class the
+ * markdown renderers emit, so internal/md/*.go is on the list and stays on it.
  */
+@import "tailwindcss" source(none);
 @source "../../internal/web/*.templ";
 @source "../../internal/web/*.go";
 @source "../../internal/md/*.go";

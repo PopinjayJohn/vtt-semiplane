@@ -447,3 +447,72 @@ func walkGo(t *testing.T, root string, fn func(rel, line string, num int)) {
 		t.Fatalf("walk: %v", err)
 	}
 }
+
+// TestNoOutboundNetwork enforces the rule that the request path never talks to
+// the network: no telemetry, no analytics, no CDN fetch, no remote font or
+// script, no update check. Every asset is embedded and served from
+// /_/assets/.
+//
+// The check is on the *client* symbols rather than the `net/http` import,
+// because a server legitimately imports net/http for handlers. A background
+// goroutine dialling home would not appear in a rendered page, so the check that
+// greps for remote URLs in HTML is not sufficient on its own; this one is.
+//
+// The plan named this test TestNoOutboundNetwork and it was never written, so a
+// hard security rule in AGENTS.md §2 was documented as enforced when nothing
+// enforced it. That is the exact failure AGENTS.md's own preamble forbids, and
+// this is the remedy.
+func TestNoOutboundNetwork(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+
+	// Client-side capability. Each of these can leave the machine.
+	clients := []string{
+		"http.Get(", "http.Head(", "http.Post(", "http.PostForm(",
+		"http.NewRequest(", "http.NewRequestWithContext(",
+		"http.DefaultClient", "http.Client{",
+		"net.Dial(", "net.DialTimeout(", "net.DialTCP(",
+		"net.LookupHost(", "smtp.SendMail(",
+		`"net/smtp"`, `"net/rpc"`, `"net/http/httputil"`,
+	}
+
+	walkGo(t, root, func(rel, line string, num int) {
+		if strings.HasSuffix(rel, "_test.go") {
+			// A test may open a listener, and httptest does. The rule is about
+			// the shipped request path.
+			return
+		}
+		if strings.HasPrefix(rel, "tools/") {
+			return
+		}
+		for _, c := range clients {
+			if strings.Contains(line, c) {
+				t.Errorf("%s:%d: outbound network capability %q: every asset is embedded and served from /_/assets/",
+					rel, num, strings.TrimSpace(c))
+			}
+		}
+	})
+}
+
+// TestNoProcessExecution enforces the other half of the same rule set: a
+// library that shells out is a library that can ignore the authorization it was
+// handed. Only the composition root may execute anything.
+func TestNoProcessExecution(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+
+	walkGo(t, root, func(rel, line string, num int) {
+		if strings.HasSuffix(rel, "_test.go") {
+			return
+		}
+		if strings.HasPrefix(rel, "internal/app/") {
+			return
+		}
+		for _, bad := range []string{`"os/exec"`, "exec.Command(", "exec.LookPath("} {
+			if strings.Contains(line, bad) {
+				t.Errorf("%s:%d: %q outside internal/app: only the composition root may run a process",
+					rel, num, strings.TrimSpace(bad))
+			}
+		}
+	})
+}

@@ -10,10 +10,12 @@ func admin(id int64) Principal  { return ForUser(id, "admin", RoleAdmin, false) 
 func anonRead() Principal       { return Anonymous(true) }
 func anonNoRead() Principal     { return Anonymous(false) }
 
-// TestCanReadSecretOverTheWholeMatrix is the Go-level twin of
-// TestSecretVisiblePredicateMatchesMatrix: every (visibility, role, author,
-// page owner) combination, asserted against §8.2 of the plan. The two must
-// agree, because one is the SQL and the other is the only Go-level path.
+// TestCanReadSecretOverTheWholeMatrix is the Go half of the cross-check: every
+// (visibility, role, author, page owner) combination, asserted against §8.2 of
+// the plan. The SQL half lives in internal/store as TestPredicateMatrixAgrees,
+// which runs both against one expectation — here rather than in store because
+// the table this asserts is the Go one, and the pairing only holds if each half
+// sits next to the implementation it checks.
 func TestCanReadSecretOverTheWholeMatrix(t *testing.T) {
 	t.Parallel()
 

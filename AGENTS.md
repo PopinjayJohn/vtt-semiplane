@@ -5,6 +5,25 @@ test in `internal/architecture_test.go` or by a CI gate. If a rule is not
 enforceable, it is marked as such — do not add unenforceable rules, and do not
 weaken an enforced one to make a change convenient.
 
+## 0. Documentation
+
+The design plan is not in this repository — it lives in `.kilo/`, which is
+gitignored. `docs/` is the durable copy, and it is the only place a new agent
+can find the design. Start at `docs/README.md`, which says what to read for
+which task, and read `docs/pitfalls.md` before running anything: three of the
+traps there present as a silent hang rather than an error.
+
+**The code is the specification; the documents point at it.** Do not restate a
+table, a parser, a policy or a test in a document that the code already owns.
+A document that repeats a fact the code owns can be wrong while looking
+authoritative, and this repository has a recorded case of exactly that: the plan
+documented the secret fence as `title=<optional>` with no quoting requirement,
+the parser read an unquoted value containing a space as an unknown key, and
+unknown keys meant public passthrough — so an author who followed the
+documentation served a DM's secret body in plaintext to a player, and a test
+pinned the unsafe behaviour. When a document and the code disagree, the code is
+right and the document is a bug.
+
 ## 1. What this is
 
 `vtt-semiplane` is a LAN-hosted TTRPG wiki and player+DM tool. A vault of
@@ -42,7 +61,12 @@ These are not style preferences. Each has a test or a grep that fails the build.
    `visibility = 'literal'`.
 5. **Never add an HTTP client to the request path.** No telemetry, no
    analytics, no CDN fetches, no font or script from a remote origin. Every
-   asset is embedded and served from `/_/assets/`.
+   asset is embedded and served from `/_/assets/`. Enforced by
+   `TestNoOutboundNetwork`, which greps for client-side capability rather than
+   for the `net/http` import, because a server legitimately imports net/http
+   and a background goroutine dialling home would never appear in a rendered
+   page. `TestNoProcessExecution` is the sibling rule: only `internal/app` may
+   run a process.
 6. **Never call `templ.Raw` on a vault-derived string.** And never enable
    goldmark's `html.WithUnsafe()`. Raw HTML in vault content is disabled.
 7. **Any new route must be added to the route table in
@@ -149,8 +173,11 @@ the ones that must exist before a phase is called done:
 - Vault sync: `TestIndexIsIdempotent`, `TestWatchAndReconcileAgree`,
   `TestWatcherSuppressesSelfWrites`, `TestReconcileScanFindsMissedEvent`,
   `TestConcurrentSaveSamePath`.
-- Authorisation: `TestAuthorizationMatrix`, `TestSecretVisiblePredicateMatchesMatrix`,
-  `TestOnlyPermMiddlewareIsConsulted`, `TestNoHandRolledVisibilityPredicates`,
+- Authorisation: `authz.TestAuthorizationMatrix` (the policy table),
+  `authz.TestCanReadSecretOverTheWholeMatrix` (the Go rule),
+  `store.TestPredicateMatrixAgrees` (the SQL and the Go rule against one
+  expectation, which is the cross-check that matters), `httpapi.TestAuthorizationMatrix`
+  and `httpapi.TestTheMatrixCoversEveryRoute` (the routes), `TestNoHandRolledVisibilityPredicates`,
   `TestCSRFRequiredOnAllMutations`.
 - Secret redaction: `TestSecretFixturesNeverLeak`, `TestTripwireFiresOnLeak`,
   `TestSecretBodyNeverInErrorsOrLogs`, `TestRawViewRedactsSecrets`,
@@ -211,6 +238,16 @@ under `internal/systems/<id>/`, one map entry in the registry, and sample
 content if it needs any. No core file changes, and a grep test
 (`TestNoPluginSwitchInCore`) fails the build if a plugin id appears anywhere
 else.
+
+**Almost none of this section is implemented yet, and the tests that would
+enforce it pass vacuously today.** `internal/plugin` is a type vocabulary and
+nothing more: there is no registry, no `Host` implementation, no reserved-name
+table, no plugin routes, and `internal/systems/core` and
+`internal/systems/dnd5e` each contain a `doc.go` and nothing else. So
+`TestNoPluginSwitchInCore` skips with "no plugins registered yet" and
+`TestPluginImportsAreWithinBoundary` finds no files to check. Both are honest
+skips rather than false passes, but treat the boundary as **designed, not
+enforced** until a plugin exists. `docs/plugins.md` says the same.
 
 - One `Plugin` interface, one registry, one lifecycle, one route prefix, and a
   `Kind` discriminator (`system` / `feature`). There is no second code path for
@@ -345,15 +382,23 @@ job, `git status --porcelain` must be empty.
   secret fence with an unparseable directive. Every `for` over a byte range
   needs an explicit progress assertion, and any branch that records a problem
   must still move the cursor.
-- **`make css` needs a local filesystem.** The Tailwind v4 scanner takes about
-  a second on local disk and exceeds four minutes anywhere under
-  `/mnt/gamedrive`, with identical binary, input and components — the mount's
-  filesystem walk is the cost, not the CSS, so neither narrowing the `@source`
-  globs nor building in a temp directory helps. The stylesheet is committed and
-  `web/static/app.css` is the artefact of record. Keep the `@source` list in
-  `web/src/input.css` explicit: `internal/md/*.go` is on it because the markdown
-  renderers emit class attributes for passthrough blocks, callouts and mermaid,
-  and dropping that line silently removes those classes on the next rebuild.
+- **`source(none)` on the Tailwind import is load-bearing.** `@import "tailwindcss"`
+  without `source(none)` leaves automatic source detection on, and detection
+  walks the whole project root — including
+  `internal/md/testdata/wikilink-flood.md`, a megabyte of wikilinks on one
+  unbroken line. Candidate extraction on that is a single-threaded CPU spin: the
+  build finished all its reads within seconds, then sat at 100% CPU with zero
+  further I/O for over fifteen minutes. This was long recorded here as a
+  `/mnt/gamedrive` filesystem-walk problem, which was wrong — it reproduces
+  identically on tmpfs, and the same command with `source(none)` finishes in
+  ~70 ms in the repo and in ~0 s on tmpfs. The `@source` list below the import is
+  *additive* to detection, not a replacement for it, so narrowing that list
+  cannot fix a slow build and the import itself is the only thing that can.
+  Keep the `@source` list explicit: `internal/md/*.go` is on it because the
+  markdown renderers emit class attributes for passthrough blocks, callouts and
+  mermaid, and dropping that line silently removes those classes on the next
+  rebuild. A build that reads like it is stuck is this bug, not a slow mount —
+  check it with `strace -c` or `/proc/<pid>/io` before looking anywhere else.
 - **Never run `go test ./...` bare on this machine.** It links and runs one
   test binary per package, up to `NumCPU` at a time, and every package that
   pulls in `modernc.org/sqlite` links a very large pure-Go libc. That exhausted
