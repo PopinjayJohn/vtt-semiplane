@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 )
@@ -277,6 +279,44 @@ type Panel struct {
 	PageType string
 }
 
+// PageStore is the read surface a plugin is given over indexed pages.
+//
+// It is an interface over store's authz-filtered queries rather than a *sql.DB,
+// and the difference is the whole design. A plugin that could reach a database
+// would be one SQL statement away from every secret in the vault; a plugin that
+// can only call these four methods cannot compose its own predicate at all, so
+// the "did you remember to filter" question has no wrong answer available.
+//
+// Every method takes the principal. That is not ceremony: a query whose filtering
+// is added later by someone in a hurry is a query where the count and the list
+// stop agreeing, and taking the principal as a parameter is what forces the
+// decision to be made at the signature rather than at the call site.
+//
+// Nothing here returns secret-derived text. A summary's excerpt comes from
+// page_text.body, which the indexer writes from md.Doc.PublicBody() and nothing
+// else, so a secret body is not in the table to be selected — the guarantee is a
+// property of what is stored rather than of a filter a caller has to remember.
+type PageStore interface {
+	// GetPageSummary returns the public card for one page: title, a bounded
+	// public excerpt, the public tags, and the last-updated time. A page that
+	// does not exist, one the principal may not read, and one with no public text
+	// all return store.ErrNoRows, because a preview must not become a way to
+	// probe for pages.
+	GetPageSummary(ctx context.Context, who authz.Principal, pageID int64) (store.PageSummary, error)
+	// ListPagesByType returns the pages carrying one frontmatter type. This is
+	// how a feature plugin reads a convention such as `type: houserule` without
+	// registering a page type for it.
+	ListPagesByType(ctx context.Context, who authz.Principal, pageType string) ([]store.Page, error)
+	// CountPagesByType returns the number of rows ListPagesByType would return,
+	// over the identical statement. A badge built from a separate count is how a
+	// list and its number come to disagree.
+	CountPagesByType(ctx context.Context, who authz.Principal, pageType string) (int, error)
+	// ListTags returns the tag cloud, filtered by the same predicate the tag page
+	// uses. A preview card and a tag page that disagree about what exists are one
+	// of the more confusing pairs of surfaces there is to ship.
+	ListTags(ctx context.Context, who authz.Principal) ([]store.TagCount, error)
+}
+
 // IndexRow is one derived row a search resolver contributes to /search and
 // /api/search. The resolver is authz-filtered by construction, using the same
 // predicate as the core query, and rows it must not expose are simply not
@@ -516,6 +556,11 @@ type Host interface {
 	// cannot reach a secret body: the FS handed to a plugin is built from
 	// public spans only.
 	FS() fs.FS
+	// Pages returns the authz-filtered page read surface. It is a named set of
+	// queries rather than a database, so a plugin cannot compose its own
+	// visibility predicate and cannot be handed a *sql.DB from which one could be
+	// composed.
+	Pages() PageStore
 	// RegisterRoutes mounts routes inside the plugin's own prefix.
 	RegisterRoutes(sub RouteMounter)
 	// RegisterPanels returns the panels this plugin contributes. Results are

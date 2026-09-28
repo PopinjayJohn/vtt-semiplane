@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/systems/dnd5e"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/systems/houserules"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/systems/linkpreview"
 )
 
 // The registry: one map entry per shipped plugin.
@@ -51,5 +53,14 @@ func builtinPlugins() map[string]plugin.Plugin {
 	// test whose job is to say there is only one of it.
 	return map[string]plugin.Plugin{
 		"dnd5e": dnd5e.New(),
+		// The two feature plugins, which exist as evidence rather than as
+		// content: together they exercise both sides of the Kind split, so
+		// "one interface, two kinds" is something a build runs rather than
+		// something a document claims. A feature plugin registers no page type
+		// and no table; houserules expresses content through the frontmatter
+		// convention `type: houserule`, which is why the sample houserules are
+		// ordinary pages and stay readable with the plugin absent.
+		"houserules":  houserules.New(),
+		"linkpreview": linkpreview.New(),
 	}
 }

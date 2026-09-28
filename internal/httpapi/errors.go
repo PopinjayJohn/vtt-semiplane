@@ -120,5 +120,9 @@ func (s *Server) shell(r *http.Request, title string) Shell {
 		// with no plugins, and the sidebar renders no group at all rather than an
 		// empty one.
 		PluginNav: s.pluginNav(r),
+		// Same reasoning, same place: whether previews exist is chrome too, and
+		// setting it in the handlers that happened to have a plugin would make
+		// the affordance depend on which surface the reader is looking at.
+		PreviewsEnabled: s.hasSummaryProvider(),
 	}
 }

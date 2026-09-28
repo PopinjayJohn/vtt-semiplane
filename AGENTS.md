@@ -326,10 +326,68 @@ unsatisfiable rather than stricter.
 - `Host` exposes no `*sql.DB`, no accessor returning secret text, no route
   outside `/plugin/{id}`, and no way to remove middleware (the sub-router is
   already prefixed and wrapped).
-- Link previews: the plugin supplies `GET /plugin/{id}/summary/{pageID}` and
-  core owns hover, focus, the pin toggle, `Esc` and the ARIA wiring. A summary
-  of a page the viewer cannot read returns **404**, byte-identical to
-  navigating to it — a preview must not become a way to probe for pages.
+- Link previews: the plugin supplies a `templ.Component` **card body** and core
+  owns the route, the behaviour, and the 404. The route is core's —
+  `GET /plugin/{id}/summary/{pageID}` in `internal/httpapi/routes.go` — because
+  AGENTS.md §7 requires a summary of a page the viewer may not read to be
+  **byte-identical to navigating to it**, and that byte-identity is enforced by
+  the unexported `httpapi.writeError`, which no plugin may reach. A
+  plugin-owned route could only approximate it, and a distinguishable 404 is the
+  probe the requirement exists to prevent. A `SummaryProvider` therefore
+  declines with `ok == false` and never renders an error of its own.
+- **`newHost` collects before `Register` runs.** `lifecycle.go` builds the host
+  — and reads `PageTypes`, `Panels`, `SearchResolvers` and `SummaryProviders` —
+  *before* `plugin.Register`. So a contribution that captures host state at
+  construction captures it before the plugin has been registered. Hold a
+  `func() plugin.PageStore` and call it at request time; do not store
+  `h.Pages()` by value. A fake host that registers first will not catch this, so
+  the ordering is asserted against the real sequence in
+  `internal/systems/linkpreview`.
+- **A mount is not a row.** `chain` wraps the whole router, so a mounted
+  sub-router inherits session, headers, rate limiting and the request log — but
+  `checkCSRF` and `permit` are applied *per row* inside the table loop, and a
+  mount is not a row. `httpapi.mountPluginRoutes` re-applies both at
+  `PermSession`. Neither `TestCSRFRequiredOnAllMutations` nor
+  `TestTheMatrixCoversEveryRoute` can catch a missing re-application: both read
+  the static route table, not the mounted chi tree. Plugin surfaces are therefore
+  for signed-in readers, which is a deliberate ceiling — the host has no
+  vocabulary for "the permission this route needs", and inventing one would let
+  a plugin name its own gate.
+- **A plugin cannot reach the principal without `authz`.** The context carrier is
+  `authz.WithPrincipal` / `authz.PrincipalFrom` (`internal/authz/context.go`),
+  one unexported key with one writer — the session middleware. `httpapi` keeps a
+  `PrincipalFrom` pass-through, and its own key is gone. A context that never
+  went through `WithPrincipal` reads as the **zero** `Principal`: anonymous,
+  `CanReadPublic() == false`. It is deliberately *not* `authz.Anonymous(true)`;
+  `TestTheZeroPrincipalIsNotAnonymousWithRead` fails first if someone "fixes"
+  that, because a one-word change there grants public read to every caller that
+  ever loses its principal. Never fabricate a principal for `PageStore` — a DM
+  principal handed to a player is the leak every other rule here prevents.
+- **A summary's excerpt is secret-free because of what is *stored*, not what is
+  filtered.** It comes from `page_text.body`, which the indexer writes from
+  `md.Doc.PublicBody()` and nothing else, so a secret body is not in the table to
+  be selected. It is capped in SQL (`substr`, `SummaryExcerptMaxChars`
+  *characters*, not bytes) so a 400 KiB page costs 200 characters rather than
+  being read whole.
+- **A page has no visibility.** `pages` has no visibility column and
+  `authz.PermReadPage` is resource-free: v1 has no per-page ACL, and a page is a
+  file that anyone who may read public content may open at `/p/{path}`. So there
+  is no such thing as a DM-only *page* to hold back from a list — a plugin
+  feature that needs one would have to invent a frontmatter key that nothing else
+  enforces, which hides content in one place and five others. The mechanism that
+  *does* hide content is a `visibility=` fence in the body. See `docs/plugins.md`
+  §8.
+- **A plugin is not on the Tailwind `@source` list.** `internal/systems/**` is
+  not scanned, so a utility class a plugin uses that no core file uses renders
+  unstyled and errors nowhere. Use core's existing tokens, or add a rule to
+  `web/src/input.css`; the houserules tests assert every class it uses is one
+  core's scan surface already knows.
+- **A 404 comparison must be within one build and one session.** Two servers
+  differ in their shell's CSRF token and in any build-fact signal, so comparing
+  a preview 404 against a 404 from a second fixture compares two different shells
+  and reports a leak that is not there. `preview_test.go` takes both responses
+  from the same fixture and the same session, which is also the harder
+  comparison — it is the same shell in both.
 
 ## 8. Generated files
 

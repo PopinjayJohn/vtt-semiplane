@@ -282,18 +282,29 @@ func pageContext(card httpapi.PageCard, toc []httpapi.TocEntry, backlinks []http
 
 // shellSignals is the client's initial signal state, and the whole of it.
 //
-// Two keys, both of them facts about the request rather than about the vault: the
-// URL the shell refetches when the stream fires, and whether a stream is open at
-// all. A signal is read by every script on the page and is written into the
-// response twice over, so the set of keys is a security boundary and the tripwire
-// in internal/httpapi audits the payload the same way it audits the HTML. A third
-// key would have to earn its place against that.
+// Three keys, all of them facts about the request rather than about the vault:
+// the URL the shell refetches when the stream fires, whether a stream is open at
+// all, and whether a link preview is worth binding. A signal is read by every
+// script on the page and is written into the response twice over, so the set of
+// keys is a security boundary and the tripwire in internal/httpapi audits the
+// payload the same way it audits the HTML. A fourth key would have to earn its
+// place against that.
+//
+// The preview key earns its place by not being a fact about content. A boolean
+// saying "some plugin registered a summary provider" tells a reader nothing they
+// could not learn by hovering a link and waiting 300 ms, and it is what lets the
+// degradation be quiet: a build with no preview plugin binds no handler, so no
+// link on any page issues a request that is always going to 404.
 type shellSignals struct {
 	// CurrentPageURL is the page this response is about, empty for a view that
 	// is not about a page.
 	CurrentPageURL string `json:"currentPageUrl"`
 	// Push reports whether a live-update stream is open for this session.
 	Push bool `json:"push"`
+	// Previews reports whether a plugin registered a page-summary provider, so
+	// the client binds the link-preview interaction at all. It is a fact about
+	// the build, not about the page, and it never carries a page id or a path.
+	Previews bool `json:"previews"`
 }
 
 // shellAttributes are the shell element's computed attributes.
@@ -308,16 +319,17 @@ func shellAttributes(shell httpapi.Shell) templ.Attributes {
 
 // shellSignalJSON is shellSignals as the data-signals attribute's value.
 func shellSignalJSON(shell httpapi.Shell) string {
-	// A struct of one string and one bool cannot fail to marshal, and an
+	// A struct of one string and two bools cannot fail to marshal, and an
 	// attribute has nowhere to report an error to. The fallback is the same
 	// shape with the neutral values, so a client that could not read the seed
 	// falls back to a full load rather than to a broken page.
 	payload, err := templ.JSONString(shellSignals{
 		CurrentPageURL: shell.CurrentPageURL,
 		Push:           shell.PushEnabled,
+		Previews:       shell.PreviewsEnabled,
 	})
 	if err != nil {
-		return `{"currentPageUrl":"","push":false}`
+		return `{"currentPageUrl":"","push":false,"previews":false}`
 	}
 	return payload
 }

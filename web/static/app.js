@@ -139,6 +139,40 @@
 	const DRAWER_LEFT = '(max-width: 1023px)';
 	const DRAWER_RIGHT = '(max-width: 1279px)';
 
+	// The link preview's hook and its two surfaces.
+	//
+	// The attribute is the one core's link renderer puts on every internal link
+	// in a rendered body; its value is an integer page id and never a title, a
+	// path or any content, so a listener bound to it cannot learn anything the
+	// document did not already say. A plugin that wants its links previewable
+	// emits the attribute and never emits hover behaviour of its own.
+	const WIKILINK = '[data-wikilink]';
+	const PREVIEW_CARD = 'link-preview-card';
+	const PREVIEW_PANE = 'link-preview';
+
+	// The pinned pane's open state is a signal, like every other overlay's, so
+	// the table below can close it by writing one boolean and the element and
+	// the handler cannot disagree about whether it is open.
+	const PREVIEW_PINNED = 'previewPinned';
+
+	// The summary route, and the plugin id in it.
+	//
+	// The plugin supplies the card body and core owns the behaviour and the
+	// request, which is the division the route itself was written to record —
+	// and the reason the prefix is a constant here rather than a value in the
+	// signal payload. It is a build fact, like a plugin's page-type ids: a
+	// build whose provider is not the one named here answers 404, which is also
+	// the answer for a page the reader may not read, and a card that shows
+	// nothing is the whole of the failure.
+	const SUMMARY_PATH = '/plugin/linkpreview/summary/';
+
+	// How long the pointer or the focus ring rests on a link before it costs a
+	// request. Sweeping the mouse across a paragraph of links is an ordinary
+	// reading gesture, and without a delay it is one request per link; the
+	// summary route budgets 30 a minute for a reason, and a delay is what stops
+	// a page sweep from spending all of it.
+	const PREVIEW_INTENT_MS = 300;
+
 	// The things Esc can close, in the order they are checked: a dialog is
 	// above a drawer and a dialog is above a dialog, so the first one that is
 	// open is the one Esc closes. Each names the signal the markup binds its
@@ -147,11 +181,19 @@
 	// signal is the only way any of them is opened or closed, because the
 	// trigger's aria-expanded and the element's visibility are both bound to
 	// it.
+	//
+	// The pinned preview is in the table and the transient card is not, and the
+	// difference is the whole reason the card has an Esc branch of its own in
+	// onKeydown. A card here would make Esc — and every key below the
+	// hasOpenOverlay() guard — conditional on where the pointer happens to be
+	// sitting, and a hover affordance that eats the keyboard is not an
+	// affordance.
 	const SPEC_PALETTE = { selector: '#palette', signal: 'openPalette', drawer: null };
 	const SPEC_SHORTCUTS = { selector: '#shortcuts', signal: 'openShortcuts', drawer: null };
 	const SPEC_LEFT = { selector: '#left-nav', signal: 'leftOpen', drawer: DRAWER_LEFT };
 	const SPEC_RIGHT = { selector: '#context', signal: 'rightOpen', drawer: DRAWER_RIGHT };
-	const OVERLAYS = [SPEC_PALETTE, SPEC_SHORTCUTS, SPEC_LEFT, SPEC_RIGHT];
+	const SPEC_PREVIEW = { selector: '#' + PREVIEW_PANE, signal: PREVIEW_PINNED, drawer: null };
+	const OVERLAYS = [SPEC_PALETTE, SPEC_SHORTCUTS, SPEC_LEFT, SPEC_RIGHT, SPEC_PREVIEW];
 
 	// The chord in progress, and the element that opened the last overlay.
 	// Both are the only mutable state in this file, and neither is the state of
@@ -168,6 +210,27 @@
 	// The armed swap watch, if a patch is in flight.
 	let swapWatch = null;
 	let swapTimer = 0;
+
+	// The link preview's state, all of it. Two surfaces, two requests, and one
+	// reason for each of them: `via` is what opened the card and therefore what
+	// closes it, and `pinned` is the one page the pane is holding, which is the
+	// page the next refresh re-asks about.
+	const preview = {
+		card: null,
+		cardBody: null,
+		pane: null,
+		paneBody: null,
+		timer: 0,
+		controller: null,
+		token: 0,
+		link: null,
+		pageID: '',
+		via: '',
+		pinned: '',
+		paneController: null,
+		paneToken: 0,
+		trigger: null,
+	};
 
 	const mediaCache = new Map();
 
@@ -449,6 +512,16 @@
 		// `[` and a palette opened with Ctrl+K have to be closable wherever the
 		// reader has since moved focus to.
 		if (event.key === 'Escape') {
+			// The transient preview card is closed here rather than through the
+			// overlay stack, because it is not in it: a card in that table would
+			// make Esc conditional on where the pointer happens to be, and the
+			// card is not an overlay — it is an answer to a question about one
+			// link. A pinned pane *is* in the table, so the press that gets past
+			// this one closes it, and Esc therefore closes both.
+			if (hidePreviewCard()) {
+				event.preventDefault();
+				return;
+			}
 			onEscape(event);
 			return;
 		}
@@ -1352,6 +1425,592 @@
 		}
 	}
 
+	/* The link preview. The plugin supplies the card body and core owns the
+	 * behaviour: hover, the intent delay, focus, the pin, Esc and the ARIA
+	 * wiring, implemented once for every link. A plugin that shipped its own
+	 * hover would mean one implementation of focus management per plugin and
+	 * one accessibility bug per plugin, and the card it would need to build
+	 * them in is the card this builds here.
+	 *
+	 * Everything below is created by this file and exists in the document only
+	 * once it has run and something has asked for it: with this file blocked a
+	 * link is a link, there is no pin button to render and no request to fail.
+	 */
+
+	/**
+	 * Whether this build has a summary provider to preview from.
+	 *
+	 * The value is a JSON boolean; the string form is accepted for the reason
+	 * startStream accepts it for `push`. With no provider bindPreviews returns
+	 * before a listener is attached, which is the whole of the degradation: no
+	 * hover request, no card, no pin, and links that navigate.
+	 */
+	function previewsEnabled() {
+		const signals = readShellSignals();
+		return signals.previews === true || signals.previews === 'true';
+	}
+
+	/**
+	 * The page a previewable link names, or ''.
+	 *
+	 * A link with no id, or one whose id is not the positive integer the
+	 * renderer promises, is left as an ordinary link. The check is here rather
+	 * than in the URL builder because the attribute is the one piece of this
+	 * feature that came out of a markdown file, and a value that is not a page
+	 * id is a path this file would otherwise have put in a request.
+	 */
+	function previewPageID(link) {
+		const raw = link.getAttribute('data-wikilink');
+		return raw !== null && /^[1-9][0-9]*$/.test(raw) ? raw : '';
+	}
+
+	/**
+	 * The previewable link an event came from, or null.
+	 *
+	 * A link inside a card is not previewable: the card is the answer to the
+	 * question, and a preview of a preview is a card inside a card.
+	 */
+	function previewLinkOf(node) {
+		if (!node || node.nodeType !== 1) {
+			return null;
+		}
+		const link = node.closest(WIKILINK);
+		if (!link) {
+			return null;
+		}
+		return preview.card && preview.card.contains(link) ? null : link;
+	}
+
+	/**
+	 * Asks the summary route for one page.
+	 *
+	 * Every way this can fail is one answer — no card: a 404, which is also the
+	 * answer for a page the reader may not read and for a page that does not
+	 * exist; a rate limit; a provider that failed; an abort. They are one
+	 * answer on the wire so that a preview cannot be a way to probe for pages,
+	 * and they are one answer here so that the client cannot become the second
+	 * way to tell.
+	 *
+	 * `cache: 'no-store'` repeats what the route already sends in
+	 * `Cache-Control: private, max-age=0`. It is worth repeating because this is
+	 * the one response in the app whose whole safety argument is that it is
+	 * never reused: a browser cache holding a summary outlives the permission
+	 * that produced it.
+	 */
+	function fetchSummary(pageID, controller) {
+		return fetch(SUMMARY_PATH + encodeURIComponent(pageID), {
+			signal: controller.signal,
+			credentials: 'same-origin',
+			cache: 'no-store',
+			headers: { Accept: 'text/html' },
+		})
+			.then((resp) => (resp.ok ? resp.text() : ''))
+			.then((html) => (html ? parseSummary(html) : null))
+			.catch(() => null);
+	}
+
+	/**
+	 * The card's content, as nodes rather than as a string.
+	 *
+	 * DOMParser and replaceChildren rather than innerHTML, for the reason
+	 * wireTypeaheads gives: the fragment is parsed the way the browser parses a
+	 * navigation, and nothing in it can execute. The server escaped every value
+	 * on the way out; this is the second belt, not the only one.
+	 */
+	function parseSummary(html) {
+		const doc = new DOMParser().parseFromString(html, 'text/html');
+		return Array.from(doc.body.childNodes);
+	}
+
+	/**
+	 * The transient card, created on first use.
+	 *
+	 * It is placed beside the link rather than at the end of the body, and that
+	 * is what makes the pin reachable: the card holds exactly one control, and a
+	 * control at the end of the document is the last thing a reader tabbing
+	 * through the page arrives at, not the next thing after the link. Being
+	 * `position: fixed`, where it sits in the document does not move it on
+	 * screen.
+	 *
+	 * `role="tooltip"` and no tabindex of its own, because a card a keyboard can
+	 * land on is a dialog: a tooltip is read through the link's aria-describedby
+	 * and is never a stop in the tab order.
+	 */
+	function previewCard() {
+		if (preview.card) {
+			return preview.card;
+		}
+		const card = document.createElement('div');
+		card.id = PREVIEW_CARD;
+		card.className = 'link-preview motion-reduce:transition-none';
+		card.setAttribute('role', 'tooltip');
+		card.dataset.visible = 'false';
+		const body = document.createElement('div');
+		body.className = 'link-preview-body';
+		const foot = document.createElement('div');
+		foot.className = 'link-preview-foot';
+		// The one control in the card, and it is a real button with words on it
+		// rather than a hover-only gesture: the affordance has to be visible and
+		// focusable, and a pin icon alone would be a control with no name.
+		const pin = document.createElement('button');
+		pin.type = 'button';
+		pin.className = 'btn link-preview-pin';
+		pin.textContent = 'Pin preview';
+		pin.addEventListener('click', pinPreview);
+		foot.appendChild(pin);
+		card.append(body, foot);
+		preview.card = card;
+		preview.cardBody = body;
+		return card;
+	}
+
+	/**
+	 * Moves the card next to the link it is answering for.
+	 *
+	 * Beside rather than at the end of the body for the tab-order reason in
+	 * previewCard, and re-placed every time rather than once, because a markdown
+	 * body is replaced wholesale on every region swap and a card left behind in
+	 * the old one is a card in no document at all.
+	 */
+	function attachCard(link) {
+		const card = previewCard();
+		if (card.parentElement !== link.parentElement || card.previousElementSibling !== link) {
+			link.parentElement.insertBefore(card, link.nextSibling);
+		}
+		return card;
+	}
+
+	/**
+	 * Places the card against the link's box, inside the viewport.
+	 *
+	 * Flush, with no gap: a gap is dead space the pointer has to cross, and
+	 * crossing it is a mouseleave whose relatedTarget is the gap rather than the
+	 * card, so a card a gap away would dismiss itself every time a reader reached
+	 * for the pin.
+	 */
+	function positionCard(link) {
+		const card = preview.card;
+		const anchor = link.getBoundingClientRect();
+		const box = card.getBoundingClientRect();
+		const edge = 8;
+		let top = anchor.bottom;
+		if (top + box.height > window.innerHeight - edge) {
+			top = Math.max(edge, anchor.top - box.height);
+		}
+		const left = Math.max(edge, Math.min(anchor.left, window.innerWidth - box.width - edge));
+		card.style.setProperty('--preview-left', left + 'px');
+		card.style.setProperty('--preview-top', top + 'px');
+	}
+
+	/**
+	 * Hides the card, and reports whether there was one to hide.
+	 *
+	 * The relatedTarget check is the reason this is a function: leaving the link
+	 * for the card is not leaving the preview, and a card that dismissed on that
+	 * crossing would be a card whose only control could not be reached by
+	 * pointer or by keyboard. Moving between two elements of the same link is the
+	 * same case, because mouseout fires for every element boundary crossed
+	 * rather than for the link alone.
+	 *
+	 * With no event it always hides, which is what Esc and a scroll want.
+	 */
+	function hidePreviewCard(event) {
+		const card = preview.card;
+		if (!card || card.dataset.visible !== 'true') {
+			return false;
+		}
+		if (event) {
+			const to = event.relatedTarget;
+			if ((preview.link && preview.link.contains(to)) || card.contains(to)) {
+				return false;
+			}
+		}
+		card.dataset.visible = 'false';
+		// The description goes with the thing it described. An aria-describedby
+		// pointing at a hidden tooltip describes nothing, and a reader who tabs
+		// back to the link should not be read a preview that is not on screen.
+		if (preview.link) {
+			preview.link.removeAttribute('aria-describedby');
+		}
+		cancelPreview();
+		return true;
+	}
+
+	/**
+	 * Gives up the intent delay and any request made for it.
+	 *
+	 * Hover is a request, and an abandoned one is still a request the summary
+	 * route rate-limited: sweeping the mouse across a paragraph would otherwise
+	 * spend a reader's whole preview budget on links they never looked at. The
+	 * token is bumped as well as the abort, because a request already on the
+	 * wire can still land after its abort and must not become a card.
+	 */
+	function cancelPreview() {
+		if (preview.timer) {
+			window.clearTimeout(preview.timer);
+			preview.timer = 0;
+		}
+		if (preview.controller) {
+			preview.controller.abort();
+			preview.controller = null;
+		}
+		preview.token += 1;
+		preview.link = null;
+		preview.pageID = '';
+		preview.via = '';
+	}
+
+	/**
+	 * Arms the intent delay for a link, and drops whatever the last one armed.
+	 *
+	 * At most one preview is armed and at most one request is in flight for the
+	 * whole document rather than per link. That is stricter than one per link,
+	 * and it is the same thing in practice — a reader is on one link at a time —
+	 * while being the one shape that cannot fan out.
+	 *
+	 * `via` is which input asked, and it is what dismisses the card later: a
+	 * card the focus ring opened must not vanish when the reader moves a mouse
+	 * that had nothing to do with it, and the reverse is the same mistake.
+	 */
+	function schedulePreview(link, via) {
+		const pageID = previewPageID(link);
+		if (!pageID) {
+			return;
+		}
+		cancelPreview();
+		preview.link = link;
+		preview.pageID = pageID;
+		preview.via = via;
+		preview.timer = window.setTimeout(() => {
+			preview.timer = 0;
+			showPreviewCard(link, pageID);
+		}, PREVIEW_INTENT_MS);
+	}
+
+	/**
+	 * Puts a fetched summary in the card, if it is still the one being asked for.
+	 */
+	function showPreviewCard(link, pageID) {
+		const controller = new AbortController();
+		const token = ++preview.token;
+		preview.controller = controller;
+		fetchSummary(pageID, controller).then((nodes) => {
+			// Four things can have happened while this was in flight: the pointer
+			// left, a second link was hovered, the region was swapped out from
+			// under the link, or the response was for a request already given
+			// up on. The token catches the out-of-order response — the same bug
+			// wireTypeaheads documents for a search term, with a page id in it —
+			// and the rest is what a card showing the wrong page's summary, or a
+			// summary for a link that is no longer on the screen, would look like.
+			if (
+				!nodes ||
+				token !== preview.token ||
+				preview.pageID !== pageID ||
+				!preview.link ||
+				!preview.link.isConnected
+			) {
+				return;
+			}
+			const card = attachCard(link);
+			preview.cardBody.replaceChildren(...nodes);
+			// Measured after the content is in and before the card is shown: the
+			// card has a width from the stylesheet and a height from the body, so
+			// its box is only the right size once the body is in it.
+			positionCard(link);
+			link.setAttribute('aria-describedby', card.id);
+			card.dataset.visible = 'true';
+		});
+	}
+
+	/**
+	 * The pinned pane, created on first use.
+	 *
+	 * A `<dialog>` for its Esc, its place in the overlay stack and its focus
+	 * restoration, and `role="complementary"` because a pinned preview is a
+	 * reading surface meant to sit beside the page — role="dialog" would tell a
+	 * screen reader it is a task with an answer, and showModal would take the
+	 * page the reader is reading away from them. It is named the way the context
+	 * column is named, with a label rather than a heading, so that a floating
+	 * pane does not add itself to the document's heading outline.
+	 *
+	 * The open attribute is bound to the same signal openOverlay writes and
+	 * onEscape writes false, so the table in OVERLAYS can close this the way it
+	 * closes the palette and the shortcut list. It is the only place the pane
+	 * ever becomes open.
+	 */
+	function previewPane() {
+		if (preview.pane) {
+			return preview.pane;
+		}
+		const pane = document.createElement('dialog');
+		pane.id = PREVIEW_PANE;
+		pane.className = 'link-preview-pane';
+		pane.setAttribute('role', 'complementary');
+		pane.tabIndex = -1;
+		pane.setAttribute('aria-label', 'Pinned page preview');
+		pane.setAttribute('data-attr:open', SIGNAL_PREFIX + PREVIEW_PINNED);
+		const head = document.createElement('div');
+		head.className = 'link-preview-pane-head';
+		const close = document.createElement('button');
+		close.type = 'button';
+		close.className = 'btn link-preview-close';
+		close.textContent = 'Close';
+		close.addEventListener('click', closePreviewButton);
+		head.appendChild(close);
+		const body = document.createElement('div');
+		body.className = 'link-preview-body';
+		pane.append(head, body);
+		// A close this file did not ask for empties the pane on the same terms.
+		// Otherwise the next pin would show the previous page's summary in the
+		// moment before its own request came back.
+		pane.addEventListener('close', () => {
+			preview.paneToken += 1;
+			preview.pinned = '';
+			body.replaceChildren();
+		});
+		document.body.appendChild(pane);
+		preview.pane = pane;
+		preview.paneBody = body;
+		return pane;
+	}
+
+	/**
+	 * The name a pinned pane is listed under.
+	 *
+	 * The link's own text, whitespace-collapsed and bounded, because it is the
+	 * one name core has without a second request and because a landmark with no
+	 * accessible name is a landmark a screen reader lists as nothing. The
+	 * fallback is a link whose text was empty, which must still open a named
+	 * landmark.
+	 */
+	function previewName(link) {
+		const text = (link.textContent || '').trim().replace(/\s+/g, ' ');
+		return text.slice(0, TITLE_MAX) || 'Pinned page preview';
+	}
+
+	/**
+	 * Promotes the card to the pane, and asks again rather than copying.
+	 *
+	 * The body already in the card is not moved into the pane. The card is
+	 * rebuilt on every hover and the pane outlives the card by an unbounded
+	 * amount, so a pane that inherited rendered content from a hover would hold
+	 * bytes whose lifetime nothing has checked. One extra request, against a
+	 * route that budgets thirty a minute, buys a pane whose content came from
+	 * the request that opened it.
+	 */
+	function pinPreview() {
+		const link = preview.link;
+		const pageID = preview.pageID;
+		if (!link || !pageID) {
+			return;
+		}
+		hidePreviewCard();
+		preview.trigger = link;
+		preview.pinned = pageID;
+		previewPane().setAttribute('aria-label', previewName(link));
+		loadPreviewPane(pageID);
+	}
+
+	/**
+	 * Asks for the pane's page and puts the answer in the pane.
+	 *
+	 * The token is the out-of-order guard, and on this path it is not optional.
+	 * An aborted request still resolves, as a refusal, because fetchSummary
+	 * answers every failure the same way — so a refetch that overlapped an
+	 * earlier one would otherwise be closed by its own predecessor's abort, and
+	 * a pane that closed on every overlapping refresh would be a pane that
+	 * could not survive a busy vault. `preview.pinned` is the second half: a
+	 * close, or a pin of a different page, is not an answer to this question.
+	 */
+	function loadPreviewPane(pageID) {
+		if (preview.paneController) {
+			preview.paneController.abort();
+		}
+		// The pane's own controller, separate from the card's. A hover that
+		// cancels its own request must not cancel the one that is checking
+		// whether the reader may still read what the pane is showing.
+		const controller = new AbortController();
+		preview.paneController = controller;
+		const token = ++preview.paneToken;
+		fetchSummary(pageID, controller).then((nodes) => {
+			if (token !== preview.paneToken || preview.pinned !== pageID) {
+				return;
+			}
+			if (!nodes) {
+				// There is no card. Either the page does not exist, or it does
+				// and this reader may not read it, and the server is not going to
+				// say which — so a pane that stayed open on that answer is a pane
+				// still showing a summary whose permission may be exactly what
+				// just changed. A persistent client-side surface that trusts what
+				// it already has is the one failure a page load cannot have.
+				closePreviewPane();
+				return;
+			}
+			openPreviewPane(nodes);
+		});
+	}
+
+	/**
+	 * Re-asks about the pinned page after the shell re-rendered.
+	 *
+	 * The event carries a reason and nothing else, and this uses none of it: the
+	 * question worth asking is whether this reader may still read the page the
+	 * pane is holding, and the answer has to be the server's, now. Cached
+	 * content is the one thing a pane must not have, because the pane is the one
+	 * surface that outlives the render that authorized it.
+	 */
+	function refetchPreviewPane() {
+		if (!preview.pinned) {
+			return;
+		}
+		loadPreviewPane(preview.pinned);
+	}
+
+	/**
+	 * Fills the pane and opens it.
+	 */
+	function openPreviewPane(nodes) {
+		const pane = previewPane();
+		preview.paneBody.replaceChildren(...nodes);
+		openOverlay(SPEC_PREVIEW);
+		// The binding above is applied by the bundle from a queued effect, so a
+		// pin pressed before the first effect lands would open nothing. This is
+		// the only line that sets the attribute, and it sets it to the value the
+		// signal already holds; the two cannot disagree because the only writer
+		// of that signal is above.
+		if (!pane.open) {
+			pane.open = true;
+		}
+		// rememberTrigger recorded whatever had focus when the pin was pressed,
+		// which is the pin button, and that button is inside the card that has
+		// just closed. The link is where the reader was and it outlives the
+		// card, so it is what Esc should hand focus back to.
+		if (preview.trigger) {
+			lastTrigger = preview.trigger;
+		}
+		// The container is focusable and takes focus, so that the pinned content
+		// is where a keyboard reader is when they press Esc rather than back on
+		// the link they are already looking at. After the open attribute, because
+		// a focus call on an element that is still display:none is a silent
+		// no-op, which is the same trap focusTarget() walks around.
+		pane.focus({ preventScroll: true });
+	}
+
+	/**
+	 * Closes the pane and empties it.
+	 *
+	 * Emptying is the load-bearing half. A pane that closed with its summary
+	 * still in the DOM would be one `open` away from showing a page's content
+	 * again without having asked for it.
+	 */
+	function closePreviewPane() {
+		if (preview.paneController) {
+			preview.paneController.abort();
+			preview.paneController = null;
+		}
+		preview.paneToken += 1;
+		preview.pinned = '';
+		if (preview.pane) {
+			preview.paneBody.replaceChildren();
+		}
+		setSignal(PREVIEW_PINNED, false);
+	}
+
+	/**
+	 * Closes the pane from its own close button, and puts focus back.
+	 */
+	function closePreviewButton() {
+		const back = preview.trigger;
+		closePreviewPane();
+		// The button that closed the pane was inside it, so focus would fall to
+		// the body, which is the one place a reader cannot get back from.
+		if (back && back.isConnected) {
+			back.focus({ preventScroll: true });
+		}
+	}
+
+	/**
+	 * Hover, delegated from the document.
+	 *
+	 * mouseover and mouseout rather than mouseenter and mouseleave, because
+	 * those two do not bubble and a document listener is the only way to survive
+	 * a region swap. Both fire per element boundary crossed rather than per
+	 * element, which is why the same-link case is answered before anything is
+	 * dismissed: a link with a <code> in it is entered and left several times
+	 * without the pointer ever leaving it.
+	 */
+	function onPreviewPointer(event) {
+		const node = event.target;
+		if (!node || node.nodeType !== 1) {
+			return;
+		}
+		const link = previewLinkOf(node);
+		if (event.type === 'mouseover') {
+			if (link && link !== preview.link) {
+				schedulePreview(link, 'pointer');
+			}
+			return;
+		}
+		// A card the focus ring opened is not dismissed by a pointer that has
+		// nothing to do with it, and neither is a card the pointer opened
+		// dismissed by a focus change elsewhere on the page.
+		if (preview.via !== 'pointer') {
+			return;
+		}
+		hidePreviewCard(event);
+	}
+
+	/**
+	 * Focus, delegated from the document, on the same two-reason rule as hover.
+	 *
+	 * focusin rather than focus, for the bubbling reason above, and because a
+	 * focus that never landed on the link has no preview to open.
+	 */
+	function onPreviewFocus(event) {
+		const link = previewLinkOf(event.target);
+		if (event.type === 'focusin') {
+			if (link && link !== preview.link) {
+				schedulePreview(link, 'focus');
+			}
+			return;
+		}
+		if (preview.via !== 'focus') {
+			return;
+		}
+		hidePreviewCard(event);
+	}
+
+	/**
+	 * A card is positioned against a link's box, and scrolling moves that box
+	 * without touching the card. Capture phase, because the columns are the
+	 * scrollers and a scroll on one of them does not reach window in the bubble
+	 * phase.
+	 */
+	function onPreviewScroll() {
+		hidePreviewCard();
+	}
+
+	/**
+	 * Binds the preview interaction, if this build has anything to preview.
+	 *
+	 * With no provider this returns before a single listener is attached. That
+	 * is the whole of the graceful degradation, and it is why nothing about a
+	 * preview is in the markup: a pin button rendered on every page of a build
+	 * that has no previews is a control with nothing behind it, which is a bug
+	 * and not a degradation.
+	 */
+	function bindPreviews() {
+		if (!previewsEnabled()) {
+			return;
+		}
+		document.addEventListener('mouseover', onPreviewPointer);
+		document.addEventListener('mouseout', onPreviewPointer);
+		document.addEventListener('focusin', onPreviewFocus);
+		document.addEventListener('focusout', onPreviewFocus);
+		document.addEventListener(REFRESH_EVENT, refetchPreviewPane);
+		window.addEventListener('scroll', onPreviewScroll, true);
+	}
+
 	function start() {
 		markCurrentLink();
 		watchForSwaps();
@@ -1365,6 +2024,7 @@
 		startStream();
 		watchVisibility();
 		wireTypeaheads();
+		bindPreviews();
 		document.addEventListener('datastar-patch-elements', () => wireTypeaheads());
 		document.addEventListener('semiplane-refresh', () => wireTypeaheads());
 	}

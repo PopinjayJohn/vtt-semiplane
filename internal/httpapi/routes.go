@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -112,6 +113,25 @@ func (s *Server) Routes() []Route {
 		// never content.
 		{Method: http.MethodGet, Pattern: "/_/events", Perm: authz.PermSession, Handle: s.events},
 
+		// A link preview's content. It is core-owned rather than a route the
+		// linkpreview plugin mounts, and the reason is the 404.
+		//
+		// AGENTS.md §7 requires a summary of a page the viewer may not read to be
+		// byte-identical to navigating to that page, and that byte-identity is
+		// enforced by httpapi.writeError rendering a fixed errorCopy table with
+		// nothing in the model that could differ between two renderings. A route
+		// mounted by a plugin cannot reach writeError — it is unexported, and
+		// httpapi is on the plugin boundary's forbidden list — so a plugin-owned
+		// summary route could only approximate the requirement, and a preview that
+		// renders a distinguishable 404 is a way to probe for pages.
+		//
+		// So the route is here and the plugin supplies the card body. That is also
+		// the division §2.8.2 asks for: the plugin supplies content, core owns
+		// behaviour. It is PermReadPage rather than something weaker because the
+		// decision it makes is exactly that one, and the policy is the only place
+		// a role is compared.
+		{Method: http.MethodGet, Pattern: "/plugin/{id}/summary/{pageID}", Perm: authz.PermReadPage, Handle: s.pageSummary},
+
 		{Method: http.MethodGet, Pattern: "/healthz", Perm: PermNone, Handle: s.healthz},
 		{Method: http.MethodGet, Pattern: "/readyz", Perm: PermNone, Handle: s.readyz},
 
@@ -150,7 +170,49 @@ func (s *Server) router() http.Handler {
 	}
 	r.NotFound(s.notFound)
 	r.MethodNotAllowed(s.methodNotAllowed)
+	s.mountPluginRoutes(r)
 	return r
+}
+
+// mountPluginRoutes mounts every registered plugin's sub-router under its own
+// prefix, behind the same two gates the table applies.
+//
+// The gates are re-applied here rather than inherited, and that is the whole
+// point of the function. `chain` wraps the router, so a mounted sub-router is
+// already behind Session, RateLimit and the headers — but `checkCSRF` and
+// `permit` are applied per row inside the table loop, and a mount is not a row.
+// Without this, a plugin's POST would run with no CSRF check and no permission,
+// which is a hole in a boundary whose entire claim is that a plugin cannot
+// escape it.
+//
+// The permission is the plugin's *least* requirement rather than a per-plugin
+// one, because the host has no vocabulary for "the permission this route needs"
+// and inventing one would let a plugin name its own gate. PermSession is the
+// ceiling: a plugin surface is for signed-in members of the campaign, and a
+// plugin that needs less can already serve anonymous readers through the pages
+// those readers may already read.
+func (s *Server) mountPluginRoutes(r *chi.Mux) {
+	if s.plugins == nil {
+		return
+	}
+	for _, owned := range s.plugins.Routes() {
+		if owned.Value == nil {
+			continue
+		}
+		// The prefix is derived from the registry's own record of which plugin
+		// owns the router, never from anything the plugin said, so a plugin
+		// cannot mount at a prefix it does not own.
+		prefix := plugin.PluginPrefix(owned.Plugin)
+		rt := Route{Method: "*", Pattern: prefix + "/*", Perm: authz.PermSession}
+		var h http.Handler = owned.Value
+		h = s.checkCSRF(h)
+		h = s.permit(rt)(h)
+		pattern := rt.Pattern
+		inner := h
+		r.Mount(prefix, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			inner.ServeHTTP(w, req.WithContext(withValue(req.Context(), routeKey, pattern)))
+		}))
+	}
 }
 
 // Table returns the route patterns and permissions without a Server, for a

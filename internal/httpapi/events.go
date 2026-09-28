@@ -1030,7 +1030,7 @@ func (sub *subscriber) syntheticRequest() *http.Request {
 	route.URLParams.Add("*", sub.path)
 
 	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, route)
-	ctx = withValue(ctx, principalKey, sub.who)
+	ctx = authz.WithPrincipal(ctx, sub.who)
 	ctx = withValue(ctx, sessionKey, sub.token)
 	ctx = withValue(ctx, csrfKey, sub.csrf())
 	ctx = withValue(ctx, routeKey, "/p/*")

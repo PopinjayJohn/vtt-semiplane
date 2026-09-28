@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
+	"github.com/go-chi/chi/v5"
 )
 
 // The plugin lifecycle, driven from the composition root.
@@ -120,15 +122,69 @@ func (a *App) pluginDeps(ctx context.Context) plugin.PluginDeps {
 			return a.applyPluginMigrations(ctx, pluginID, migs)
 		},
 
-		// The sub-router is not wired in this stage either, and for a structural
-		// reason rather than a policy one: the router and its middleware are
-		// constructed by the caller and handed to Boot as an opaque http.Handler,
-		// so there is nothing here to mount onto. A nil mounter means this build
-		// serves no plugin routes, which is a degraded host and not a broken one —
-		// the plugin still registers its page types, panels and navigation.
-		SubRouter: nil,
+		// The sub-router is a bare mux, and the prefix and the middleware are
+		// applied by the caller that owns the router.
+		//
+		// The alternative — building the mounted, wrapped router here — is not
+		// available, and the reason is the boot order rather than a preference.
+		// Plugins register before the HTTP server exists: the router needs the
+		// store, the writer and the indexer that Boot is what creates, and Boot
+		// needs to know whether it has a handler before it binds a listener. So
+		// there is no router here to mount onto, and the composition root hands
+		// the deferred handler in for exactly that reason.
+		//
+		// What this does guarantee is the half that is a security property: the
+		// mux is built here, by the host, and handed to the plugin as a value.
+		// A plugin that mounted on a router of its own would be mounting outside
+		// the prefix and outside the middleware, and the audit in host.go compares
+		// the router it is handed against this one so that a substituted router is
+		// refused rather than served.
+		SubRouter: func(string) plugin.RouteMounter { return chi.NewRouter() },
+
+		// The page read surface, over the reader connection.
+		//
+		// This is the surface a feature plugin reads the campaign with: a
+		// `type: houserule` page list, or one page's public summary for a link
+		// preview. It is four named methods rather than a *sql.DB, and the
+		// difference is the design — a plugin handed a database could compose its
+		// own visibility predicate, and a hand-rolled OR-chain is how a dm secret
+		// reaches a player (AGENTS.md §2.4). Every method takes the principal and
+		// applies authz.SecretVisibleSQL itself, so there is no predicate left for
+		// a plugin to get wrong.
+		Pages: &pageStore{q: a.db.Reader()},
 	}
 }
+
+// pageStore is the composition root's implementation of plugin.PageStore.
+//
+// It is a named type over a Queryer rather than a set of closures because a
+// plugin receives the interface and the composition root is the only place that
+// can satisfy it: `plugin` sits below `store` in the dependency order's
+// reasoning, and `app` is the package allowed to know about both. The methods
+// are store's, called verbatim — there is no query written here, because a
+// query written here would be a query the store's own tests cannot see, and
+// store.TestPredicateMatrixAgrees is the cross-check that matters.
+type pageStore struct {
+	q store.Queryer
+}
+
+func (p *pageStore) GetPageSummary(ctx context.Context, who authz.Principal, pageID int64) (store.PageSummary, error) {
+	return store.GetPageSummary(ctx, p.q, who, pageID)
+}
+
+func (p *pageStore) ListPagesByType(ctx context.Context, who authz.Principal, pageType string) ([]store.Page, error) {
+	return store.ListPagesByType(ctx, p.q, who, pageType)
+}
+
+func (p *pageStore) CountPagesByType(ctx context.Context, who authz.Principal, pageType string) (int, error) {
+	return store.CountPagesByType(ctx, p.q, who, pageType)
+}
+
+func (p *pageStore) ListTags(ctx context.Context, who authz.Principal) ([]store.TagCount, error) {
+	return store.ListTags(ctx, p.q, who)
+}
+
+var _ plugin.PageStore = (*pageStore)(nil)
 
 // PluginRegistry returns what the lifecycle produced, for the request path.
 //

@@ -445,6 +445,141 @@
 	.card-heading {
 		@apply mb-1 text-sm font-semibold;
 	}
+
+	/* The link preview: a transient card and a pinned pane, one set of tokens
+	 * and two boxes.
+	 *
+	 * The chrome is core's and the body is a provider's, and the boundary is
+	 * drawn here. The card carries no padding of its own, because the provider
+	 * renders a complete card — its own box, its own padding, its own utility
+	 * classes — and two sides each assuming otherwise is how a summary ends up
+	 * with a card inside a card. What core supplies is the frame, the theme, and
+	 * the neutralising below.
+	 *
+	 * That neutralising is not decoration. The card is inserted beside the link
+	 * it is answering for, which is what puts the pin next in the tab order, and
+	 * that puts it inside `.prose-vtt` — so without it a preview would inherit
+	 * the page's heading scale and the page's list bullets. Every selector below
+	 * is written with the card's own class in front of `.prose-vtt`'s, because
+	 * both are in this layer and the prose rules were written first; a provider's
+	 * utilities still win over all of it, which is the point of them being there.
+	 */
+	.link-preview {
+		@apply fixed z-40 m-0 w-80 rounded-lg border text-sm;
+		inset-inline-start: var(--preview-left, 0px);
+		inset-block-start: var(--preview-top, 0px);
+		border-color: var(--color-rule);
+		background-color: var(--color-surface-raised);
+		color: var(--color-ink);
+		box-shadow: 0 12px 28px oklch(0.13 0.01 250 / 0.26);
+		/* Hidden rather than removed, and by visibility rather than display, for
+		 * two reasons: a card that took its box with it would make the page jump
+		 * the moment one appeared, and a transition on an element that stops
+		 * being rendered has nothing to interpolate between. `visibility` also
+		 * takes the pin out of the tab order and out of the accessibility tree
+		 * while the card is away, which is what a tooltip that is not there
+		 * should do. */
+		visibility: hidden;
+		opacity: 0;
+		transition: opacity 120ms ease, visibility 120ms;
+	}
+
+	.link-preview[data-visible="true"] {
+		visibility: visible;
+		opacity: 1;
+	}
+
+	/* The card's row for the pin, and the pane's row for the close button. Both
+	 * sit above a hairline rather than a gap, so the card is one rectangle for
+	 * the pointer to cross into from the link. */
+	.link-preview-foot,
+	.link-preview-pane-head {
+		@apply flex items-center justify-end gap-2 border-t px-3 pt-2;
+		border-color: var(--color-prose-rule);
+	}
+
+	.link-preview-foot {
+		@apply mt-2 pb-3;
+	}
+
+	.link-preview-body {
+		@apply px-3 pb-3;
+	}
+
+	.link-preview-pane-head {
+		@apply pt-3;
+	}
+
+	/* What a summary is made of: a title, an excerpt, tags, a date. A page's
+	 * prose scale is not a summary's, and a bulleted list of tags is a list
+	 * pretending to be a list. */
+	.link-preview .link-preview-body h3 {
+		@apply mt-0 mb-1 text-base leading-snug font-semibold;
+	}
+
+	.link-preview .link-preview-body :is(p, ul) {
+		@apply m-0;
+	}
+
+	.link-preview .link-preview-body :is(h3, p, ul) + :is(p, ul, time) {
+		@apply mt-2;
+	}
+
+	.link-preview .link-preview-body ul {
+		@apply flex list-none flex-wrap gap-1 ps-0;
+	}
+
+	.link-preview .link-preview-body li {
+		/* `m-0` and not `my-0`: `.prose-vtt ul` applies space-y-1, and a row of
+		 * tags that also has a gap does not want a second source of spacing
+		 * between the same chips. */
+		@apply m-0 rounded border px-1.5 py-0.5 text-xs;
+		border-color: var(--color-prose-rule);
+		color: var(--color-prose-muted);
+	}
+
+	.link-preview .link-preview-body time {
+		@apply block text-xs;
+		color: var(--color-prose-muted);
+	}
+
+	/* The pinned pane. A <dialog> opened with the open attribute rather than
+	 * showModal, because a modal takes the page the reader is reading away from
+	 * them and a pinned preview is a surface meant to sit beside it — which is
+	 * also why the role is complementary rather than dialog. Bottom-right on a
+	 * desktop, clear of the right column at 1280px and up. */
+	.link-preview-pane {
+		@apply fixed z-40 m-0 max-h-[80dvh] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border text-sm;
+		inset-block-end: 1rem;
+		inset-inline-end: 1rem;
+		border-color: var(--color-rule);
+		background-color: var(--color-surface-raised);
+		color: var(--color-ink);
+		box-shadow: 0 18px 40px oklch(0.13 0.01 250 / 0.28);
+	}
+
+	/* Under 1024px it is a bottom sheet. A fixed corner box on a phone is under
+	 * the reader's thumb and beside a drawer that may be open, and a sheet is
+	 * the shape the rest of this stylesheet already uses at these widths. */
+	@media (max-width: 1023px) {
+		.link-preview-pane {
+			inset-block-start: auto;
+			inset-inline: 0;
+			inline-size: auto;
+			max-inline-size: none;
+			max-block-size: 60dvh;
+			border-radius: 0;
+			border-block-end: none;
+		}
+	}
+
+	/* Under 768px the tab bar owns the bottom edge, and the sheet sits on it
+	 * rather than under it — the same padding the content column is given. */
+	@media (max-width: 767px) {
+		.link-preview-pane {
+			inset-block-end: calc(3.5rem + env(safe-area-inset-bottom, 0));
+		}
+	}
 }
 
 /* ==========================================================================

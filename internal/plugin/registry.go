@@ -267,5 +267,23 @@ type PluginDeps struct {
 	// already wrapped in the host's session and role middleware. The plugin
 	// receives it and cannot escape the prefix, because it is a value the host
 	// already mounted rather than a router the plugin configures.
+	//
+	// The prefix and the wrapping are applied where the router is, not here:
+	// `deps.SubRouter` returns a bare mux, and the composition root mounts it
+	// under the prefix and behind the middleware once the router exists. That
+	// split is forced by the boot order — plugins register before the HTTP server
+	// is built — and it is why the doc comment above promises a mounted router
+	// while this field is a constructor. The promise is kept by the composition
+	// root, and the two ends of it are checked by
+	// httpapi.TestAPluginCannotServeOutsideItsOwnPrefix (a sub-router is not
+	// reachable under another plugin's prefix) and
+	// plugin.TestANavItemOutsideThePluginsOwnPrefixIsDropped (a link to outside
+	// the prefix is dropped rather than rendered as a 404).
 	SubRouter func(pluginID string) RouteMounter
+	// Pages is the authz-filtered page read surface handed to every plugin.
+	// Optional, and nil is a real state: a host built without one gives plugins
+	// an empty store rather than a nil interface to dereference, so "no page
+	// store" and "a page store with no pages" are not two panics waiting at
+	// different call sites.
+	Pages PageStore
 }

@@ -289,7 +289,7 @@ func (s *Server) session(next http.Handler) http.Handler {
 			}
 		}
 
-		ctx = withValue(ctx, principalKey, principal)
+		ctx = authz.WithPrincipal(ctx, principal)
 		ctx = withValue(ctx, sessionKey, raw)
 		// The token is decided from the resolved principal, so it is computed
 		// against the context that carries it rather than against the request's

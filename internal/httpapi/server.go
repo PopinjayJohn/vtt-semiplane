@@ -139,6 +139,11 @@ type Server struct {
 	markdown *md.Renderer
 	limits   *limiters
 	build    app.BuildInfo
+	// summaries is the link preview's own rate budget, separate from the three
+	// general buckets in limits. Hovering a link is a request, and charging it
+	// against the general budget would let a reader who previews a lot spend the
+	// budget their page loads draw on.
+	summaries *summaryLimiter
 	// plugins is the boot report's source, held as the interface rather than
 	// reached for through the application, so this package depends on what it
 	// reads and not on the lifecycle that fills it. Nil is a distinct state and
@@ -240,6 +245,10 @@ func New(opts Options) (*Server, error) {
 	// Built here rather than on the first stream, so that the boot report can
 	// count open streams on a server that has served none yet.
 	srv.streams = newEvents(srv)
+	// Built eagerly, like the event registry: a limiter that appears on the
+	// first hover is a limiter that has not counted the hover before it, and the
+	// point of one is to have counted them.
+	srv.summaries = &summaryLimiter{bucket: newBucket(summaryRateBurst, clock)}
 	return srv, nil
 }
 
@@ -389,8 +398,6 @@ func campaignName(root string) string {
 type contextKey struct{ name string }
 
 var (
-	// principalKey carries the resolved principal.
-	principalKey = contextKey{"principal"}
 	// sessionKey carries the raw session token, which the CSRF check and the
 	// cookie helpers need and which must never be logged or rendered.
 	sessionKey = contextKey{"session"}
@@ -403,9 +410,14 @@ var (
 // PrincipalFrom returns the principal the Session middleware resolved. A
 // request that reached a handler always went through Session, so the value is
 // never the zero Principal here.
+//
+// It is a thin pass-through to authz rather than a read of a key of this
+// package's own. The key belongs to authz because authz owns Principal, and a
+// second key here would be a second answer to "who is asking" for any layer that
+// could reach either — including a plugin, which may import authz and must not
+// import this package.
 func PrincipalFrom(ctx context.Context) authz.Principal {
-	p, _ := ctx.Value(principalKey).(authz.Principal)
-	return p
+	return authz.PrincipalFrom(ctx)
 }
 
 // SessionFrom returns the raw session token on the context, or "" when the

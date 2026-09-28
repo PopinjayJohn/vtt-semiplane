@@ -156,9 +156,13 @@ templ pluginRow(line httpapi.PluginReportLine) {
 	<tr data-report-plugin={ line.ID } data-status={ line.Status }>
 		<td>{ line.ID }</td>
 		<td>{ line.Name }</td>
-		<td>@Badge(line.Kind, "bg-neutral-200 px-1.5 py-0.5 text-xs")</td>
+		<td>
+			@Badge(line.Kind, "bg-neutral-200 px-1.5 py-0.5 text-xs")
+		</td>
 		<td>{ line.Version }</td>
-		<td>@statusBadge(line.Status)</td>
+		<td>
+			@statusBadge(line.Status)
+		</td>
 		<td>
 			<span>{ itoa(line.APILevel) }</span>
 			<span class="text-neutral-500">/ { itoa(line.HostLevel) }</span>

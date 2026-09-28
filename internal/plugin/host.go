@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -151,6 +153,20 @@ func (h *host) FS() fs.FS {
 		return emptyFS{}
 	}
 	return h.deps.FS()
+}
+
+// Pages returns the authz-filtered page read surface, or an empty one.
+//
+// The empty store is the same degradation FS makes and for the same reason: a
+// host built without a page store must hand a plugin something it can call, so
+// "there is nothing to read" is a value rather than a nil dereference. Every
+// method answers zero values and store.ErrNoRows, which is what a store with no
+// pages behind it would answer anyway.
+func (h *host) Pages() PageStore {
+	if h.deps.Pages == nil {
+		return emptyPageStore{}
+	}
+	return h.deps.Pages
 }
 
 // RegisterRoutes audits the routes mounted for this plugin.
@@ -569,5 +585,41 @@ type emptyFS struct{}
 func (emptyFS) Open(name string) (fs.File, error) {
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
+
+// emptyPageStore is what a plugin sees when the composition root supplied no page
+// store. It answers the way a store with no indexed pages answers — an empty
+// list, a zero count, and ErrNoRows for one page — so that "the host built no
+// page store" and "the vault has no pages" are indistinguishable from the plugin
+// side, which is what keeps the absence from becoming a diagnostic a plugin
+// author has to special-case.
+type emptyPageStore struct{}
+
+func (emptyPageStore) GetPageSummary(context.Context, authz.Principal, int64) (store.PageSummary, error) {
+	return store.PageSummary{}, store.ErrNoRows
+}
+
+func (emptyPageStore) ListPagesByType(context.Context, authz.Principal, string) ([]store.Page, error) {
+	return nil, nil
+}
+
+func (emptyPageStore) CountPagesByType(context.Context, authz.Principal, string) (int, error) {
+	return 0, nil
+}
+
+func (emptyPageStore) ListTags(context.Context, authz.Principal) ([]store.TagCount, error) {
+	return nil, nil
+}
+
+// EmptyPageStore returns the page store a host hands out when the composition
+// root supplied none.
+//
+// It is exported because "implementing plugin.Host" is something every test
+// double has to do, and a double that returns nil forces every plugin under
+// test to guard every read — which is the one thing the empty store exists to
+// stop. A double that does not care about pages returns this and its plugin
+// sees the same "nothing to read" the real host produces in that configuration.
+func EmptyPageStore() PageStore { return emptyPageStore{} }
+
+var _ PageStore = emptyPageStore{}
 
 var _ Host = (*host)(nil)

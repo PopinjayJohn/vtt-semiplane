@@ -31,6 +31,7 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/secrets"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	isync "github.com/PopinjayJohn/vtt-semiplane/internal/sync"
@@ -74,7 +75,20 @@ func newFixture(t *testing.T, mutate ...func(*config.Config)) *fixture {
 
 // newFixtureWith is newFixture with a caller-supplied vault, for the tests that
 // need a hostile file, a huge one, or a specific set of pages.
+//
+// The plugins argument is the registry the server is built with. It is a
+// variadic for the same reason mutate is: most tests want no plugins, and a
+// parameter they would have to write `nil` for is a parameter they will forget.
+// A test that needs one passes a registry; a test that does not gets the nil
+// registry a build with no plugin lifecycle produces, which is a real state
+// rather than an unset one.
 func newFixtureWith(t *testing.T, files map[string]string, mutate ...func(*config.Config)) *fixture {
+	return newFixturePlugins(t, files, nil, mutate...)
+}
+
+// newFixturePlugins is the fixture with a plugin registry wired in, for the
+// tests that need a mounted sub-router or a summary provider to exist.
+func newFixturePlugins(t *testing.T, files map[string]string, plugins plugin.Registry, mutate ...func(*config.Config)) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	writeVault(t, dir, files)
@@ -179,6 +193,7 @@ func newFixtureWith(t *testing.T, files map[string]string, mutate ...func(*confi
 		Build:         app.Info(),
 		Assets:        web.Assets(),
 		Renderer:      web.NewRenderer(),
+		Plugins:       plugins,
 	})
 	if err != nil {
 		t.Fatalf("build the server: %v", err)

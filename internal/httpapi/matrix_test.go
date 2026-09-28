@@ -180,6 +180,22 @@ var matrixRoutes = []matrixRoute{
 			"player who owns the tavern": no403,
 			"player who owns nothing":    no403,
 		}},
+	// A link preview's content. It is PermReadPage, and there are two rows
+	// because there are two answers that must not be told apart: a page the
+	// viewer may read, and one they may not. A summary that refused the second
+	// with a body of its own would be a way to probe for pages, which is the
+	// whole reason the route is core-owned — the byte-identity is in
+	// TestTheSummaryRouteDeclinesInEveryWayThatIsNotYes, and this pair is what
+	// pins the statuses the router gives for each.
+	{name: "page summary", method: http.MethodGet, pattern: "/plugin/{id}/summary/{pageID}", path: "/plugin/linkpreview/summary/1",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	// A build with no linkpreview plugin. The route exists whether or not a
+	// plugin registered a provider, and a request for it is a 404 rather than a
+	// 405 — a build with no previews is a working build, and its summary route
+	// answering "there is nothing here" is that.
+	{name: "page summary with no provider registered", method: http.MethodGet, pattern: "/plugin/{id}/summary/{pageID}", path: "/plugin/nosuchplugin/summary/1",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+
 	{name: "healthz", method: http.MethodGet, pattern: "/healthz", path: "/healthz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "readyz", method: http.MethodGet, pattern: "/readyz", path: "/readyz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "stylesheet", method: http.MethodGet, pattern: "/_/assets/*", path: "/_/assets/app.css", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
@@ -410,11 +426,14 @@ func TestTheMatrixCoversEveryRoute(t *testing.T) {
 			t.Errorf("the matrix has a row for %s, which the route table does not contain", key)
 		}
 		// Two patterns carry several rows on purpose: one per file for the
-		// assets, one per kind of absence for a page, and one per answer for a tag
-		// and for the context API. Anything else with two rows is a duplicate that
-		// would make a coverage count a lie.
+		// assets, one per kind of absence for a page, one per answer for a tag,
+		// for the context API, and for a link summary — a page the viewer may
+		// read and one they may not, which have to be indistinguishable.
+		// Anything else with two rows is a duplicate that would make a coverage
+		// count a lie.
 		if n > 1 && key != "GET /p/*" && key != "GET /_/assets/*" &&
-			key != "GET /tag/{name}" && key != "GET /api/pages/{id}/context" {
+			key != "GET /tag/{name}" && key != "GET /api/pages/{id}/context" &&
+			key != "GET /plugin/{id}/summary/{pageID}" {
 			t.Errorf("the matrix has %d rows for %s", n, key)
 		}
 	}

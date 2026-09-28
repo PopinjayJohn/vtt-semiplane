@@ -479,7 +479,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(line.Version)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 160, Col: 20}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 162, Col: 20}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -500,7 +500,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(itoa(line.APILevel))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 163, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 167, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 		if templ_7745c5c3_Err != nil {
@@ -513,7 +513,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 		var templ_7745c5c3_Var18 string
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(itoa(line.HostLevel))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 164, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 168, Col: 58}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 		if templ_7745c5c3_Err != nil {
@@ -526,7 +526,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 		var templ_7745c5c3_Var19 string
 		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(joinParts(line.Capabilities))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 166, Col: 36}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 170, Col: 36}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 		if templ_7745c5c3_Err != nil {
@@ -539,7 +539,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(joinParts(line.Counts))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 167, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 171, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
@@ -557,7 +557,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 			var templ_7745c5c3_Var21 string
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(line.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 170, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 174, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 			if templ_7745c5c3_Err != nil {
@@ -570,7 +570,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(line.Status)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 170, Col: 62}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 174, Col: 62}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 			if templ_7745c5c3_Err != nil {
@@ -583,7 +583,7 @@ func pluginRow(line httpapi.PluginReportLine) templ.Component {
 			var templ_7745c5c3_Var23 string
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(line.Reason)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 172, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/admin_plugins.templ`, Line: 176, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 			if templ_7745c5c3_Err != nil {

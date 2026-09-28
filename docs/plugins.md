@@ -149,16 +149,15 @@ in the boot report, not a silent discard.
 |---|---|
 | `CapUIPanels` | `Host.RegisterPanels` results, with a warning. A `Panel` naming a slot outside `KnownSlots` is dropped regardless of capability. |
 | `CapSidebarNav` | `Descriptor.NavItems` at boot, with a warning — and the sidebar renders no plugin group at all, not an empty one. |
-| `CapSearchResolvers` | `Descriptor.SearchResolvers`; the host never calls them. |
-| `CapPageSummaries` | the plugin's summary endpoint is never mounted, and the core link-preview interaction does not bind. |
+| `CapSearchResolvers` | `Descriptor.SearchResolvers`; the rows are merged into `/search` and `/api/search` under the resolver's own kind badge. |
+| `CapPageSummaries` | the provider is contributed to the registry, core's summary route dispatches to it, and with none registered the preview interaction does not bind. |
 | `CapMaps`, `CapEncounters`, `CapDice`, `CapCharacterSheet`, `CapRules`, `CapBacklinks`, `CapExporters` | the matching reserved page-type ids and route segments (see [§5](#5-reserved-names)); the host refuses a page type whose id is reserved and a route pattern under a reserved segment, via `plugin.CheckReservedPageType` and `plugin.CheckReservedRoute`. |
 
-Two of those rows are not implemented yet, and the table says which: the
-`CapPageSummaries` row describes behaviour that needs the link-preview
-interaction, and the absence-degrades rule below depends on the same missing
-piece. `Capabilities` itself is a bitmask with a parse function that rejects an
-unknown name, and the host now reads one — the reserved-name half of the last
-row is the part with a test behind it.
+`Capabilities` is a bitmask with a parse function that rejects an unknown name,
+and the host reads one. The `CapPageSummaries` row and the absence-degrades rule
+below both depend on the link-preview interaction, which is in
+`web/static/app.js` and is bound only when the shell's `previews` signal says a
+provider is registered.
 
 **The absence-degrades rule.** When no plugin holds `CapSidebarNav`, the sidebar
 renders no plugin group rather than an empty heading. When no plugin holds
@@ -310,8 +309,7 @@ links previewable emits the attribute and never emits its own hover behaviour.
 
 Core then owns hover, keyboard focus, the transient card, the pin toggle, the
 floating pane, `Esc`, and the ARIA wiring — once, for every link. The plugin
-mounts `GET /plugin/{id}/summary/{pageID}` and returns a `templ.Component` card
-body through `SummaryProvider`.
+supplies a `templ.Component` card body through `SummaryProvider`.
 
 The alternative — a plugin injecting its own JS and DOM enhancer — would mean N
 implementations of focus management, an arbitrary-script hole in the CSP, and
@@ -319,83 +317,90 @@ per-plugin accessibility bugs. That is why this is core.
 
 **A summary of a page the viewer may not read must return 404, byte-identical
 to navigating to it.** A preview must not become a way to probe for pages. The
-summary text is produced by the same redactor and the same
-`authz.SecretVisibleSQL` as a page render, and its length is capped so a page of
-hidden secrets cannot be inferred from response size.
+summary text is produced from `page_text.body`, which the indexer writes from
+`md.Doc.PublicBody()` and nothing else — so a secret body is not in the table to
+be selected, and the guarantee is a property of what is stored rather than of a
+filter a caller has to remember. Its length is capped in SQL (`substr`, at
+`store.SummaryExcerptMaxChars` characters) so a page of hidden secrets cannot be
+inferred from response size, and a summary of a page with no public text is
+declined rather than served empty.
 
-**None of this is implemented.** There is no `SummaryProvider` implementation,
-no summary route, and `web/static/app.js` contains no preview code. What exists
-is the vocabulary: `plugin.SummaryProvider`, `plugin.WikiLinkAttr`,
-`plugin.WikiLink`, and `CapPageSummaries`.
+**The route is core's, and that is a deliberate divergence from the plan.** §2.8.2
+of the plan describes the *plugin* mounting `GET /plugin/{id}/summary/{pageID}`.
+The code does not do that, because the byte-identical 404 above is enforced by
+`httpapi.writeError`, which is unexported and renders a fixed copy table with
+nothing in the model that could differ between two renderings. A plugin cannot
+reach it — `httpapi` is on the import boundary's forbidden list — so a
+plugin-owned summary route could only approximate the requirement, and a preview
+that renders a distinguishable 404 is the probe the requirement exists to
+prevent. So core owns the route, applies the policy and the rate limit, and
+decline means one answer: `writeError(404)`. The plugin supplies content; core
+owns behaviour, one layer further in than the plan says.
+
+Implemented in `internal/httpapi/preview.go` (the route) and
+`internal/systems/linkpreview` (the card). The summary path is a core constant
+in `web/static/app.js`, and the shell seeds `data-signals` with a `previews`
+boolean so a build with no provider binds no hover handler at all.
 
 ## 8. A worked example
 
-**Illustrative only.** The `houserules` plugin is not in this repository. This
-sketch shows the shape a `KindFeature` takes against the real contract, and every
-identifier in it exists in `internal/plugin/plugin.go`.
+`internal/systems/houserules` is in this repository and is the `KindFeature`
+worked example: a sidebar nav group, a `GET /` index and a
+`GET /api/rules?tag=&q=` fragment, and a `SearchResolver` contributing rows to
+`/search` under a `House rule` badge. It registers **no page type, no table and
+no migration** — its content is the frontmatter convention `type: houserule`,
+read through `Host.Pages().ListPagesByType`, so the rules are ordinary pages that
+stay readable with the plugin absent.
 
-A feature plugin that adds a curated index of house rules, where the rules
-themselves are ordinary pages carrying `type: houserule` in frontmatter and need
-no page-type registration at all:
+Its ten sample rules live in `internal/systems/houserules/testdata/` rather than
+in a sample campaign, because `internal/sample` is a package doc and the
+extraction that populates it lands in a later stage. The property that the
+testdata is there to demonstrate — a `type: houserule` page renders with the
+core viewer, and a list built from the convention is exactly the pages carrying
+it — is asserted directly, so the fixture and the sample campaign cannot drift
+into being two different demonstrations.
 
-```go
-// Illustrative. Not in this repository.
-package houserules
+**The index ships one section, not the Shared / DM-only split the plan asks for,
+and that is a divergence rather than an omission.** The plan (§3 of P9b) asks
+for both halves. A DM-only *house-rule page* is not a thing this data model can
+express, and the reason is a schema fact rather than a design preference:
+`pages` has no visibility column, and `authz.PermReadPage` is a resource-free
+permission — v1 has no per-page ACL. A page is a file; anyone who may read
+public content may open it at `/p/{path}`, and it is listed in the file tree,
+the tag cloud, the command palette and every backlink under the same rules.
 
-import (
-	"context"
+So a DM-only section would need a `visibility:` frontmatter key that nothing
+else in the app enforces — a key that hides a rule in one index and not in the
+five other places the same page is reachable from. That is worse than not
+shipping it, because the index would advertise rules it does not protect. The
+plugin ships one section, says so in the page, and points at the mechanism that
+*does* hide content: a `visibility=dm` fence in the page body, which the normal
+secret machinery renders as a lock to a non-DM.
+`TestTheIndexShipsOneSectionAndSaysWhy` pins all of it, including that
+`visibility` is not among the frontmatter keys the plugin reads — so a future
+change that starts honouring it has to update a test that explains why.
 
-	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
-)
-
-type Plugin struct{ host plugin.Host }
-
-func (*Plugin) Descriptor() plugin.Descriptor {
-	return plugin.Descriptor{
-		ID:           "houserules",
-		Name:         "House Rules",
-		Kind:         plugin.KindFeature,
-		Version:      "0.1.0",
-		APILevel:     plugin.APILevel,
-		Capabilities: []plugin.Capability{plugin.CapSidebarNav, plugin.CapSearchResolvers},
-		// PageTypes stays empty: a KindFeature may not register page types,
-		// and `type: houserule` is a frontmatter convention, not a
-		// registered type.
-		PageTypes: nil,
-		NavItems: []plugin.NavItem{{
-			ID:          "houserules",
-			Label:       "House Rules",
-			Href:        "/plugin/houserules",
-			Order:       40,
-			MinimumRole: "player",
-			Badge: func(ctx context.Context) (string, bool) {
-				// Evaluated per request with the request's own
-				// principal, so the count is authz-filtered by
-				// construction. A hidden rule is absent from the
-				// number, not greyed out.
-				return "12", true
-			},
-		}},
-	}
-}
-
-func (p *Plugin) Register(ctx context.Context, h plugin.Host) error {
-	p.host = h
-	// h.Capability().Has(plugin.CapSidebarNav) is a check the host has
-	// already made: it discards NavItems without the capability. So this
-	// is about branching, not about being believed.
-	if !h.Capability().Has(plugin.CapSidebarNav) {
-		return nil
-	}
-	h.RegisterPanels()
-	return nil
-}
-
-func (*Plugin) Validate(cfg plugin.Config) error { return nil }
-
-// Now returns the host clock, never time.Now(), so a test can freeze it.
-func (p *Plugin) Now() time.Time { return p.host.Now() }
 ```
+
+The implementation is `internal/systems/houserules`, and it is worth reading
+rather than a transcription of it here — this document points at code, and a
+copy of a plugin in a document is a copy that can be wrong while looking
+authoritative (AGENTS.md §0). What the sketch established, and the real plugin
+confirms:
+
+- **A `KindFeature` may not register page types.** `Descriptor.PageTypes` is
+  empty and the host refuses the plugin at boot if it is not, so the content
+  model has to be a frontmatter convention. That is why `type: houserule`
+  works with the plugin absent, and why the rules stay readable in Obsidian
+  with the app closed.
+- **The badge is a closure over the request's context**, not a number computed
+  at register time. A count taken at boot is a count nobody filtered, and a
+  hidden rule would be in it.
+- **`Host.Pages()` is the only data surface a plugin gets**, and every one of
+  its methods takes the principal as a parameter and applies the visibility
+  predicate itself. A plugin that forgets to filter gets the right answer,
+  because there is no predicate left for it to get wrong.
+- **A hidden rule is absent, not greyed out.**
 
 The parts that matter, and why:
 
@@ -405,9 +410,25 @@ The parts that matter, and why:
 - **The badge is a closure over the request's context**, not a number computed at
   register time. That is what makes it authz-filtered by construction rather than
   by a filter someone remembered to apply.
-- **Every route sits under `/plugin/{id}/`.** `NavItem.Href` and `Host.RegisterRoutes`
-  both state that the host validates this and that a violation is a registration
-  error rather than a broken link. **Not implemented yet** — there is no sub-router.
+- **Every route sits under `/plugin/{id}/`.** `NavItem.Href` and
+  `Host.RegisterRoutes` both state that the host validates this and that a
+  violation is a registration error rather than a broken link. The host audits
+  the patterns the plugin mounted and refuses the whole plugin on a reserved
+  segment; the prefix itself is applied by `httpapi` at mount time, from the
+  registry's own record of which plugin owns the router, so a plugin cannot
+  mount at a prefix it does not own.
+- **A mounted sub-router inherits nothing from the route table.** `chain` wraps
+  the router, so a mount is already behind Session, but `checkCSRF` and `permit`
+  are applied per row inside the table loop and a mount is not a row.
+  `httpapi.mountPluginRoutes` re-applies both, at `PermSession` — the plugin's
+  least requirement, because the host has no vocabulary for "the permission this
+  route needs" and inventing one would let a plugin name its own gate. Without
+  that function a plugin's POST would run with no CSRF check and no permission
+  at all, and neither `TestCSRFRequiredOnAllMutations` nor
+  `TestTheMatrixCoversEveryRoute` would see it: both read the static route table,
+  not the mounted chi tree. `httpapi.TestAPluginSubRouterIsMountedBehindTheSameGatesAsATableRoute`
+  is the test that closes the gap, and it exists because the gap is invisible to
+  the gates that are supposed to cover it.
 - **The rule list filters in SQL** with `authz.SecretVisibleSQL`, and its `COUNT`
   uses the identical predicate. A list that shows one row while counting three is
   an existence leak.
@@ -455,9 +476,12 @@ cost is in the gap, not in the interface.
 | The registration lifecycle: version gate, per-plugin migration transaction, id-collision detection, rollback | **exists** in [`internal/plugin/lifecycle.go`](../internal/plugin/lifecycle.go) |
 | `/admin/plugins` (the boot report), registered in the route table per `AGENTS.md` §2.7 | **exists** — [`internal/httpapi/admin_plugins.go`](../internal/httpapi/admin_plugins.go) |
 | `internal/systems/example` — a deliberately-refusing plugin that demonstrates each refusal rule | **exists**, and is what the two boundary gates in [§6](#6-the-import-boundary) run on |
-| A real `dnd5e` system plugin | **not implemented**; `internal/systems/dnd5e` holds a `doc.go` and nothing else |
-| The `houserules` and `linkpreview` feature plugins | **not implemented** |
-| The link-preview interaction in `web/static/app.js` | **not implemented**; `plugin.WikiLink` and `SummaryProvider` are the vocabulary it will use |
+| A real `dnd5e` system plugin | **exists** — [`internal/systems/dnd5e`](../internal/systems/dnd5e) registers a page type, panels and nav; it declines `SummaryProvider` with the reason in `hostcall.go` |
+| The `houserules` and `linkpreview` feature plugins | **exist** — [`internal/systems/houserules`](../internal/systems/houserules) and [`internal/systems/linkpreview`](../internal/systems/linkpreview) |
+| The link-preview interaction in `web/static/app.js` | **exists** — delegated hover/focus on `[data-wikilink]`, the transient `role="tooltip"` card, the pin, the pinned pane, `Esc`, refetch on `semiplane-refresh`, self-close on 404 |
+| The core-owned `GET /plugin/{id}/summary/{pageID}` route | **exists** — [`internal/httpapi/preview.go`](../internal/httpapi/preview.go); see [§7](#7-link-previews) for why the route is core's rather than the plugin's |
+| `plugin.PageStore` — the authz-filtered page read surface a plugin is given | **exists** — declared in `internal/plugin/plugin.go`, implemented by `store` in `internal/store/pagestore.go`, wired in `internal/app/plugins.go` |
+| `authz.WithPrincipal` / `authz.PrincipalFrom` — the context carrier a plugin reads | **exists** — [`internal/authz/context.go`](../internal/authz/context.go) |
 
 **The two tests this document used to have to apologise for are now enforced.**
 `TestPluginImportsAreWithinBoundary` and `TestNoPluginSwitchInCore` each skip

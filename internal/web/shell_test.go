@@ -327,9 +327,17 @@ func TestFragmentIsAStrictSubsetOfDocument(t *testing.T) {
 // TestSignalsCarryNoContent is the tripwire for the data-signals attribute.
 //
 // The seed is read by every script on the page and is written into the response
-// twice over, so "the two keys are the page's URL and a boolean" is a claim worth
-// a test rather than a comment. The fixture carries a secret body on the same
-// page, so the assertion has something that could have leaked to not leak.
+// twice over, so "the three keys are the page's URL and two booleans" is a claim
+// worth a test rather than a comment. The fixture carries a secret body on the
+// same page, so the assertion has something that could have leaked to not leak.
+//
+// `previews` is the third key and it is the one that had to earn its place: it
+// says whether a plugin registered a summary provider, which is a fact about the
+// build rather than about the page. Nothing here asserts that it is harmless —
+// the exact-key-set assertion below is what does that. Adding a fourth key would
+// have to change `want` and this test would then be a list rather than a
+// boundary, which is the failure mode §2's "the set of keys is a security
+// boundary" is about.
 func TestSignalsCarryNoContent(t *testing.T) {
 	t.Parallel()
 	r := web.NewRenderer()
@@ -337,6 +345,7 @@ func TestSignalsCarryNoContent(t *testing.T) {
 		Shell: httpapi.Shell{
 			Title: "The Drowned Lantern", CSRF: testCSRF, Campaign: "v",
 			CurrentPageID: 12, CurrentPageURL: "/p/Tavern.md", PushEnabled: true,
+			PreviewsEnabled: true,
 		},
 		Card: httpapi.PageCard{ID: 12, Path: "Tavern.md", Title: "The Drowned Lantern"},
 		Body: "<p>body</p>",
@@ -360,7 +369,7 @@ func TestSignalsCarryNoContent(t *testing.T) {
 	if err := json.Unmarshal([]byte(payloads[0]), &got); err != nil {
 		t.Fatalf("the seed is not JSON once unescaped: %v\n%.200s", err, payloads[0])
 	}
-	want := map[string]any{"currentPageUrl": "/p/Tavern.md", "push": true}
+	want := map[string]any{"currentPageUrl": "/p/Tavern.md", "push": true, "previews": true}
 	if len(got) != len(want) {
 		t.Errorf("the seed has %d keys (%v), want exactly %v", len(got), keysOf(got), keysOf(want))
 	}

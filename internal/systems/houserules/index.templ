@@ -1,0 +1,417 @@
+package houserules
+
+// Every component here is markup over a Go value this package owns. None of them
+// is handed a store row, a vault type or a render model, and none of them
+// contains a script element, a style element, an inline event handler or a DOM
+// handle. That is not restraint: the Host interface has no method that could
+// install one, the Host interface is the whole of what a plugin is given, and
+// §2.5 of the working agreement says the same thing from the other side — an
+// N-plugin implementation of a filter is N arbitrary-script holes in the content
+// security policy and N copies of a focus-management bug.
+//
+// The classes are core's. card, card-heading, empty-state, nav-item and the
+// neutral palette are tokens the committed stylesheet already defines, and
+// reusing them is the whole of what "a plugin ships no CSS" looks like in
+// practice: no style element, no stylesheet of its own, and no class name the
+// stylesheet has never heard of.
+//
+// There is no `continue` anywhere below, and that is deliberate rather than
+// incidental: templ v0.3.1020 compiles a `continue` whose loop body contains
+// markup into the literal word "continue", with no compile error and no failing
+// test. A skip in a template is written as an `if` inside the `for`.
+
+// houseRulesDocument is the whole page.
+//
+// The four ids are core's — #shell, #left-nav, #content, #context — because the
+// committed stylesheet keys its three-column rules and its drawer breakpoints on
+// those ids rather than on a class, so a page with different ids gets none of
+// the shell's layout. That is safe here and only here: this is a standalone
+// document that references no script, and the only thing in the binary that
+// binds to those ids is app.js, which this page does not load. The fragment
+// below is the half that could be swapped into a shell, and it owns none of them.
+templ houseRulesDocument(view indexView) {
+	<!DOCTYPE html>
+	<html lang="en" class="dark-forced" data-print="safe">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="referrer" content="same-origin"/>
+			<title>House Rules</title>
+			<link rel="stylesheet" href={ stylesheetHref }/>
+			<link rel="icon" type="image/svg+xml" href={ spritePath }/>
+		</head>
+		<body class="flex min-h-dvh flex-col">
+			// First element in the body, and the only thing a keyboard reader has
+			// to press Tab once to reach. It points at the content region rather
+			// than at the whole document, so the skip lands on the thing being read.
+			<a
+				href="#content"
+				class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-neutral-900 focus:px-3 focus:py-2 focus:text-neutral-50"
+			>
+				Skip to content
+			</a>
+			@houseRulesHeader()
+			<div
+				id="shell"
+				class="grid h-dvh overflow-hidden grid-cols-1 xl:grid-cols-[260px_minmax(0,1fr)_320px]"
+			>
+				@houseRulesFilterColumn(view)
+				<main
+					id="content"
+					tabindex="-1"
+					class="col-start-1 row-start-1 min-w-0 overflow-y-auto px-4 py-6 focus:outline-none"
+				>
+					@houseRulesIndex(view)
+				</main>
+				<aside
+					id="context"
+					aria-label="House rules reference"
+					class="drawer drawer-right overflow-y-auto px-4 py-6"
+				>
+					@houseRulesReference()
+				</aside>
+			</div>
+			@houseRulesFooter()
+		</body>
+	</html>
+}
+
+// houseRulesHeader is the one bar above the three columns.
+//
+// It carries the plugin's name and a way back to the campaign, and nothing else:
+// the campaign's own search box, its user menu and its sync state live in core's
+// header, and a second copy of any of them here would be a control reporting
+// something this page cannot know.
+templ houseRulesHeader() {
+	<header class="shell-header border-b border-neutral-200 dark:border-neutral-800">
+		<div class="flex items-center gap-2 px-3 py-2">
+			@pluginIcon(NavIcon, "h-5 w-5 text-accent-600")
+			<h1 class="font-semibold tracking-tight">House Rules</h1>
+			<a href="/" class="ml-auto text-sm hover:underline">Back to the campaign</a>
+		</div>
+	</header>
+}
+
+// houseRulesFooter says the one thing that is true of every page in the app, and
+// it is the thing a reader of this page most needs to be told.
+templ houseRulesFooter() {
+	<footer class="border-t border-neutral-200 px-4 py-4 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+		<p>Nothing on this page edits the vault. A house rule is a Markdown file, and the file is the campaign.</p>
+	</footer>
+}
+
+// houseRulesFilterColumn is the left column: the filter box, the tag chips and
+// the grouping toggle.
+//
+// It is a column rather than a strip above the list because the filter is the
+// most-used control on the page and the most expensive to reach if it sits above
+// a long list: a reader who wants to narrow the rules should not scroll past all
+// of them to find the box that narrows them.
+templ houseRulesFilterColumn(view indexView) {
+	<nav id="left-nav" aria-label="House rule filters" class="drawer drawer-left overflow-y-auto px-3 py-4">
+		<form action={ view.Action() } method="get" role="search" class="flex flex-col gap-2">
+			<label for="houserules-q" class="block text-sm font-medium">Filter rules</label>
+			<input
+				id="houserules-q"
+				name="q"
+				type="search"
+				value={ view.Term }
+				autocomplete="off"
+				placeholder="Title, system, tag or path"
+				class="w-full rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+			/>
+			// The tag rides along as a hidden field so that submitting the box
+			// narrows within the chosen tag rather than dropping it. It is hidden
+			// and not a second visible control because a reader who cannot see
+			// which tag is on cannot tell what they are looking at.
+			if view.ActiveTag != "" {
+				<input type="hidden" name="tag" value={ view.ActiveTag }/>
+			}
+			if view.Grouped {
+				<input type="hidden" name="group" value={ groupParam }/>
+			}
+			<button type="submit" class="btn px-3 py-1.5 text-sm">Filter</button>
+		</form>
+		@tagChips(view)
+		@groupToggle(view)
+	</nav>
+}
+
+// tagChips is the tag row, with the active chip shown as on.
+//
+// A chip is a link either way; what changes is the href, which is the other
+// state of the same query. There is no script on this page to toggle a class, so
+// the toggle is a link and the "on" look is rendered on the server.
+templ tagChips(view indexView) {
+	<div class="mt-4">
+		<h2 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Tags</h2>
+		if len(view.Chips) == 0 {
+			<p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+				No readable rule carries a tag, so there is nothing to filter by yet.
+			</p>
+		} else {
+			<ul class="mt-1 flex flex-wrap gap-1">
+				for _, chip := range view.Chips {
+					@tagChipRow(chip, view.IsActive(chip.Name), view.ChipHref(chip.Name))
+				}
+			</ul>
+		}
+	</div>
+}
+
+// tagChipRow is one chip: the tag, how many readable rules carry it, and whether
+// it is the one currently filtering.
+templ tagChipRow(chip tagChip, active bool, href string) {
+	<li>
+		<a
+			href={ href }
+			aria-current={ boolAttr(active) }
+			class="inline-flex items-center gap-1 rounded border border-neutral-300 px-1.5 py-0.5 text-xs hover:underline dark:border-neutral-700"
+		>
+			{ chip.Name }
+			<span class="text-neutral-500 dark:text-neutral-400">{ itoa(chip.Count) }</span>
+		</a>
+	</li>
+}
+
+// groupToggle is the "group by system" control.
+templ groupToggle(view indexView) {
+	<div class="mt-4">
+		<h2 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Grouping</h2>
+		<p class="mt-1 text-sm">
+			<a href={ view.GroupHref() } class="hover:underline">
+				if view.Grouped {
+					Show one flat list
+				} else {
+					Group by system
+				}
+			</a>
+		</p>
+	</div>
+}
+
+// houseRulesIndex is the centre column's content: what this plugin is, and the
+// one list it can gate.
+templ houseRulesIndex(view indexView) {
+	<section aria-labelledby="houserules-heading">
+		<h2 id="houserules-heading" class="text-2xl font-semibold tracking-tight">
+			House rules
+		</h2>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			Every page in this vault whose frontmatter carries <code>type: houserule</code>,
+			read through the app's own read rules. The convention is all there is:
+			no plugin creates these pages, and a page that drops the line leaves this
+			list while changing nothing about itself.
+		</p>
+		@houseRulesProblem(view)
+		<div class="mt-6">
+			@houseRulesList(view)
+		</div>
+	</section>
+}
+
+// houseRulesProblem is the banner for a store that could not be read.
+//
+// It suppresses the list rather than sitting above it: a page that says "0 house
+// rules" and a page that says "the rules could not be read" have to be different
+// sentences, or the first is a lie the reader has no way to detect.
+templ houseRulesProblem(view indexView) {
+	if view.Problem != "" {
+		<div class="mt-4 rounded-md border border-secret/40 bg-secret-soft p-3 text-sm text-secret">
+			<p class="mb-1 font-semibold">The list below may be incomplete</p>
+			<p>{ view.Problem }</p>
+		</div>
+	}
+}
+
+// houseRulesList is the section, its count and its rows.
+//
+// This is the component the fragment route returns as well, so the page and the
+// fragment cannot describe different rules: there is one renderer and two
+// wrappers around it.
+//
+// There is one section heading and not two, and the reason is the data model
+// rather than a missing capability. A page is a file, and a file has no
+// visibility: what can be hidden is text *inside* a page, in a secret fence,
+// filtered when the page is read. There is therefore no such thing as a
+// DM-only house-rule *page* for this index to hold back — a rule the DM keeps
+// private is a page whose body is a `visibility=dm` fence, and a fence is not
+// something a page index can list, list-later, or gate on a role.
+//
+// Rendering a second section under a "DM only" heading would mean filtering on a
+// frontmatter key the plugin invented and nothing else in the app enforces. The
+// player could still open the page at /p/{path} — it is in the file tree, the tag
+// cloud, the command palette and every backlink, all under the same rules — so
+// the section would advertise rules it does not protect, under a heading that
+// tells the reader which side of it they are on. A section whose contents are
+// readable by everyone is a section that must not be rendered.
+templ houseRulesList(view indexView) {
+	<div>
+		<h3 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+			@pluginIcon(NavIcon, "h-4 w-4")
+			Shared with the table
+		</h3>
+		<p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+			{ countLabel(view.Total, "house rule") } readable here.
+			if view.Filtered() {
+				<span>
+					Showing { itoa(view.Showing()) } of { itoa(view.Total) } — <a href={ view.ClearHref() } class="hover:underline">clear the filter</a>.
+				</span>
+			}
+		</p>
+		<p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+			Every rule above is one this reader may open. A list kept for the DM alone
+			is not attempted: a rule that has to stay private is a page whose body is a
+			secret fence, and a page index has nothing to list.
+		</p>
+		if view.Problem == "" {
+			if len(view.Shown) == 0 {
+				@noRules(view)
+			} else if view.Grouped {
+				@groupedRules(view)
+			} else {
+				@ruleList(view.Shown)
+			}
+		}
+	</div>
+}
+
+// groupedRules is the list under one heading per system.
+//
+// The `if` inside the loop is the shape every templ skip takes here: a
+// `continue` in a loop whose body contains markup is compiled into the literal
+// word "continue" by templ v0.3.1020, with no compile error and no failing
+// test.
+templ groupedRules(view indexView) {
+	<div class="mt-3 space-y-4">
+		for _, group := range view.Groups {
+			<section aria-labelledby={ group.ID }>
+				<h4 id={ group.ID } class="text-sm font-semibold">
+					{ group.Name }
+					<span class="text-neutral-500 dark:text-neutral-400">({ itoa(len(group.Rules)) })</span>
+				</h4>
+				@ruleList(group.Rules)
+			</section>
+		}
+	</div>
+}
+
+// ruleList is the rows themselves.
+templ ruleList(rules []Rule) {
+	<ul class="mt-2 divide-y divide-neutral-200 rounded border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+		for _, rule := range rules {
+			@ruleRow(rule)
+		}
+	</ul>
+}
+
+// ruleRow is one rule: its title, where it lives, and what it is filed under.
+//
+// The title and the path are the two things a reader needs to recognise a rule
+// they have seen before; the system and the tags are the two things they filter
+// by. Nothing else about the page is rendered, and that includes the page's own
+// frontmatter: this package narrows it to four named keys before a Rule exists
+// (see conventionOnly), so there is nothing else here to render.
+templ ruleRow(rule Rule) {
+	<li class="flex flex-wrap items-baseline gap-2 px-3 py-2">
+		<a href={ rule.Href() } class="font-medium hover:underline">{ rule.Title }</a>
+		<code class="text-xs text-neutral-500 dark:text-neutral-400">{ rule.Path }</code>
+		<span class="ml-auto text-xs text-neutral-500 dark:text-neutral-400">{ rule.System }</span>
+		if len(rule.Tags) > 0 {
+			<span class="w-full text-xs text-neutral-500 dark:text-neutral-400">{ rule.TagList() }</span>
+		}
+	</li>
+}
+
+// noRules is the empty state, and it says which of the two emptinesses it is.
+//
+// A campaign with no house rules and a reader whose filter matches nothing look
+// identical in a list of nothing, and only one of them is something the reader
+// can do anything about.
+templ noRules(view indexView) {
+	<div class="empty-state mt-2">
+		<p class="empty-state-title">
+			if view.Filtered() {
+				No rule matches this filter
+			} else {
+				No house rules yet
+			}
+		</p>
+		if view.Filtered() {
+			<p>
+				Clear the <a href={ view.ClearHref() } class="hover:underline">filter</a> to see all
+				{ countLabel(view.Total, "house rule") } again.
+			</p>
+		} else {
+			<p>
+				No page in this vault declares <code>type: houserule</code>. Add that line to a
+				page's frontmatter and it appears here, renders as an ordinary page, and is
+				findable in the campaign's own search.
+			</p>
+		}
+	</div>
+}
+
+// houseRulesReference is the right column: the convention, spelled out.
+//
+// It is a reference card and not a second list, because a second list of the same
+// rules is a second thing whose count and filter could disagree with the first.
+templ houseRulesReference() {
+	<section class="card" aria-labelledby="houserules-reference-heading">
+		<h2 id="houserules-reference-heading" class="card-heading flex items-center gap-2">
+			@pluginIcon(NavIcon, "h-4 w-4")
+			The convention
+		</h2>
+		<dl class="mt-2 grid gap-2">
+			<div>
+				<dt class="text-sm font-medium"><code>type</code></dt>
+				<dd class="text-xs text-neutral-600 dark:text-neutral-400">
+					Must be <code>{ PageTypeHouseRule }</code>. Nothing else on the page makes it a rule.
+				</dd>
+			</div>
+			<div>
+				<dt class="text-sm font-medium"><code>system</code></dt>
+				<dd class="text-xs text-neutral-600 dark:text-neutral-400">
+					Optional. The group the rule is filed under; a rule with none is { UnassignedSystem }.
+				</dd>
+			</div>
+			<div>
+				<dt class="text-sm font-medium"><code>tags</code></dt>
+				<dd class="text-xs text-neutral-600 dark:text-neutral-400">
+					Optional, and the only thing the chips in the left column are built from.
+				</dd>
+			</div>
+			<div>
+				<dt class="text-sm font-medium"><code>title</code></dt>
+				<dd class="text-xs text-neutral-600 dark:text-neutral-400">
+					Optional. Used when the page declares no heading of its own.
+				</dd>
+			</div>
+		</dl>
+		<p class="mt-3 text-sm">
+			<a href="/search" class="hover:underline">Search the whole campaign</a>
+		</p>
+		<p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+			Rules are contributed to the campaign's search results under the
+			<span class="font-semibold">{ ResultKind }</span> badge.
+		</p>
+	</section>
+}
+
+// pluginIcon is this package's copy of the shell's icon component.
+//
+// The copy exists because a plugin cannot import internal/web: httpapi imports
+// internal/app, internal/app imports the plugin registry, and the registry
+// imports this package — so a plugin that reached for web.Icon would close the
+// loop and the binary would not build. Two definitions of the sprite's path is
+// the smaller of the two problems; the larger one is the backwards edge, and it
+// belongs in core rather than a plugin working around it.
+//
+// The icon tokens themselves are still the sprite's, and a test checks each of
+// them against web/static/icons.svg, because a token the sprite does not define
+// is a silently empty <use> rather than a visible error.
+templ pluginIcon(name, class string) {
+	<svg class={ class } aria-hidden="true" focusable="false">
+		<use href={ spriteHref + name }></use>
+	</svg>
+}

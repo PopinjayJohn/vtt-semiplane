@@ -1014,6 +1014,13 @@ func (h *fakeHost) Config() plugin.Config { return plugin.Config{ID: ID} }
 // the file being canonical, a demo has no business reading it.
 func (h *fakeHost) FS() fs.FS { return nil }
 
+// Pages is the page read surface, as the empty store. This double is for
+// plugins built to be refused, and the one thing it must not do is make a
+// refusal happen for the wrong reason — a nil PageStore would panic in whatever
+// the plugin reads, and a panic during registration is refused as a panic rather
+// than as the rule under test.
+func (h *fakeHost) Pages() plugin.PageStore { return plugin.EmptyPageStore() }
+
 // RegisterRoutes audits whatever the plugin mounted, which is the only way to
 // see the patterns: a plugin that says one thing and registers another has
 // registered the other, and the host checks what it can enumerate.

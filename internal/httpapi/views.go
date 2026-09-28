@@ -63,6 +63,14 @@ type Shell struct {
 	// CurrentPageURL is the page's canonical URL, empty for a view that is not
 	// about a page.
 	CurrentPageURL string
+	// PreviewsEnabled reports whether any registered plugin contributed a
+	// page-summary provider. It is a fact about the build rather than about the
+	// request, which is why it is a bool and not a path: the client binds the
+	// preview interaction when it is true and does not bind anything at all when
+	// it is false, so a campaign with no preview plugin never issues a hover
+	// request. It carries no page id, no path and no title — the summary route
+	// is a constant in core and a plugin's prefix is a build fact.
+	PreviewsEnabled bool
 	// PluginNav is the left sidebar's plugin group, already ordered and already
 	// filtered. It is empty when no registered plugin holds CapSidebarNav, and
 	// the sidebar renders no group at all in that case — see LeftNav.

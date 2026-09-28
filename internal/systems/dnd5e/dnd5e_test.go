@@ -151,6 +151,16 @@ func (h *recordingHost) FS() fs.FS {
 	return h.fsys
 }
 
+// Pages is the page read surface, and this double records it the way it records
+// every other call so a test can assert a plugin reached for it. The value is
+// the empty store rather than nil: a nil interface would make every read in the
+// plugin under test a nil dereference, which is a test failure that says
+// nothing about the plugin.
+func (h *recordingHost) Pages() plugin.PageStore {
+	h.calls = append(h.calls, "Pages")
+	return plugin.EmptyPageStore()
+}
+
 func (h *recordingHost) RegisterRoutes(sub plugin.RouteMounter) {
 	h.calls = append(h.calls, "RegisterRoutes")
 	if sub != nil && sub != h.mux {

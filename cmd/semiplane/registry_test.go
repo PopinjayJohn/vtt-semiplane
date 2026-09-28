@@ -53,29 +53,63 @@ func TestTheShippedPluginActuallyRegisters(t *testing.T) {
 		t.Fatal("the registry offered a plugin and the boot report is empty: the map entry never reached the lifecycle")
 	}
 
-	var registered int
+	// A per-plugin assertion, keyed on Kind rather than on a single plugin's
+	// shape.
+	//
+	// This test used to assert that every plugin registers at least two page
+	// types and a panel, which was true when dnd5e was the only entry and became
+	// a statement about dnd5e the moment a feature plugin was added. The rule
+	// that actually holds is the kind rule, and it is a stronger one: a system
+	// plugin with no page types and a feature plugin with any are both wrong, and
+	// in opposite directions. Asserting the aggregate instead would have let both
+	// through.
+	byKind := map[plugin.Kind]int{}
 	for _, e := range report.Entries {
 		if e.Status == plugin.StatusSkipped {
 			t.Errorf("the shipped plugin %q was refused at boot: %s", e.ID, e.Reason)
 			continue
 		}
-		registered++
-		if e.Count.PageTypes < 2 {
-			t.Errorf("plugin %q registered %d page types, want at least character and rule: %+v",
-				e.ID, e.Count.PageTypes, e.Count)
+		byKind[e.Kind]++
+
+		switch e.Kind {
+		case plugin.KindSystem:
+			if e.Count.PageTypes == 0 {
+				t.Errorf("system plugin %q registered no page types; the kind exists to add them: %+v",
+					e.ID, e.Count)
+			}
+		case plugin.KindFeature:
+			if e.Count.PageTypes != 0 {
+				t.Errorf("feature plugin %q registered %d page types; a feature expresses content through "+
+					"frontmatter conventions and the host is supposed to refuse it at boot", e.ID, e.Count.PageTypes)
+			}
+		default:
+			t.Errorf("plugin %q has kind %q, which is neither system nor feature", e.ID, e.Kind)
 		}
-		if e.Count.Panels < 1 {
-			t.Errorf("plugin %q registered %d panels, want at least one: %+v", e.ID, e.Count.Panels, e.Count)
+
+		// A plugin that contributes nothing to any surface is a plugin that is in
+		// the tree and does nothing. It is not an error — the host is right to
+		// keep a working app — but in a *shipped* registry it is a fact nobody
+		// should have to notice, and it is the shape a plugin breaks into when
+		// its registrations start failing.
+		c := e.Count
+		if c.PageTypes+c.Panels+c.NavItems+c.SearchResolvers+c.Summaries+c.Routes+c.Extenders+c.Migrations == 0 {
+			t.Errorf("shipped plugin %q registered with every count zero: %+v", e.ID, c)
 		}
 	}
-	if registered == 0 {
-		t.Fatalf("no shipped plugin registered: %+v", report.Entries)
+	if len(byKind) < 2 {
+		t.Errorf("the shipped registry holds %d plugin kind(s) (%v); the Kind split is supposed to be "+
+			"something a build runs, not something a document claims", len(byKind), byKind)
 	}
 
 	reg := a.PluginRegistry()
 	if reg == nil {
 		t.Fatal("PluginRegistry returned nil after a boot that ran the lifecycle")
 	}
+	// The registry must be reachable through every surface a plugin can
+	// contribute to, because a plugin that registered into the host and did not
+	// reach the registry is a plugin the request path cannot see. Asserting one
+	// surface per kind catches a commit step that dropped one of them, which is
+	// the failure mode a per-plugin count cannot.
 	for _, id := range []string{"character", "rule"} {
 		if _, ok := reg.PageType(id); !ok {
 			t.Errorf("the %q page type did not reach the registry", id)
@@ -83,6 +117,19 @@ func TestTheShippedPluginActuallyRegisters(t *testing.T) {
 	}
 	if got := reg.PanelsFor("character"); len(got) == 0 {
 		t.Error("a character page has no panels, so the one-map-entry claim is not demonstrated")
+	}
+	if len(reg.NavItems()) == 0 {
+		t.Error("no sidebar entry reached the registry")
+	}
+	if len(reg.SearchResolvers()) == 0 {
+		t.Error("no search resolver reached the registry, so /search cannot surface plugin rows")
+	}
+	if len(reg.Summaries()) == 0 {
+		t.Error("no summary provider reached the registry, so the link-preview interaction has nothing to " +
+			"dispatch to and will 404 every hover")
+	}
+	if len(reg.Routes()) == 0 {
+		t.Error("no plugin sub-router reached the registry, so every /plugin/ route is a 404")
 	}
 }
 

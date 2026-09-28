@@ -94,6 +94,14 @@ type matrixFixture struct {
 	sourcePage int64
 	secrets    map[authz.Visibility]secretMeta
 	lines      map[authz.Visibility]int
+	// otherTypedPage is a second page of the same frontmatter type, so the
+	// by-type list and count have more than one row to agree about.
+	otherTypedPage int64
+	// summaryExcerpt is the public text every principal must see identically.
+	summaryExcerpt string
+	// secretTokens are the secret bodies seeded above. None of them may appear
+	// in anything a principal is shown, whatever that principal may read.
+	secretTokens map[string]bool
 }
 
 func newMatrixFixture(t *testing.T) *matrixFixture {
@@ -177,11 +185,54 @@ func newMatrixFixture(t *testing.T) *matrixFixture {
 	if err := ReplacePageTags(ctx, tx, f.sourcePage, tags); err != nil {
 		t.Fatal(err)
 	}
+
+	// The public text row, which is what a link preview's excerpt is read from.
+	//
+	// It is written here by hand rather than through the indexer because this
+	// fixture is about predicates, not about segmentation, and the property under
+	// test is precisely that this column is secret-free: the same bytes for
+	// every principal, whatever that principal may read. If the indexer were
+	// involved the test would be asserting that it did its job, which is a real
+	// and separate property — but a fixture that could not detect a secret body
+	// in this column would not be testing the thing that matters here.
+	f.summaryExcerpt = "The public text of the source page."
+	f.secretTokens = map[string]bool{}
+	for _, vis := range []authz.Visibility{authz.VisibilityDM, authz.VisibilityPrivate, authz.VisibilityTable} {
+		f.secretTokens["needle "+string(vis)] = true
+	}
+	if err := ReplacePageText(ctx, tx, PageText{
+		PageID: f.sourcePage, Title: "Source",
+		Headings: "public heading", Body: f.summaryExcerpt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second page of the same type, so the by-type pair has more than one row
+	// to disagree about.
+	f.otherTypedPage = seedPage(t, tx, "Rule.md", "Rule")
+	if err := ReplacePageText(ctx, tx, PageText{
+		PageID: f.otherTypedPage, Title: "Rule", Headings: "", Body: "A house rule.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{f.sourcePage, f.otherTypedPage} {
+		if err := setPageType(ctx, tx, id, "houserule"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	_ = publicLine
 	return f
+}
+
+// setPageType rewrites a page's frontmatter type, which seedPage cannot take as
+// an argument because the two typed pages are seeded before the type is known.
+func setPageType(ctx context.Context, e Execer, pageID int64, pageType string) error {
+	_, err := e.ExecContext(ctx, `UPDATE pages SET page_type = ? WHERE id = ?`, pageType, pageID)
+	return err
 }
 
 func (f *matrixFixture) principal(t *testing.T) map[string]authz.Principal {
@@ -327,6 +378,75 @@ func TestPredicateMatrixAgrees(t *testing.T) {
 				if !listed[want] {
 					t.Errorf("tag %q is missing from the list; the principal may read it", want)
 				}
+			}
+
+			// The link preview's summary, which is the one place a plugin reads
+			// page content, so it is the one place the matrix has to say
+			// something about a body rather than a row.
+			//
+			// Two properties, and they are different. The tags on the card must
+			// agree with wantTags, because a preview showing a tag the tag page
+			// hides is the same leak with more steps. And the excerpt must be the
+			// same for every principal, because it comes from a column that is
+			// secret-free by construction — if it varied, something had put a
+			// secret body in a public column, and every assertion above would
+			// still have passed.
+			summary, err := GetPageSummary(ctx, f.db.Writer(), p, f.sourcePage)
+			if err != nil {
+				t.Fatalf("get page summary: %v", err)
+			}
+			gotSummaryTags := map[string]bool{}
+			for _, name := range summary.Tags {
+				gotSummaryTags[name] = true
+			}
+			for name := range gotSummaryTags {
+				if !wantTags[name] {
+					t.Errorf("the summary shows tag %q, which only appears in a secret this principal may not read", name)
+				}
+			}
+			for name := range wantTags {
+				if !gotSummaryTags[name] {
+					t.Errorf("the summary is missing tag %q, which this principal may read", name)
+				}
+			}
+			if f.summaryExcerpt != "" && summary.Excerpt != f.summaryExcerpt {
+				t.Errorf("the excerpt differs by principal.\n %s: %q\n %s: %q",
+					name, summary.Excerpt, "another principal", f.summaryExcerpt)
+			}
+			for token := range f.secretTokens {
+				if strings.Contains(summary.Excerpt, token) {
+					t.Errorf("the summary excerpt carries a secret body token: %s", token)
+				}
+			}
+
+			// A page that was never written is ErrNoRows and not a zero card, so
+			// a caller cannot mistake "nothing here" for "an empty page".
+			if _, err := GetPageSummary(ctx, f.db.Writer(), p, 999999); !errors.Is(err, ErrNoRows) {
+				t.Errorf("a summary of a page that does not exist is %v, want ErrNoRows", err)
+			}
+
+			// The by-type pair, which is what a feature plugin reads a
+			// frontmatter convention with. The agreement is the assertion: a list
+			// of two and a badge saying one is the leak, and it is the reason both
+			// statements come out of one constant.
+			typed, err := ListPagesByType(ctx, f.db.Writer(), p, "houserule")
+			if err != nil {
+				t.Fatalf("list pages by type: %v", err)
+			}
+			tc, err := CountPagesByType(ctx, f.db.Writer(), p, "houserule")
+			if err != nil {
+				t.Fatalf("count pages by type: %v", err)
+			}
+			if tc != len(typed) {
+				t.Errorf("CountPagesByType = %d but the list has %d rows; a badge would disagree with the list beside it",
+					tc, len(typed))
+			}
+			// A principal who may not read public content sees neither rows nor
+			// a count. The check is on the principal rather than in SQL, and
+			// asserting it here is what stops someone "optimising" the guard away
+			// as redundant on the grounds that the predicate already handles it.
+			if !p.CanReadPublic() && len(typed) != 0 {
+				t.Errorf("%d rows for a principal who may not read public content", len(typed))
 			}
 			for _, tc := range mustListTags(t, ctx, f.db.Writer(), p) {
 				n, err := TagCountFor(ctx, f.db.Writer(), p, tc.Name)

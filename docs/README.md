@@ -29,7 +29,8 @@ this case.
 |---|---|---|
 | [`spec.md`](spec.md) | the data model, the Markdown pipeline, the index, the request lifecycle, what stage 1 delivers and what does not exist yet | you are changing how a file becomes a page, or a page becomes a response |
 | [`security.md`](security.md) | the threat model, the canonical visibility predicate, the authorization matrix, the secret lifecycle, the tripwire, and what is deliberately not defended | you are touching anything that can read, write, log or render a secret |
-| [`plugins.md`](plugins.md) | the plugin contract, kinds, capabilities, the version gate, the import boundary, link previews | you are writing a game system, a feature, or a route under `/plugin/` |
+| [`plugins.md`](plugins.md) | the plugin contract, kinds, capabilities, the version gate, the import boundary, link previews | you are deciding **whether** to write a plugin, or what the boundary is |
+| [`PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md) | the procedure: which kind, what the host inherits, what you may not import, and the order to build in | you are writing a game system, a feature, or a route under `/plugin/` |
 | [`search.md`](search.md) | the two FTS tables, the two-query authz-filtered merge, query building, ranking, snippets, the secret invariant | you are touching indexing, search or a snippet |
 | [`pitfalls.md`](pitfalls.md) | the traps that have already cost time here, with the reason each one bites | **before you run anything** — the test runner, the CSS build and the vault lock all have non-obvious behaviour on this machine |
 | [`AGENTS.md`](../AGENTS.md) | the working agreement: hard rules, conventions, testing expectations, local commands | you are about to write code |
@@ -71,9 +72,27 @@ lifecycle; `reserved.go` holds the reserved page-type ids and route segments;
 `cmd/semiplane/registry.go` is the one map entry; `/admin/plugins` is the boot
 report. `internal/systems/dnd5e` is a working system plugin and
 `internal/systems/example` is one built to be refused, five different ways, on
-purpose. Two surfaces are deliberately unwired and are `nil` rather than faked —
-a plugin's `fs.FS` and the plugin route mounter — and `internal/app/plugins.go`
-records why for each.
+purpose. **Stage 3b** is the other side of the same boundary: two
+`KindFeature` plugins, `houserules` and `linkpreview`, exist so the `Kind` split
+is something a build runs rather than something a document claims — together
+they exercise a nav group, mounted routes, a search resolver, a summary
+provider, and the rule that a feature plugin may not register page types.
+
+Two of the three surfaces stage 3 left unwired are now wired, and one is
+deliberately still `nil`:
+
+- **`Host.Pages()`** is the authz-filtered page read surface, declared in
+  `internal/plugin`, implemented by `store` in `internal/store/pagestore.go`,
+  wired in `internal/app/plugins.go`. It is four named methods rather than a
+  `*sql.DB` so that a plugin cannot compose its own visibility predicate.
+- **The plugin route mounter** returns a bare mux; `httpapi` mounts it at
+  `/plugin/{id}` behind session, CSRF and `PermSession`. See
+  [`plugins.md`](plugins.md) §7 for why the link-preview summary route is
+  core-owned rather than plugin-mounted.
+- **A plugin's `fs.FS` is still `nil`**, and `internal/app/plugins.go` records
+  why: the redaction it would need exists in exactly one place, the page view,
+  and extracting it under time pressure is the most likely way to put a secret
+  where a plugin can see it.
 
 Still **not** built: the editor, the sample campaign extraction and the release
 pipeline. `spec.md` says so per section, and a consequence worth knowing is that
