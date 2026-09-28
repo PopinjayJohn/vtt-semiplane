@@ -19,6 +19,7 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/secrets"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/sync"
@@ -98,6 +99,13 @@ type Options struct {
 	Build app.BuildInfo
 	// Renderer renders the view models. Required.
 	Renderer Renderer
+	// Plugins is what the plugin lifecycle collected at boot, read by
+	// /admin/plugins. Optional, and nil is a real state rather than an unset
+	// one: it means this process ran no plugin lifecycle, and the report says so
+	// instead of rendering an empty table that would read as "this build offers
+	// no plugins". The interface is the seam on purpose, so a test can hand the
+	// router a registry containing one plugin without booting one.
+	Plugins plugin.Registry
 }
 
 // The account and secret services are built here rather than handed in.
@@ -131,6 +139,11 @@ type Server struct {
 	markdown *md.Renderer
 	limits   *limiters
 	build    app.BuildInfo
+	// plugins is the boot report's source, held as the interface rather than
+	// reached for through the application, so this package depends on what it
+	// reads and not on the lifecycle that fills it. Nil is a distinct state and
+	// every reader of it checks; see adminPluginsPage.
+	plugins plugin.Registry
 	// reindexer re-derives a page's index rows after a file mutation, so a
 	// secret reveal updates the index that is already serving every request.
 	reindexer secrets.Reindexer
@@ -220,6 +233,7 @@ func New(opts Options) (*Server, error) {
 		// two are called from different places and mean different things.
 		reindexer:     opts.Reindexer,
 		authorRetryer: opts.AuthorRetryer,
+		plugins:       opts.Plugins,
 		root:          opts.DB.Vault(),
 		campaign:      campaignName(opts.DB.Vault()),
 	}

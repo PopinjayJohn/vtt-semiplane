@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
+	"github.com/a-h/templ"
 )
 
 // View is a view model: everything a template is allowed to see about one
@@ -61,6 +63,113 @@ type Shell struct {
 	// CurrentPageURL is the page's canonical URL, empty for a view that is not
 	// about a page.
 	CurrentPageURL string
+	// PluginNav is the left sidebar's plugin group, already ordered and already
+	// filtered. It is empty when no registered plugin holds CapSidebarNav, and
+	// the sidebar renders no group at all in that case — see LeftNav.
+	//
+	// It is on the shell rather than on a page view because it is chrome: the
+	// same group is on every page, and a sidebar that gained or lost a group
+	// per page would be a layout that reflows under the reader. Nothing here
+	// says which plugin contributed an entry, and no template compares a role —
+	// PluginNavFor has already asked the policy which entries this request's
+	// principal may see.
+	PluginNav []PluginNavItem
+}
+
+// PluginNavItem is one left-sidebar entry a plugin contributed.
+//
+// It is a projection rather than a plugin.NavItem for the reason PluginReportLine
+// gives: a change to the plugin vocabulary's Go shape must not become a change
+// to the markup by accident.
+//
+// Two of the plugin's fields are deliberately not carried. MinimumRole is
+// resolved by PluginNavFor against the policy and disappears — a role on a view
+// model is an authorization decision that a template could re-answer, and
+// AGENTS.md §2.7 wants exactly one place that answers it. Badge is a function of
+// the request, and a count that no column renders is a number on a page that
+// cannot be checked by the reader looking at it.
+type PluginNavItem struct {
+	// ID is the nav item's own id, unique across the whole registry.
+	ID string
+	// Plugin is the id of the plugin that contributed it, and therefore the
+	// route prefix Href has to sit inside.
+	Plugin string
+	// Label is the visible text.
+	Label string
+	// Href is where the entry navigates. PluginNavFor drops any href that is not
+	// inside /plugin/{Plugin}, so an entry that reached a template points at a
+	// route the plugin's own sub-router answers — a sidebar link that 404s is a
+	// broken control by AGENTS.md §7 and not a cosmetic fault.
+	Href string
+	// Icon is a token from the core icon set, never raw HTML and never a URL.
+	Icon string
+	// Order is the plugin's own sort weight. It is not rendered: the registry
+	// already sorted NavItems by it, and re-sorting a list that arrived in
+	// order would only be able to lose that order. It is carried so the
+	// projection is lossless and so a future group that merges contributions
+	// from two sources has the weight without going back to the registry.
+	Order int
+}
+
+// WithinPrefix reports whether the item's href is inside its own plugin's route
+// prefix, /plugin/{Plugin}.
+//
+// The boundary is checked at the path separator rather than with a bare
+// HasPrefix, so "dnd5e" cannot claim "/plugin/dnd5e-rogue/x" by name
+// resemblance. A plugin whose own prefix is a prefix of another's is exactly the
+// sort of accident the boot report is for; the check here costs a comparison
+// and turns a bad href into a missing link rather than a 404 in the sidebar.
+func (p PluginNavItem) WithinPrefix() bool {
+	if p.Href == "" || p.Plugin == "" {
+		return false
+	}
+	prefix := "/plugin/" + p.Plugin
+	return p.Href == prefix ||
+		strings.HasPrefix(p.Href, prefix+"/") ||
+		strings.HasPrefix(p.Href, prefix+"?") ||
+		strings.HasPrefix(p.Href, prefix+"#")
+}
+
+// PluginPanel is one panel a plugin contributed, in a shape a template can
+// render without importing the plugin package.
+type PluginPanel struct {
+	// Slot is the region the panel was registered for, as the slot's own string.
+	// The template groups by slot rather than trusting the order it was handed,
+	// so a panel cannot be misplaced by a handler that sorted wrongly.
+	Slot string
+	// Title is the panel's heading, and it is never empty. plugin.Panel carries
+	// no title field, so this is derived from the slot; a panel is a labelled
+	// section or it is a block of markup nobody can identify.
+	Title string
+	// Body is the panel's rendered output as a string that the template emits
+	// as escaped text. It is never marked raw here or anywhere else, and that
+	// is the whole of the panel's security story.
+	//
+	// It is a string rather than the plugin's templ.Component because the
+	// component cannot cross this boundary: internal/web sits above httpapi in
+	// the dependency order, so httpapi cannot name a template and can only hand
+	// one text. The cost is real and worth stating plainly — **a panel's markup
+	// reaches the reader as visible text**, so a panel that renders <strong>
+	// shows a reader the characters "<strong>". In this stage a panel is a
+	// heading and a line or two of plain words, which is what the dnd5e panel
+	// needs; anything richer wants the view model to carry the component
+	// itself, which is a change to this field and not to the panel vocabulary.
+	//
+	// What the string buys is the property that matters more: a body that is
+	// escaped on the way out cannot be a script, even if a plugin writes
+	// templ.Raw. "A plugin cannot ship JavaScript" (AGENTS.md §7) is therefore
+	// a fact about this pipeline rather than a claim about the plugins
+	// currently in the tree, and it holds for the first plugin that decides
+	// otherwise.
+	//
+	// The body is rendered per request, with the request's context, and that
+	// context carries nothing a plugin can read: the principal, the page and
+	// the vault row all sit behind keys this package owns, and a plugin may not
+	// import httpapi. So every reader is shown the same panel text, which is
+	// what makes rendering it per request safe — a panel that could see the
+	// principal would be a panel with an authorization decision inside it, and
+	// there is none anywhere in this path.
+	Body string
 }
 
 // PageCard is a page as a view model: an identity and a display string.
@@ -185,6 +294,32 @@ type PageView struct {
 	// rendered in the right column, and the panel is omitted when the list is
 	// empty rather than shown with nothing in it.
 	Related []PageCard
+	// Panels are the panels registered for this page's type, in slot order. They
+	// are additional to Status, not a replacement for it: the campaign panel
+	// says what the campaign is, and a plugin panel says what a system makes of
+	// it. A page with panels and a system-absent note shows both.
+	//
+	// It is empty for every page when no plugin holds CapUIPanels, and the right
+	// column then renders nothing at all for it — a slot with no panel in it
+	// leaves no heading behind.
+	Panels []PluginPanel
+	// PageType is the `type:` this page's frontmatter names, or "" when it names
+	// none. It is on the page view rather than read from Card because it is what
+	// selects the viewer, and the selection has to be made once, here, from the
+	// file: a registered page type and a page-type *convention* are different
+	// things, and `type: houserule` renders with the core Markdown view on a
+	// campaign with no plugin installed.
+	PageType string
+	// Viewer is the custom viewer the plugin registered for PageType, or nil.
+	//
+	// Nil is the normal case and it is the one that must work: a nil Viewer
+	// renders the core Markdown view, so a campaign with no system plugin, or
+	// with one that registered a page type and no viewer, gets the whole page
+	// rather than a blank article. A viewer receives no arguments, so it is a
+	// decoration around the page rather than a replacement for its body — which
+	// is the limit of the plugin vocabulary's PageType.Viewer, not of this
+	// field.
+	Viewer templ.Component
 }
 
 // SearchView is a search result page.
@@ -343,6 +478,11 @@ type ContextView struct {
 	// Related are the pages this one shares the most tags with, and the panels
 	// around it do not show when it is empty.
 	Related []PageCard
+	// Panels are the panels registered for this page's type, in slot order, and
+	// they are the same ones the page view's right column carries: this route
+	// and that column are one surface, and a client that swapped the context
+	// region in must not get a different answer about what is in it.
+	Panels []PluginPanel
 	// Status is the campaign-wide panel.
 	Status CampaignStatus
 }
@@ -387,6 +527,65 @@ const (
 	// form or the campaign home.
 	CommandAction = "action"
 )
+
+// PluginReportLine is one plugin's row on the boot report.
+//
+// It is a projection rather than a `plugin.Entry` so that a change to the
+// report's Go shape cannot become a change to the page's markup by accident, and
+// so that the reasons a plugin was refused are copied into a field the template
+// can render without importing the plugin package.
+type PluginReportLine struct {
+	// ID is the plugin's id, rendered as the row's heading.
+	ID string
+	// Name is its human label.
+	Name string
+	// Kind is "system" or "feature", and it is what the row's badge shows.
+	Kind string
+	// Version is the plugin's own semver.
+	Version string
+	// Status is "ok", "compat" or "skipped", and is the row's state.
+	Status string
+	// Reason is why it was skipped, empty for a healthy row. It is a host
+	// message carrying ids and counts, never a line of vault content, and
+	// plugins are not handed vault content to put in one.
+	Reason string
+	// APILevel and HostLevel are both shown so a "compat" row is explainable
+	// without leaving the page.
+	APILevel  int
+	HostLevel int
+	// Capabilities is what the host granted this plugin, as stable strings.
+	// A declaration the host refused appears here as an absence, which is
+	// exactly how it affected the plugin.
+	Capabilities []string
+	// Counts is the per-plugin contribution summary, as pre-formatted short
+	// strings ("2 page types, 1 panel") rather than six integers the template
+	// would have to join. The joining is presentation, and presentation that
+	// lives in a view model is presentation that can be tested.
+	Counts []string
+}
+
+// AdminPluginsView is /admin/plugins: the boot report.
+type AdminPluginsView struct {
+	Shell
+	// Lines is every registered plugin, sorted by id, including the skipped
+	// ones. A report that lists only the healthy hides the problem it exists to
+	// report.
+	Lines []PluginReportLine
+	// Warnings are the refusals that are not about one plugin: a panel dropped
+	// for naming an unknown slot, a nav item pointing outside its prefix. They
+	// are shown even when every plugin is healthy, because that is exactly when
+	// they are most surprising.
+	Warnings []string
+	// HostLevel and APIWindow are the host's own numbers, shown once rather
+	// than repeated per row.
+	HostLevel int
+	APIWindow int
+	// Counts is the headline: how many registered, how many were skipped.
+	Registered int
+	Skipped    int
+	// Compat is how many registered but are running the shim.
+	Compat int
+}
 
 // LoginView is the login form, and the form's own error.
 type LoginView struct {
@@ -448,18 +647,19 @@ type ErrorView struct {
 	Detail string
 }
 
-func (v HomeView) isView()     {}
-func (v PageView) isView()     {}
-func (v SearchView) isView()   {}
-func (v FilesView) isView()    {}
-func (v TagsView) isView()     {}
-func (v TagView) isView()      {}
-func (v ContextView) isView()  {}
-func (v CommandsView) isView() {}
-func (v LoginView) isView()    {}
-func (v SetupView) isView()    {}
-func (v InviteView) isView()   {}
-func (v ErrorView) isView()    {}
+func (v HomeView) isView()         {}
+func (v PageView) isView()         {}
+func (v SearchView) isView()       {}
+func (v FilesView) isView()        {}
+func (v TagsView) isView()         {}
+func (v TagView) isView()          {}
+func (v ContextView) isView()      {}
+func (v CommandsView) isView()     {}
+func (v AdminPluginsView) isView() {}
+func (v LoginView) isView()        {}
+func (v SetupView) isView()        {}
+func (v InviteView) isView()       {}
+func (v ErrorView) isView()        {}
 
 // The ViewShell methods hand the layout's half of each model back through the
 // interface, so that a renderer can be handed a View without knowing what kind it
@@ -489,6 +689,9 @@ func (v ContextView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the CommandsView.
 func (v CommandsView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the AdminPluginsView.
+func (v AdminPluginsView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the LoginView.
 func (v LoginView) ViewShell() Shell { return v.Shell }

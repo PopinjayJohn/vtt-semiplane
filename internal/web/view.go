@@ -160,6 +160,8 @@ func regionOf(v httpapi.View) (templ.Component, error) {
 		return Context(t), nil
 	case httpapi.CommandsView:
 		return Commands(t), nil
+	case httpapi.AdminPluginsView:
+		return AdminPlugins(t), nil
 	case httpapi.LoginView:
 		return Login(t), nil
 	case httpapi.SetupView:
@@ -198,6 +200,16 @@ type ContextData struct {
 	// Related are the pages sharing the most tags. The panel is omitted when the
 	// list is empty rather than shown with nothing in it.
 	Related []httpapi.PageCard
+	// Panels are the plugin panels registered for this page's type. The handler
+	// has already put them in slot order, and this column renders them in slot
+	// order again: the layout owns where a slot goes, so a handler that sorted
+	// them wrongly puts a panel in the wrong column rather than next to the
+	// panel it belongs with, and a context region fetched on its own renders the
+	// same order as the document it replaces.
+	//
+	// A body here is escaped text, not markup. See httpapi.PluginPanel for why
+	// that is the shape and what it costs.
+	Panels []httpapi.PluginPanel
 	// Campaign is the campaign-wide panel, or nil when this view model carries
 	// none at all.
 	//
@@ -214,9 +226,12 @@ type ContextData struct {
 // Empty reports whether this column would render nothing at all.
 //
 // The layout asks, so that the toggle which opens the column is rendered only
-// where there is something behind it.
+// where there is something behind it. A plugin panel counts: a column holding
+// one is not empty, and a toggle that opens an empty panel is a control with
+// nothing behind it, which is the same fault whether the missing thing was
+// invented by a template or omitted by a plugin.
 func (d ContextData) Empty() bool {
-	return d.Card == nil && d.Campaign == nil
+	return d.Card == nil && d.Campaign == nil && len(d.Panels) == 0
 }
 
 // contextOf is the right column's half of a view model, for the column the shell
@@ -231,7 +246,7 @@ func (d ContextData) Empty() bool {
 func contextOf(v httpapi.View) ContextData {
 	switch t := v.(type) {
 	case httpapi.PageView:
-		return pageContext(t.Card, t.Toc, t.Backlinks, t.BacklinkCount, t.Related, t.Status)
+		return pageContext(t.Card, t.Toc, t.Backlinks, t.BacklinkCount, t.Related, t.Status, t.Panels)
 	case httpapi.HomeView:
 		// The dashboard is not about a page, so it has no contents and no
 		// backlinks, but the campaign is campaign-wide and belongs here anyway.
@@ -248,12 +263,12 @@ func contextOf(v httpapi.View) ContextData {
 // "what does this view model carry". Merging them is what renders a column
 // twice.
 func contextDataOf(v httpapi.ContextView) ContextData {
-	return pageContext(v.Card, v.Toc, v.Backlinks, v.BacklinkCount, v.Related, v.Status)
+	return pageContext(v.Card, v.Toc, v.Backlinks, v.BacklinkCount, v.Related, v.Status, v.Panels)
 }
 
 // pageContext is the one construction of a page's column, so that the aside and
 // the region cannot be filled from two different field lists.
-func pageContext(card httpapi.PageCard, toc []httpapi.TocEntry, backlinks []httpapi.BacklinkChip, count int, related []httpapi.PageCard, campaign httpapi.CampaignStatus) ContextData {
+func pageContext(card httpapi.PageCard, toc []httpapi.TocEntry, backlinks []httpapi.BacklinkChip, count int, related []httpapi.PageCard, campaign httpapi.CampaignStatus, panels []httpapi.PluginPanel) ContextData {
 	return ContextData{
 		Card:          &card,
 		Toc:           toc,
@@ -261,6 +276,7 @@ func pageContext(card httpapi.PageCard, toc []httpapi.TocEntry, backlinks []http
 		BacklinkCount: count,
 		Related:       related,
 		Campaign:      &campaign,
+		Panels:        panels,
 	}
 }
 

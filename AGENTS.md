@@ -264,15 +264,27 @@ content if it needs any. No core file changes, and a grep test
 (`TestNoPluginSwitchInCore`) fails the build if a plugin id appears anywhere
 else.
 
-**Almost none of this section is implemented yet, and the tests that would
-enforce it pass vacuously today.** `internal/plugin` is a type vocabulary and
-nothing more: there is no registry, no `Host` implementation, no reserved-name
-table, no plugin routes, and `internal/systems/core` and
-`internal/systems/dnd5e` each contain a `doc.go` and nothing else. So
-`TestNoPluginSwitchInCore` skips with "no plugins registered yet" and
-`TestPluginImportsAreWithinBoundary` finds no files to check. Both are honest
-skips rather than false passes, but treat the boundary as **designed, not
-enforced** until a plugin exists. `docs/plugins.md` says the same.
+**The boundary is enforced now, and one of the gates that enforces it was
+itself broken until stage 3.** `internal/plugin` holds the vocabulary, the
+`Host` implementation, the registry and the lifecycle; `reserved.go` holds the
+reserved names; `internal/systems/dnd5e` is a working system plugin and
+`internal/systems/example` is one that refuses to register, five different ways,
+on purpose. `TestNoPluginSwitchInCore` and
+`TestPluginImportsAreWithinBoundary` no longer skip.
+
+Worth knowing before you trust that: `registeredPluginIDs` used a walker that
+listed one directory and did not recurse, and a plugin *is* a directory. The id
+set was therefore empty no matter what was on disk, and the gate would have
+skipped silently and forever — with no message, because there was no skip
+either. If you add a gate, make its "nothing to check" state **loud**;
+`TestTheArchitectureGatesHaveSomethingToCheck` is the pattern.
+
+The scan is over **dispatch sites** (`==`, `case "x":`, `expr["x"]`, a
+`map[string]plugin.Plugin` key), not over quoted literals: `internal/md` has a
+callout kind called `example`, and a literal grep reports that core file as
+branching on a plugin. A bare `dnd5e.New()` is not flagged on purpose — a
+package selector cannot branch, and matching it would make the rule
+unsatisfiable rather than stricter.
 
 - One `Plugin` interface, one registry, one lifecycle, one route prefix, and a
   `Kind` discriminator (`system` / `feature`). There is no second code path for
@@ -430,3 +442,17 @@ job, `git status --porcelain` must be empty.
   RAM *and* zram swap. Use `make test` / `scripts/test.sh`, which pins `-p 1`,
   bounds subtest parallelism, sets `GOMEMLIMIT` and puts a timeout on every test
   so a spin panics with a stack trace naming the spinning frame.
+- **`continue` inside a templ `for` becomes the literal word "continue".**
+  templ v0.3.1020 compiles a `continue` whose loop body contains markup into
+  the body text. A panel loop written the obvious way rendered its panel in
+  *every* slot and printed the word "continue" between the sections, with no
+  compile error and no test failure. Write the skip as an `if` inside the
+  `for` instead, and say why at the call site — see
+  `internal/web/context.templ` for the shape.
+- **An architecture gate that skips is not a gate, and one that skips for a
+  reason nobody reads is worse than a failure.** `TestNoPluginSwitchInCore`
+  collected plugin ids with a walker that listed one directory and did not
+  recurse, so the id set was empty regardless of what was on disk: it would
+  have skipped forever, silently, with no message to read. A gate's failure
+  mode should be a **loud** one — a test that asserts the gate has something to
+  check, and fails naming what is missing when it does not.

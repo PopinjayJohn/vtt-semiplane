@@ -18,5 +18,4 @@
 // internal/web is its implementation: the router decides what a request may see
 // and the template library decides what the response looks like, and neither can
 // grow an authorization rule the other has to know about.
-
 package httpapi

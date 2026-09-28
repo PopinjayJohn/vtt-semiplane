@@ -60,6 +60,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		PageCount: int(total),
 		Status:    status,
 	}
+	// The dashboard is not about a page, so it has no panels; it still has the
+	// sidebar's plugin group, because the sidebar is chrome and a group that
+	// appeared on some pages and not others would be a layout that reflows
+	// under the reader.
 	if err := s.Render(w, r, view); err != nil {
 		s.fail(w, r, "render the dashboard", err)
 	}
@@ -128,6 +132,11 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	}
 
 	card := cardOf(row)
+	// The frontmatter's `type:` selects the viewer and the panel set, and it is
+	// read from the file rather than from the URL: a registered page type and a
+	// page-type convention are different things, and both arrive the same way —
+	// as a `type:` in a file nobody edited through this app.
+	pageType := s.currentPageType(row)
 	view := PageView{
 		Shell:         s.liveShell(r, card.Title),
 		Card:          card,
@@ -137,6 +146,9 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		BacklinkCount: aside.backlinkCount,
 		Related:       aside.related,
 		Status:        aside.status,
+		Panels:        s.pluginPanels(ctx, pageType),
+		PageType:      pageType,
+		Viewer:        s.pageViewer(pageType),
 		Secrets:       pageSecrets,
 		Truncated:     truncated,
 	}

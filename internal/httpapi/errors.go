@@ -110,5 +110,15 @@ func (s *Server) shell(r *http.Request, title string) Shell {
 		CSRF:      CSRFFrom(r.Context()),
 		Campaign:  s.campaign,
 		Dev:       s.cfg.Dev,
+		// The plugin nav group is chrome, so it belongs here rather than in the
+		// handlers. It was set in four handlers, and the sidebar then gained and
+		// lost a section as the reader moved between a page and the file tree — a
+		// layout that reflows itself is a layout nobody can build a mental model
+		// of, and the fix is one line in the function every shell goes through.
+		//
+		// It is nil-safe on a nil registry, which is the ordinary case for a build
+		// with no plugins, and the sidebar renders no group at all rather than an
+		// empty one.
+		PluginNav: s.pluginNav(r),
 	}
 }

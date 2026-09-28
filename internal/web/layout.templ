@@ -245,17 +245,22 @@ templ UserMenu(shell httpapi.Shell) {
 }
 
 // LeftNav is the campaign column: the core destinations, in the order the plan
-// puts them.
+// puts them, and then the plugin group if there is one.
 //
-// The two groups the plan wraps around them are not here, and the reason is the
-// same for both. The plugin group renders every NavItem from every admitted
-// plugin, and internal/plugin has no registry and no Host implementation yet, so
-// there is nothing to iterate and an empty heading is exactly the broken control
-// AGENTS.md §7 forbids. The Admin group needs a permission the view model does
-// not carry: Shell has the principal, and a template that asks a principal
-// whether it is an administrator is the second place in the codebase answering a
-// question that belongs to the Perm middleware. Both wait for a field the
-// handler fills rather than for a guess made here.
+// The plugin group renders only when the handler found at least one entry this
+// principal may follow. An <h2> over an empty <ul> is a heading promising a
+// destination and offering none, which AGENTS.md §7 calls a bug rather than a
+// cosmetic one: the absence of a plugin has to leave no trace at all, not a
+// placeholder with a name on it. So the test is the count, and at zero the
+// heading is not in the document.
+//
+// The Admin group is still absent, and for a different reason: it needs a
+// permission the view model does not carry. Shell has the principal, and a
+// template that asks a principal whether it is an administrator is the second
+// place in the codebase answering a question that belongs to the Perm
+// middleware. It waits for a field the handler fills rather than for a guess
+// made here — and the plugin group below it is placed so that Admin lands
+// between the core entries and the plugins when it arrives.
 templ LeftNav(shell httpapi.Shell) {
 	<nav
 		id="left-nav"
@@ -276,7 +281,40 @@ templ LeftNav(shell httpapi.Shell) {
 			@NavItem("/files", "i-folder", "Files")
 			@NavItem("/search", "i-search", "Search")
 		</ul>
+		if len(shell.PluginNav) > 0 {
+			<h2
+				id="plugin-nav-heading"
+				class="mt-6 px-2 text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400"
+			>
+				Plugins
+			</h2>
+			<ul class="mt-1 space-y-0.5">
+				for _, item := range shell.PluginNav {
+					@pluginNavItem(item)
+				}
+			</ul>
+		}
 	</nav>
+}
+
+// pluginNavItem is one entry in the sidebar's plugin group.
+//
+// The href arrives already inside the owning plugin's /plugin/{id} prefix and
+// already checked against the policy, so this renders what it is given: there is
+// no href to validate and no role to compare here, and a template that
+// re-answered either question would be a second place answering it.
+templ pluginNavItem(item httpapi.PluginNavItem) {
+	<li>
+		<a href={ item.Href } class="nav-item" data-plugin={ item.Plugin }>
+			// An entry with no icon shows no icon rather than an unresolved
+			// symbol reference: the words are the entry, and a broken glyph
+			// beside them costs a reader a question.
+			if item.Icon != "" {
+				@Icon(item.Icon, "h-4 w-4 shrink-0 opacity-80")
+			}
+			<span>{ item.Label }</span>
+		</a>
+	</li>
 }
 
 // NavItem is one entry in the campaign column.

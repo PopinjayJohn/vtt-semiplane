@@ -18,6 +18,7 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	// The indexer's package is named sync, so it is this one that is aliased:
 	// reading "sync.Once" in this file should mean the standard library's.
@@ -75,10 +76,15 @@ const (
 	stepFTS    = "fts-rebuild"
 	stepIndex  = "index"
 	stepPrune  = "prune"
-	stepWatch  = "watch"
-	stepBind   = "bind"
-	stepBanner = "banner"
-	stepServe  = "serve"
+	// stepPlugins is named in the trace after the index and before the watcher,
+	// because that is where it sits: a page type must be registered before the
+	// first request and a plugin migration must land in the same boot as the rows
+	// that reference it.
+	stepPlugins = "plugins"
+	stepWatch   = "watch"
+	stepBind    = "bind"
+	stepBanner  = "banner"
+	stepServe   = "serve"
 )
 
 // Options configures Boot.
@@ -112,6 +118,13 @@ type Options struct {
 	// file, so a second walk over the same vault would find nothing changed and
 	// cost a full re-read to say so.
 	Reindex bool
+	// Plugins is the registry to boot with — one map entry per shipped plugin,
+	// built in cmd/semiplane/registry.go. It is a parameter rather than a package
+	// variable so that a test can boot with a single fake plugin and a build
+	// with none, and so that `internal/app` never names a plugin id: the map is
+	// the one place that is allowed to, and a composition root that could name
+	// them would be a second place.
+	Plugins map[string]plugin.Plugin
 	// trace records every step in the order it completed, and the order is the
 	// point: it is the seam the boot-order test asserts through.
 	trace func(step string)
@@ -144,16 +157,21 @@ type App struct {
 	banner io.Writer
 	trace  func(string)
 
-	root         string
-	vaultSource  string
-	db           *store.DB
-	auditFile    *os.File
-	lock         *vault.Handle
-	bus          *isync.Bus
-	indexer      *isync.Indexer
-	selfwrites   *isync.Selfwrites
-	writer       *vault.Writer
-	watcher      *vault.Watcher
+	root        string
+	vaultSource string
+	db          *store.DB
+	auditFile   *os.File
+	lock        *vault.Handle
+	bus         *isync.Bus
+	indexer     *isync.Indexer
+	selfwrites  *isync.Selfwrites
+	writer      *vault.Writer
+	watcher     *vault.Watcher
+	// plugins is what the plugin lifecycle produced: the registries the request
+	// path reads, and the boot report an administrator reads. It is built once,
+	// here, and never mutated afterwards.
+	plugins      plugin.Registry
+	report       plugin.Report
 	handler      http.Handler
 	server       *http.Server
 	listener     net.Listener
@@ -326,6 +344,19 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 		return a, fmt.Errorf("boot: prune expired rows: %w", err)
 	}
 	a.step(stepPrune)
+
+	// 8b. The plugin lifecycle: migrations, registration, and the boot report.
+	//
+	// It runs after the index and before anything serves, so a page type a
+	// plugin registered is available to the first request rather than appearing
+	// on the second. It never fails the boot: a plugin that cannot register is
+	// recorded in the report with a reason and the campaign runs without it,
+	// because a campaign that will not boot is a worse outcome than a missing
+	// panel and a much harder one to diagnose.
+	if err = a.loadPlugins(ctx); err != nil {
+		return a, fmt.Errorf("boot: build the plugin host: %w", err)
+	}
+	a.step(stepPlugins)
 
 	if opts.Handler == nil {
 		// A one-shot command and every test take this path: the vault is locked,

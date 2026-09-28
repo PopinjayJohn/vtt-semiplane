@@ -87,6 +87,9 @@ func (s *Server) searchView(r *http.Request) SearchView {
 		Shell: s.liveShell(r, "Search"),
 		Query: q,
 	}
+	// The sidebar's plugin group is chrome, so it is filled here rather than in
+	// the two handlers that render this model: one place to get it right, and
+	// the JSON projection is unaffected because it projects named fields.
 	if q == "" {
 		return view
 	}

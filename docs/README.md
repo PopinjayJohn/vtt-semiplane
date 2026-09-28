@@ -65,13 +65,22 @@ keyboard model and accessibility work, the command palette, and the live-update
 stream at `/_/events` with its coalescing window, its buffer bound, its
 per-user and global caps, and its termination on any authorization change.
 
-Still **not** built: the plugin registry and `Host`, the editor, the sample
-campaign extraction and the release pipeline. `spec.md` says so per section, and
-a stage-2 consequence worth knowing is that there is deliberately **no edit
-link** anywhere: `/p/{path}/edit` does not exist, and an affordance for a route
-that answers 404 is a control that lies. `home.templ` records why, and
-`app.js` implements the `e` key by looking for an attribute that is therefore
-absent.
+**Stage 3** is the plugin boundary, and it is enforced rather than designed.
+`internal/plugin` holds the vocabulary, the `Host`, the registry and the
+lifecycle; `reserved.go` holds the reserved page-type ids and route segments;
+`cmd/semiplane/registry.go` is the one map entry; `/admin/plugins` is the boot
+report. `internal/systems/dnd5e` is a working system plugin and
+`internal/systems/example` is one built to be refused, five different ways, on
+purpose. Two surfaces are deliberately unwired and are `nil` rather than faked —
+a plugin's `fs.FS` and the plugin route mounter — and `internal/app/plugins.go`
+records why for each.
+
+Still **not** built: the editor, the sample campaign extraction and the release
+pipeline. `spec.md` says so per section, and a consequence worth knowing is that
+there is deliberately **no edit link** anywhere: `/p/{path}/edit` does not exist,
+and an affordance for a route that answers 404 is a control that lies.
+`home.templ` records why, and `app.js` implements the `e` key by looking for an
+attribute that is therefore absent.
 
 
 ## Adding a document

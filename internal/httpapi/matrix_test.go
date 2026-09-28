@@ -43,6 +43,20 @@ type matrixRoute struct {
 	closedToAnonymous int
 	// authenticated is the status a signed-in principal of any role gets.
 	authenticated int
+	// byRole overrides that, per role name, for the rows whose answer depends on
+	// which role is asking rather than on whether there is a session.
+	//
+	// It exists because /admin/plugins is the first route in this table whose
+	// answer is role-dependent: every earlier row is "signed in, or not", which
+	// one field can express. An admin-only surface is "admin, or not", and folding
+	// that into `authenticated` would have meant either asserting 200 for a dm —
+	// which is the bug this field prevents — or exempting the row from the table,
+	// which is the hole AGENTS.md §2.7 is about.
+	//
+	// A role absent from the map gets `authenticated`. That default is the safe
+	// one: a new role added to matrixRoles is checked against the ordinary answer
+	// and fails loudly if the route should have refused it.
+	byRole map[string]int
 	// extra marks a row that is not a row of the table.
 	extra bool
 	// timeout bounds the request for a route whose response never ends. The
@@ -143,6 +157,29 @@ var matrixRoutes = []matrixRoute{
 	// stream: the status line is on the wire before the first trigger would be.
 	{name: "events", method: http.MethodGet, pattern: "/_/events", path: "/_/events?page=Index.md", timeout: 2 * time.Second,
 		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303},
+
+	// The boot report. Admin-only, and unlike the anonymous rows above both
+	// anonymous answers are 403 rather than 303: /admin/plugins is not a
+	// navigation target, so there is nothing to redirect a reader to and
+	// answering 303 would confirm that the path is a real one.
+	// The one row in the table whose answer is a role rather than a session, and
+	// the reason `byRole` exists. A dm is not an admin: the plan's matrix says
+	// admin implies dm, never the other way round, and a table that could only
+	// say "signed in" would have papered over that by asserting 200 for a dm.
+	//
+	// The anonymous answers are 303, not 403, and that is the whole answer for a
+	// principal with no session: a safe request can be sent to the login form and
+	// come back. 403 is reserved for a principal who *is* signed in and is still
+	// refused, because a 303 tells an anonymous client "sign in and ask again"
+	// while a 403 tells it "this exists and you may not have it". An admin surface
+	// must not be the thing that teaches that difference.
+	{name: "admin plugins", method: http.MethodGet, pattern: "/admin/plugins", path: "/admin/plugins",
+		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303,
+		byRole: map[string]int{
+			"dm":                         no403,
+			"player who owns the tavern": no403,
+			"player who owns nothing":    no403,
+		}},
 	{name: "healthz", method: http.MethodGet, pattern: "/healthz", path: "/healthz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "readyz", method: http.MethodGet, pattern: "/readyz", path: "/readyz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "stylesheet", method: http.MethodGet, pattern: "/_/assets/*", path: "/_/assets/app.css", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
@@ -298,6 +335,9 @@ func performMatrixRow(t *testing.T, s *session, rt matrixRoute, role roleCase) (
 		return statusOf(s, rt, role), role.loginSubmit
 	}
 	if role.signedIn {
+		if want, ok := rt.byRole[role.name]; ok {
+			return statusOf(s, rt, role), want
+		}
 		return statusOf(s, rt, role), rt.authenticated
 	}
 	if role.anonymousRead {
@@ -524,26 +564,65 @@ func TestADisabledAccountGetsNoSession(t *testing.T) {
 	}
 }
 
-// TestANonAdminIsRefusedAdminSurface is here because stage 1 has no /admin route
-// yet, and a test is what stops one appearing without a decision.
+// TestANonAdminIsRefusedAdminSurface is here because a test is what stops an
+// /admin route appearing without a decision.
 //
-// It asserts two things: that no admin route is mounted, and that the
-// operations only an admin performs are refused by the policy to a player and to
-// a DM, so that adding a route for one of them later finds a gate that is
-// already correct rather than a handler that has to invent one.
+// Stage 1 wrote it as "no admin route is mounted", because there were none. That
+// premise expired with /admin/plugins, and the correct response is to keep the
+// test's purpose and replace its premise: the rule is not "there is no admin
+// surface", it is "every admin surface is admin-only". The second is the rule
+// that stays true as the surface grows, and it is checkable from the route table
+// rather than from a list somebody has to remember to update.
 func TestANonAdminIsRefusedAdminSurface(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	fx.accountsFor()
 	ctx := context.Background()
 
-	t.Run("no admin route is mounted", func(t *testing.T) {
+	t.Run("every admin route is admin-only and refuses everyone else", func(t *testing.T) {
 		t.Parallel()
+		// A concrete path per route, because the table carries patterns and a
+		// pattern with a {param} is not a path. A route added without a case here
+		// is a route nobody has proved is gated, so the default is a failure
+		// rather than a skip.
+		paths := map[string]string{
+			"GET /admin/plugins": "/admin/plugins",
+		}
+		var adminRoutes int
 		for _, route := range fx.Server.Routes() {
-			if strings.HasPrefix(route.Pattern, "/admin") {
-				t.Errorf("an admin route is mounted: %s requires %q", route.Name(), route.Perm)
+			if !strings.HasPrefix(route.Pattern, "/admin") {
+				continue
+			}
+			adminRoutes++
+			if route.Perm != authz.PermAdmin {
+				t.Errorf("%s is mounted at %q with %q, want %q: an admin surface that is not admin-only is the failure this test exists for",
+					route.Name(), route.Pattern, route.Perm, authz.PermAdmin)
+				continue
+			}
+			path, ok := paths[route.Method+" "+route.Pattern]
+			if !ok {
+				t.Errorf("%s is mounted at %q but this test has no path for it: add one, or the route is ungated as far as this suite knows", route.Name(), route.Pattern)
+				continue
+			}
+			s := fx.asUser(playerName, playerPass)
+			if got := s.status(s.get(path)); got != http.StatusForbidden {
+				t.Errorf("GET %s as a player: status %d, want 403", path, got)
+			}
+			dm := fx.asUser(dmName, dmPass)
+			if got := dm.status(dm.get(path)); got != http.StatusForbidden {
+				t.Errorf("GET %s as a dm: status %d, want 403: the admin role is not a superset of dm", path, got)
 			}
 		}
+		if adminRoutes == 0 {
+			t.Fatal("no admin route is mounted, so this test proved nothing: /admin/plugins should be here by now")
+		}
+	})
+
+	t.Run("an unmounted admin path is a 404, not a redirect", func(t *testing.T) {
+		t.Parallel()
+		// The distinction matters. A path under /admin that does not exist must
+		// be indistinguishable from any other missing page, so that the existence
+		// of the admin surface is not itself something a non-admin can probe.
 		s := fx.asUser(playerName, playerPass)
 		for _, path := range []string{"/admin", "/admin/users", "/admin/invites"} {
 			if got := s.status(s.get(path)); got != http.StatusNotFound {

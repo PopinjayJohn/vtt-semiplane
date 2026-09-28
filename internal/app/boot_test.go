@@ -131,6 +131,12 @@ func TestBootTakesTheOrderItClaims(t *testing.T) {
 	want := []string{
 		stepVault, stepLock, stepAudit, stepOpen, stepWire,
 		stepBackup, stepSchema, stepFTS, stepIndex, stepPrune,
+		// The plugin lifecycle sits between the index and the watcher, and the
+		// position is the claim being made: a page type a plugin registered has
+		// to exist before the first request rather than appearing on the second,
+		// and a plugin migration has to land in the same boot as the index rows
+		// that may reference it.
+		stepPlugins,
 		stepWatch, stepBind, stepBanner, stepServe,
 	}
 	if got := f.steps; !equalStrings(got, want) {

@@ -85,6 +85,14 @@ func (s *Server) Routes() []Route {
 
 		{Method: http.MethodGet, Pattern: "/tags", Perm: authz.PermAnonRead, Handle: s.tagsPage},
 		{Method: http.MethodGet, Pattern: "/tag/{name}", Perm: authz.PermAnonRead, Handle: s.tagPage},
+
+		// The boot report. It is the only surface that says *why* a panel is
+		// missing, which is why it exists rather than a line in the log: a plugin
+		// that fails silently fails permanently, and the one reader who can fix
+		// it is an administrator. Admin-only because it names the host's granted
+		// capabilities, which is a description of what this binary will do for
+		// whom.
+		{Method: http.MethodGet, Pattern: "/admin/plugins", Perm: authz.PermAdmin, Handle: s.adminPluginsPage},
 		{Method: http.MethodGet, Pattern: "/files", Perm: authz.PermAnonRead, Handle: s.filesPage},
 
 		// The one call a page view needs for its whole context column: the table

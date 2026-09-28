@@ -114,6 +114,40 @@ func allViews() []httpapi.View {
 				{Label: "#area/wild", Href: "/tag/area%2Fwild", Kind: httpapi.CommandTag},
 			},
 		},
+		// The boot report, with one row of every kind. A skipped row with a
+		// reason and a warning are both here on purpose: those are the two
+		// branches a template quietly stops rendering, and a fixture with only
+		// healthy rows would pass either omission.
+		httpapi.AdminPluginsView{
+			Shell:      shell,
+			HostLevel:  1,
+			APIWindow:  2,
+			Registered: 1,
+			Compat:     1,
+			Skipped:    1,
+			Lines: []httpapi.PluginReportLine{
+				{
+					ID: "dnd5e", Name: "D&D 5e", Kind: "system", Version: "0.4.0", Status: "ok",
+					APILevel: 1, HostLevel: 1,
+					Capabilities: []string{"character_sheet", "ui_panels", "sidebar_nav"},
+					Counts:       []string{"3 page types", "2 panels", "1 nav item"},
+				},
+				{
+					ID: "houserules", Name: "House rules", Kind: "feature", Version: "0.1.0", Status: "compat",
+					APILevel: 0, HostLevel: 1,
+					Capabilities: []string{"none granted"},
+					Counts:       []string{"no contributions"},
+				},
+				{
+					ID: "maptool", Name: "Map tool", Kind: "system", Version: "0.2.0", Status: "skipped",
+					Reason:   "it claimed the reserved page type map without holding the maps capability",
+					APILevel: 1, HostLevel: 1,
+					Capabilities: []string{"none granted"},
+					Counts:       []string{"no contributions"},
+				},
+			},
+			Warnings: []string{"maptool contributed a panel for the slot right-far-side, which core does not render"},
+		},
 		httpapi.LoginView{Shell: shell, Problem: "That username and passphrase do not match an account."},
 		httpapi.SetupView{Shell: shell, Problem: "that is too short", Field: "username"},
 		httpapi.InviteView{Shell: shell, Token: "0123456789abcdef01234567", Role: "player"},

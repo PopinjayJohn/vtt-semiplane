@@ -56,7 +56,19 @@ templ Page(v httpapi.PageView) {
 			@Callout("border-secret/40 bg-secret-soft text-secret", "The parser reported a problem", Text(problem))
 		}
 		<div class="prose-vtt mt-6 max-w-none">
-			@PreRendered(v.Body)
+			// A system plugin may have registered a viewer for this page's type.
+			// When it did, that is the body; when it did not — which is the case
+			// for every page of every campaign with no system plugin, and for
+			// every page type that exists only as a frontmatter convention like
+			// `type: houserule` — this is the core Markdown view. The default is
+			// the core view and not a blank, because a page that renders as an
+			// empty article when a plugin is absent is a broken page rather than
+			// a degraded one.
+			if v.Viewer != nil {
+				@v.Viewer
+			} else {
+				@PreRendered(v.Body)
+			}
 		</div>
 		if len(v.Secrets) > 0 {
 			<section aria-labelledby="secrets-heading" class="mt-8 space-y-3">

@@ -7,12 +7,11 @@ document says **not implemented** and says so again in
 [What is not built yet](#10-what-is-not-built-yet).
 
 **State of the tree, stated first, because a reader who assumes otherwise will
-mis-plan:** the `internal/plugin` package — `doc.go`, `plugin.go`,
-`plugin_test.go` — is the whole of it. No registry, no `Host` implementation, no
-reserved-name table, no plugin route, no `/admin/plugins`. The only file outside
-`internal/plugin` that imports the package is
-[`internal/web/components_templ.go`](../internal/web/components_templ.go), and it
-uses exactly one symbol, `plugin.WikiLink`.
+mis-plan:** this document is a map, and the state moves. [§10](#10-what-is-not-built-yet)
+records what exists; the *enforcement* claims below are each owned by a named
+test in [`internal/architecture_test.go`](../internal/architecture_test.go), and
+a claim in this document that no test backs is a bug in this document — see
+`AGENTS.md` §0 for the recorded case where that was not academic.
 
 ## 1. What a plugin is, and what it is not
 
@@ -50,7 +49,9 @@ contract actually buys is narrower, and worth stating precisely:
 | Response bodies scanned for unread secret plaintext | the tripwire; see `AGENTS.md` §6 |
 | No outbound network in the request path | `AGENTS.md` §2 rule 5 |
 | A plugin may not import `httpapi`, `auth`, `obs`, `sync`, `config`, `app` | `TestPluginImportsAreWithinBoundary` — see [§6](#6-the-import-boundary) |
-| No core package branches on a plugin id | `TestNoPluginSwitchInCore` — see [§6](#6-the-import-boundary) |
+| No core package dispatches on a plugin id | `TestNoPluginSwitchInCore` — see [§6](#6-the-import-boundary) |
+| …and that neither of the two above is checking nothing | `TestTheArchitectureGatesHaveSomethingToCheck` — see [§6](#6-the-import-boundary) |
+| A reserved name is claimable only with its capability | `TestEveryReservedNameIsClaimableOnlyWithItsCapability` — see [§5](#5-reserved-names) |
 
 ## 2. The contract
 
@@ -98,8 +99,12 @@ actually differ.
 **The one rule that differs: a `KindFeature` plugin may not register page
 types.** `Descriptor.PageTypes` MUST be empty when `Kind` is `KindFeature`; a
 violation is a boot error for that plugin alone. `Kind.Valid()` is the check on
-the value itself; nothing enforces the `PageTypes` rule yet, because nothing
-reads a `Descriptor` yet.
+the value itself, and the rule on the declaration is enforced twice over — once
+on the static `Descriptor` in
+[`internal/plugin/lifecycle.go`](../internal/plugin/lifecycle.go), and once at
+registration in [`internal/plugin/host.go`](../internal/plugin/host.go), because
+a plugin that registers page types without having declared them has to be
+refused too. Both refusals disable that one plugin and boot continues.
 
 **The alternative that needs no plugin at all.** A *page-type convention* — a
 plain `type:` string in frontmatter that the core markdown viewer renders like
@@ -133,9 +138,12 @@ The eleven constants, in `AllCapabilities` order:
 | `CapBacklinks` | contributing extra related-entity resolvers |
 | `CapExporters` | contributing export formats |
 
-**What the host discards without a capability — designed, not implemented.** The
-rules below are stated in the doc comments of `Descriptor`, `Panel` and
-`Host`, which is the owner:
+**What the host discards without a capability.** The table below is an index
+into the code that decides it, not a restatement of it: each row's rule is
+written down once, in the doc comment of the `Descriptor`, `Panel` or `Host`
+field it is about, and enforced in
+[`internal/plugin/host.go`](../internal/plugin/host.go). A refusal is a warning
+in the boot report, not a silent discard.
 
 | Capability absent | The host discards |
 |---|---|
@@ -143,10 +151,14 @@ rules below are stated in the doc comments of `Descriptor`, `Panel` and
 | `CapSidebarNav` | `Descriptor.NavItems` at boot, with a warning — and the sidebar renders no plugin group at all, not an empty one. |
 | `CapSearchResolvers` | `Descriptor.SearchResolvers`; the host never calls them. |
 | `CapPageSummaries` | the plugin's summary endpoint is never mounted, and the core link-preview interaction does not bind. |
-| `CapMaps`, `CapEncounters`, `CapDice`, `CapCharacterSheet`, `CapRules`, `CapBacklinks`, `CapExporters` | the matching reserved page-type ids and route segments (see [§5](#5-reserved-names)); the host is to refuse a page type whose id is reserved and to refuse a route pattern under a reserved segment. |
+| `CapMaps`, `CapEncounters`, `CapDice`, `CapCharacterSheet`, `CapRules`, `CapBacklinks`, `CapExporters` | the matching reserved page-type ids and route segments (see [§5](#5-reserved-names)); the host refuses a page type whose id is reserved and a route pattern under a reserved segment, via `plugin.CheckReservedPageType` and `plugin.CheckReservedRoute`. |
 
-None of the above is implemented. `Capabilities` is a type, a bitmask, and a
-parse function; nothing outside `internal/plugin` reads one.
+Two of those rows are not implemented yet, and the table says which: the
+`CapPageSummaries` row describes behaviour that needs the link-preview
+interaction, and the absence-degrades rule below depends on the same missing
+piece. `Capabilities` itself is a bitmask with a parse function that rejects an
+unknown name, and the host now reads one — the reserved-name half of the last
+row is the part with a test behind it.
 
 **The absence-degrades rule.** When no plugin holds `CapSidebarNav`, the sidebar
 renders no plugin group rather than an empty heading. When no plugin holds
@@ -164,24 +176,53 @@ capabilities it holds. The check runs before anything is added to a registry, so
 a violation disables that one plugin and rolls its own migration transaction
 back — a contained failure, not a corrupt boot.
 
-**Where the table lives: nowhere yet.** The design says the reserved
-page-type ids and route segments are defined once, in
-`internal/plugin/reserved.go`. **That file does not exist.** The package is
-`doc.go`, `plugin.go`, `plugin_test.go` and nothing else, and `plugin.go`
-mentions the reserved names in exactly two places: the `Descriptor.ValidateID`
-doc comment ("not one of the reserved names") and `doc.go`'s statement that the
-reserved-name table arrives in the plugin phase.
+**Where the table lives: `internal/plugin/reserved.go`**, which is also where
+`Claimable` lives, so the registry and the rule that decides what the registry
+may hold cannot drift apart. The tables themselves are the authority; this
+document does not restate them, for the reason in `AGENTS.md` §0 — a document
+that repeats a table the code owns can be wrong while looking authoritative.
 
-So: **the rule is designed; the table and the check are not implemented.**
-`Descriptor.ValidateID` currently checks that an id is non-empty, lowercase, and
-made only of `a`–`z`, `0`–`9` and `-`. It does not check the reserved set.
+Two things the table's shape is easy to get wrong, both of which the code
+handles and neither of which this document needs to repeat:
+
+- A reserved route segment is matched **anywhere** in a registered pattern, not
+  only at the start, because the shapes that collide are nested.
+- A `map[string]plugin.Plugin` keyed by plugin id is *the registry's own type*,
+  which is what makes a second one outside `internal/plugin` detectable at all.
+
+**Two tests in
+[`internal/architecture_test.go`](../internal/architecture_test.go) hold the
+tables to the rule**, and they are the reason this section can say the rule is
+enforced rather than designed:
+
+- `TestEveryReservedNameIsClaimableOnlyWithItsCapability` walks **every** entry in
+  both tables and asserts all three of `Claimable(KindSystem, All(), need)` is
+  true, `Claimable(KindFeature, All(), need)` is false, and
+  `Claimable(KindSystem, All() minus need, need)` is false. An entry that is
+  claimable by nobody is a name the host holds for no one, and the third case is
+  what makes holding the capability *be* the grant.
+- `TestTheReservedTablesHaveNoDuplicates` exists because a duplicate is a table
+  where the second row silently wins: `ReservedPageTypeFor` and
+  `RouteReservation` both return the first match, so a segment listed twice
+  leaves the second capability unable to claim a name it appears to own.
+
+**One gap worth knowing, because the test works around it rather than on top of
+it:** `plugin.Capabilities` has `With` but no `Without`, so the test builds the
+"missing one" set by omission over the exported `plugin.AllCapabilities`. A
+`Without` method is the natural API and belongs to the plugin package; until it
+exists, the omission is spelled out in the test rather than hidden.
 
 ## 6. The import boundary
 
 Enforced by `TestPluginImportsAreWithinBoundary` in
 [`internal/architecture_test.go`](../internal/architecture_test.go), which walks
-`internal/systems/**` and `internal/plugins/**` — skipping either directory that
-does not exist, so the test is vacuous until the first plugin lands.
+`internal/systems/**` and `internal/plugins/**`. The walk **recurses**, which is
+load-bearing rather than tidy: a plugin is a *directory*
+(`internal/systems/dnd5e/`), and the first version of this gate listed one
+directory and stopped, so it reported zero plugins no matter what was on disk and
+skipped forever. The test skips only when no plugin package has a source file
+beyond a `doc.go`, and [the test below](#the-tests-that-would-otherwise-pass-vacuously)
+fails while that is true.
 
 A plugin **may** import:
 
@@ -214,14 +255,49 @@ redactor and the policy have to be reachable for a panel to be authz-filtered by
 construction — and adds `config` and `app` to the forbidden list. **The test is
 the authority; the plan is out of date here.**
 
-The companion test is `TestNoPluginSwitchInCore`: no core package may contain
-the string `"<plugin-id>"`. It walks `app`, `httpapi`, `web`, `vault`, `store`,
-`md`, `search`, `sync`, `authz`, `secrets`, `auth`, `obs` and `config` for the
-ids of registered plugins. **It currently skips** — `registeredPluginIDs` finds
-no `ID: "…"` literal in a non-test file under `internal/systems/` or
-`internal/plugins/`, because `internal/systems/core` and
-`internal/systems/dnd5e` contain only a `doc.go` each. Adding the first real
-plugin turns it on.
+The companion test is `TestNoPluginSwitchInCore`: no core package may dispatch on a
+plugin id. **What it scans, and how, is the part worth reading**, and the code
+comment on `findPluginIDMentions` is the authority.
+
+- The set of scanned packages is **derived** from the dependency order plus the
+  exempt packages, not written out, and `TestNoPluginSwitchScansEveryCorePackage`
+  checks the derivation against the directories that are actually on disk. A
+  hand-written list is a rule that quietly narrows the day a core package is
+  added, and a narrowed rule is indistinguishable from a rule that held.
+- The plugin ids come from **parsing** each plugin's `plugin.Descriptor`
+  literals with `go/parser` and resolving `ID: ID` through the package's own
+  string constants. Both spellings are ordinary Go, and a scan that read only
+  the inline literal would go quiet on the tidier of them. A `Descriptor` whose
+  `ID` is neither a literal nor a package const is **reported**, not skipped:
+  a plugin the gate cannot read is a gate that has stopped applying to it.
+- The match is over **dispatch sites**, not over occurrences of the word: a
+  comparison, a switch arm, an index expression, or a key of a
+  `map[string]plugin.Plugin` literal. That last one is the registry's own type,
+  so a copy of the registry outside `internal/plugin` is exactly the failure the
+  rule is for.
+- **The reason it is not a substring or word-boundary match is empirical, and
+  the counter-example is in the tree:** `internal/md/callout.go` contains
+  `"example": true` in a table of callout *kinds*, and a literal-substring scan
+  reports that file as branching on the plugin `example`. A gate that reports a
+  lie is worse than one that stays quiet, because the habit it teaches is to
+  ignore it. `TestNoPluginSwitchGateFires` pins both directions over synthetic
+  files in `t.TempDir()`, including that counter-example.
+
+### The tests that would otherwise pass vacuously
+
+Both gates above **skip** when the tree holds no plugin, because there is
+nothing to check. A skip is honest, and it is also indistinguishable from a rule
+that held — so a third test makes skipping impossible to mistake for passing:
+
+**`TestTheArchitectureGatesHaveSomethingToCheck` fails, rather than skips, while
+the tree holds no plugin.** It asserts that the id extraction finds at least one
+plugin id and that the boundary walk finds at least one plugin source file beyond
+a `doc.go`, and its failure message names the directories that would satisfy it.
+A guard that skips is the thing it was written to prevent.
+
+This is the whole reason the two gates are trustworthy rather than merely
+present: the day someone deletes the last plugin, this test fails and says they
+deleted the *evidence* the gates run on, not that the gates went quiet.
 
 ## 7. Link previews
 
@@ -343,7 +419,11 @@ The design says a plugin requires exactly: one directory under
 `internal/systems/<id>/`, one map entry in the registry, and sample content if it
 needs any. No core file changes.
 
-- [ ] Pick an id: kebab-case, lowercase, stable forever.
+- [ ] Pick an id: kebab-case, lowercase, stable forever. Declare it as a string
+      literal or a package-level string const in your `Descriptor` — the
+      architecture tests read your `Descriptor` with `go/parser`, and an `ID`
+      that is neither is reported rather than skipped, because a plugin the
+      boundary gate cannot read is a plugin the gate has stopped covering.
 - [ ] Choose `KindSystem` or `KindFeature`. If feature, `Descriptor.PageTypes` is
       empty.
 - [ ] Set `APILevel` to `plugin.APILevel`.
@@ -370,21 +450,23 @@ cost is in the gap, not in the interface.
 | Thing | State |
 |---|---|
 | `Plugin`, `Descriptor`, `Kind`, `Capability`, `Capabilities`, `PluginCore`, `PluginUI`, `Host` (interface), `PageType`, `SchemaField`, `Panel`, `Slot`, `NavItem`, `SearchResolver`, `IndexRow`, `SummaryProvider`, `Migration`, `Config`, `KV`, `Level`, `RouteMounter`, `WikiLinkAttr`, `WikiLink` | **exist** in [`internal/plugin/plugin.go`](../internal/plugin/plugin.go) |
-| The plugin registry (a map id → `Plugin`, iterated deterministically at boot) | **not implemented** |
-| `Host` — the *implementation*. The interface shape is fixed and stated; no type implements it. | **not implemented** |
-| The reserved-name table, `internal/plugin/reserved.go` | **not implemented** |
-| The registration lifecycle: version gate, per-plugin migration transaction, id-collision detection, rollback, the boot report | **not implemented** |
-| Capability enforcement at the host (anything discarding a panel, nav item, resolver, or route) | **not implemented** |
-| Plugin routes under `/plugin/{id}/`, and the sub-router already prefixed and middleware-wrapped | **not implemented** |
-| `/admin/plugins` (the boot report) | **not implemented** |
-| The link-preview interaction in `web/static/app.js` | **not implemented** |
-| The `houserules` and `linkpreview` feature plugins, and any real `dnd5e` system plugin | **not implemented**; `internal/systems/core` and `internal/systems/dnd5e` contain a `doc.go` each and nothing else |
+| The reserved-name table and `Claimable` | **exist** in [`internal/plugin/reserved.go`](../internal/plugin/reserved.go); held to the rule by the two tests named in [§5](#5-reserved-names) |
+| The plugin registry, the boot report, and the `Host` implementation | **exist** in [`internal/plugin/registry.go`](../internal/plugin/registry.go) and [`internal/plugin/host.go`](../internal/plugin/host.go) — see the file for what it guarantees |
+| The registration lifecycle: version gate, per-plugin migration transaction, id-collision detection, rollback | **exists** in [`internal/plugin/lifecycle.go`](../internal/plugin/lifecycle.go) |
+| `/admin/plugins` (the boot report), registered in the route table per `AGENTS.md` §2.7 | **exists** — [`internal/httpapi/admin_plugins.go`](../internal/httpapi/admin_plugins.go) |
+| `internal/systems/example` — a deliberately-refusing plugin that demonstrates each refusal rule | **exists**, and is what the two boundary gates in [§6](#6-the-import-boundary) run on |
+| A real `dnd5e` system plugin | **not implemented**; `internal/systems/dnd5e` holds a `doc.go` and nothing else |
+| The `houserules` and `linkpreview` feature plugins | **not implemented** |
+| The link-preview interaction in `web/static/app.js` | **not implemented**; `plugin.WikiLink` and `SummaryProvider` are the vocabulary it will use |
 
-**Two tests that would pass vacuously today,** which the design treats as worse
-than no test: `TestPluginImportsAreWithinBoundary` skips both
-`internal/systems` and `internal/plugins` if the directory is absent (it walks
-`internal/systems`, which exists, but finds only `doc.go`), and
-`TestNoPluginSwitchInCore` calls `t.Skip("no plugins registered yet")`.
+**The two tests this document used to have to apologise for are now enforced.**
+`TestPluginImportsAreWithinBoundary` and `TestNoPluginSwitchInCore` each skip
+when there is no plugin to check, and each is now backed by
+`TestTheArchitectureGatesHaveSomethingToCheck`, which **fails** rather than skips
+while the tree holds none. See
+[§6](#the-tests-that-would-otherwise-pass-vacuously). The rule of thumb: a skip
+here means the gate had nothing to say, and the guard test is what says so out
+loud.
 
 ## Where the design lives
 

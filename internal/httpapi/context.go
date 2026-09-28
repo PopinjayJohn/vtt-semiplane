@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
+	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -227,6 +230,251 @@ func frontmatterOf(row store.Page) map[string]any {
 	return fields
 }
 
+// The plugin layer's contribution to the shell, and the three rules that keep it
+// from being a broken control.
+//
+// They live here rather than in the view layer for the reason the canonical
+// predicate does: a rule that sits next to the thing it decides cannot be
+// forgotten by whoever adds the next surface.
+
+// PluginPanelSlots is the order the right column renders plugin panels in, and
+// the set of slots it renders at all.
+//
+// It is one list, exported, because two packages need the same answer: the
+// handler that fills the view model and the template that lays it out. A slot
+// order written twice is a column that disagrees with itself the first time a
+// slot is added, and that disagreement would be invisible until a panel turned
+// up in the wrong place.
+//
+// SlotLeftBottom is here because the left column has no panel region yet, and a
+// panel a plugin contributed is shown rather than dropped — at the bottom of the
+// context column, which is the only region this build has. SlotEditorToolbar
+// and SlotPageActions are absent because the editor stage owns those
+// placements, and a roll button in a sidebar is a control in the wrong place
+// rather than a working one.
+func PluginPanelSlots() []string {
+	return []string{
+		string(plugin.SlotRightTop),
+		string(plugin.SlotRightMid),
+		string(plugin.SlotRightBottom),
+		string(plugin.SlotLeftBottom),
+	}
+}
+
+// PluginNavFor projects a registry's sidebar entries onto one request's shell.
+//
+// Two entries never reach a template. One whose href is outside its own
+// plugin's route prefix, because a link to nothing is a broken control: the host
+// is supposed to have refused it at registration, and this is the cheap second
+// check that turns a mistake there into a missing link here rather than a 404 in
+// a reader's sidebar. And one this principal may not see, because MinimumRole
+// is resolved here, through the policy — so the sidebar's answer to "may this
+// reader open this" is the same answer the route table gives, and the role never
+// reaches a template that might ask a second question about it.
+//
+// The order is the registry's. NavItems is already sorted by Order, then owning
+// plugin id, then declaration index, and sorting it again here could only lose
+// that order.
+func PluginNavFor(owned []plugin.Owned[plugin.NavItem], who authz.Principal, policy authz.Policy) []PluginNavItem {
+	out := make([]PluginNavItem, 0, len(owned))
+	for _, item := range owned {
+		perm, known := navItemPermission(item.Value.MinimumRole)
+		if !known || !policy.Allows(who, perm, authz.Resource{}) {
+			continue
+		}
+		entry := PluginNavItem{
+			ID:     item.Value.ID,
+			Plugin: item.Plugin,
+			Label:  item.Value.Label,
+			Href:   item.Value.Href,
+			Icon:   item.Value.Icon,
+			Order:  item.Value.Order,
+		}
+		if !entry.WithinPrefix() {
+			continue
+		}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		// nil rather than an empty slice, so that "no plugin group" is one
+		// value in a JSON projection and one branch in a template rather than
+		// two shapes of the same absence.
+		return nil
+	}
+	return out
+}
+
+// navItemPermission is the permission a nav item's MinimumRole names.
+//
+// The plugin vocabulary spells the requirement as a role name and the policy
+// speaks in permissions, so this is the only place the two are translated. An
+// unrecognised role is shown to nobody rather than defaulted to everybody: an
+// entry that vanished for a DM and stayed for an admin is a policy with a hole
+// in it, and a typo in a plugin's string should cost its own screen rather than
+// a difference between two readers.
+func navItemPermission(minimum string) (authz.Permission, bool) {
+	switch authz.Role(strings.TrimSpace(minimum)) {
+	case "", authz.RolePlayer:
+		return authz.PermReadPage, true
+	case authz.RoleDM:
+		return authz.PermDM, true
+	case authz.RoleAdmin:
+		return authz.PermAdmin, true
+	default:
+		return "", false
+	}
+}
+
+// pluginNav is the left sidebar's plugin group for one request.
+//
+// A nil registry is the ordinary case for a build with no plugins in it, so the
+// check is here rather than in New: the group is chrome, and chrome that cannot
+// be built at all is a page that cannot be rendered.
+func (s *Server) pluginNav(r *http.Request) []PluginNavItem {
+	if s.plugins == nil {
+		return nil
+	}
+	return PluginNavFor(s.plugins.NavItems(), PrincipalFrom(r.Context()), s.policy)
+}
+
+// pluginPanels is the right column's plugin panels for a page of this type.
+//
+// pageType is the frontmatter `type:` and the empty string is not a special
+// case: PanelsFor reads it as "the global panels only", which is what a page
+// naming no type should get.
+//
+// A panel that does not render is dropped and logged rather than failed on. The
+// column is chrome and it is on every page, so a component with a bug in it
+// would otherwise be a 500 for every reader of every page. The log line names
+// the plugin and the slot and carries no content, for the reason every log line
+// in this package carries no content.
+func (s *Server) pluginPanels(ctx context.Context, pageType string) []PluginPanel {
+	if s.plugins == nil {
+		return nil
+	}
+	var out []PluginPanel
+	for _, owned := range s.plugins.PanelsFor(pageType) {
+		slot := string(owned.Value.Slot)
+		if owned.Value.Component == nil || !knownPanelSlot(slot) {
+			continue
+		}
+		var body strings.Builder
+		if err := owned.Value.Component.Render(ctx, &body); err != nil {
+			s.log.WarnContext(ctx, "a plugin panel did not render",
+				"action", "http.panel", "request_id", obs.RequestID(ctx),
+				"plugin", owned.Plugin, "slot", slot, "err", logRecord(err).String())
+			continue
+		}
+		out = append(out, PluginPanel{
+			Slot:  slot,
+			Title: panelSlotTitle(slot),
+			Body:  strings.TrimSpace(body.String()),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	// The slot order is fixed and the order within a slot is the registry's, so
+	// two panels competing for one slot cannot swap places between two requests.
+	slices.SortStableFunc(out, func(a, b PluginPanel) int {
+		return panelSlotRank(a.Slot) - panelSlotRank(b.Slot)
+	})
+	return out
+}
+
+// knownPanelSlot reports whether the context column renders this slot.
+func knownPanelSlot(slot string) bool { return slices.Contains(PluginPanelSlots(), slot) }
+
+// panelSlotRank is a slot's position in the column. An unknown slot sorts last
+// rather than first, so a slot added to neither list cannot displace the ones
+// that are.
+func panelSlotRank(slot string) int {
+	for i, known := range PluginPanelSlots() {
+		if known == slot {
+			return i
+		}
+	}
+	return len(PluginPanelSlots())
+}
+
+// panelSlotTitle is the heading a panel is rendered under.
+//
+// plugin.Panel carries no title field, so every panel is given one of these and
+// the alternative — output under no heading at all — is the unlabelled block
+// AGENTS.md §7 is about. The wording names the slot rather than guessing what
+// the panel is for, because the host cannot know that, and a heading that
+// guesses is a heading that is sometimes wrong.
+//
+// SlotLeftBottom reads as the bottom of the context column because that is
+// where it is rendered; nothing in this build puts a panel in the left column.
+func panelSlotTitle(slot string) string {
+	switch plugin.Slot(slot) {
+	case plugin.SlotRightTop:
+		return "Above the page context"
+	case plugin.SlotRightMid:
+		return "Page context"
+	case plugin.SlotRightBottom, plugin.SlotLeftBottom:
+		return "Below the page context"
+	default:
+		return "Plugin panel"
+	}
+}
+
+// pageViewer is the custom viewer a plugin registered for this page type, or
+// nil.
+//
+// Nil is the answer for every page of a campaign with no system plugin, and for
+// every page type that exists only as a frontmatter convention: `type:
+// houserule` names a type nobody registered, and it renders with the core
+// Markdown view. A registered type that supplied no viewer is the same answer,
+// so "there is nothing custom here" is one path rather than two, and the
+// template's default branch is what every page takes unless a plugin said
+// otherwise.
+func (s *Server) pageViewer(pageType string) templ.Component {
+	if s.plugins == nil || pageType == "" {
+		return nil
+	}
+	registered, ok := s.plugins.PageType(pageType)
+	if !ok {
+		return nil
+	}
+	return registered.Viewer
+}
+
+// currentPageType is the `type:` a page's frontmatter names.
+//
+// It is read through md.ParseFields — the helper campaignStatus already uses —
+// rather than with a second YAML reader, because a second reader is a second
+// opinion about the same bytes and the indexer's own column is derived from the
+// first one. A block that does not parse yields no fields at all, and the
+// indexer's column is then the only surviving copy of the same fact. When
+// neither has one the page is a note, which is what md.DefaultPageType is for.
+func (s *Server) currentPageType(row store.Page) string {
+	for _, value := range []string{frontmatterType(row), row.PageType} {
+		if t := strings.TrimSpace(value); t != "" {
+			return t
+		}
+	}
+	return md.DefaultPageType
+}
+
+// frontmatterType reads the `type:` field as a string.
+//
+// A Stringer is accepted because YAML resolves an unquoted date-shaped value to
+// a timestamp, and a page type written as one is a string an author meant. Every
+// other shape is a number, a list or a map, and none of those is a page type
+// this registry could have registered, so they read as absent.
+func frontmatterType(row store.Page) string {
+	switch value := frontmatterOf(row)["type"].(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		return ""
+	}
+}
+
 // pageAside is everything a page's right column carries, resolved once.
 //
 // It is one function rather than a handful of calls repeated at two call sites
@@ -338,10 +586,10 @@ func (s *Server) pageContextAPI(w http.ResponseWriter, r *http.Request) {
 	// has to answer the same thing — otherwise "the file was deleted" and "the
 	// page is not yours" would be two different answers, which is the whole
 	// class of probe this route must not be.
-	if _, err := s.readPage(ctx, row.Path); err != nil {
+	if _, readErr := s.readPage(ctx, row.Path); readErr != nil {
 		s.log.WarnContext(ctx, "a page in the index could not be read from the vault",
 			"action", "http.context", "request_id", obs.RequestID(ctx),
-			"path", row.Path, "reason", err.Error())
+			"path", row.Path, "reason", readErr.Error())
 		writeJSONError(w, http.StatusNotFound)
 		return
 	}
@@ -361,6 +609,11 @@ func (s *Server) pageContextAPI(w http.ResponseWriter, r *http.Request) {
 		BacklinkCount: aside.backlinkCount,
 		Related:       aside.related,
 		Status:        aside.status,
+		// The same panels the page view's column carries, from the same page
+		// type. A client that swapped this region in and then rendered the
+		// document would otherwise be looking at two different answers about
+		// what is around the page.
+		Panels: s.pluginPanels(ctx, s.currentPageType(row)),
 	}
 	view.Shell.CurrentPageID = row.ID
 	view.Shell.CurrentPageURL = card.Href()

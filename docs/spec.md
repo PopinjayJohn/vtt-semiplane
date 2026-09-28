@@ -378,6 +378,11 @@ added `GET /tags`, `GET /tag/{name}`, `GET /files`,
 `store` queries behind them; the three-column layout with its campaign-status
 panel; and the live-update stream.
 
+Stage 3 is **P9a**: the plugin boundary, from vocabulary to enforced. It added
+`GET /admin/plugins`; `internal/plugin/{reserved,registry,host,lifecycle}.go`;
+`cmd/semiplane/registry.go`; the two plugin packages under `internal/systems/`;
+and the nav, panel and page-type plumbing in the shell.
+
 Delivered and enforced today:
 
 | Area | Where |
@@ -398,6 +403,9 @@ Delivered and enforced today:
 | The shell: three columns, campaign status, file tree, tag surfaces, palette, the component library | [`../internal/web/`](../internal/web/) |
 | The keyboard model, the region-swap protocol, roving tabindex, the typeahead | [`../web/static/app.js`](../web/static/app.js) |
 | Composition root, boot order, one-shot commands, CLI | [`../internal/app/`](../internal/app/), [`../cmd/semiplane/`](../cmd/semiplane/) |
+| The plugin boundary: reserved names, the host, the lifecycle, the registry | [`../internal/plugin/`](../internal/plugin/), [`../cmd/semiplane/registry.go`](../cmd/semiplane/registry.go) |
+| The reference system plugin, and one built to be refused | [`../internal/systems/dnd5e/`](../internal/systems/dnd5e/), [`../internal/systems/example/`](../internal/systems/example/) |
+| The boot report at `/admin/plugins` | [`../internal/httpapi/admin_plugins.go`](../internal/httpapi/admin_plugins.go), [`../internal/web/admin_plugins.templ`](../internal/web/admin_plugins.templ) |
 
 **Not built. Treat every row as a proposal, not as behaviour.** The plan's
 remaining phases are P7's remaining surfaces (the reveal/revoke *controls* and
@@ -408,13 +416,29 @@ the example plugins), P10 (the VTT) and P12.
 
 Concretely absent from the tree, so that nobody goes looking:
 
-- **No plugin is registered.** `internal/plugin` is vocabulary only — the
-  interface, the `Kind`, the capabilities, the `Descriptor`. There is no
-  `reserved.go`, no registry, no `Host` implementation, and
-  `internal/systems/core` and `internal/systems/dnd5e` are a `doc.go` each.
-  `TestNoPluginSwitchInCore` skips while the registry is empty. The sidebar
-  renders **no** plugin group at all for the same reason: an empty heading is a
-  heading nobody reads, and a group whose entries 404 is worse.
+- **A plugin registers, but only `dnd5e` ships, and two surfaces are still
+  unwired.** `internal/plugin` holds the vocabulary, the `Host` implementation,
+  the registry and the lifecycle; `reserved.go` holds the reserved names;
+  `cmd/semiplane/registry.go` is the one map entry; `/admin/plugins` is the boot
+  report. `internal/systems/dnd5e` is a working system plugin and
+  `internal/systems/example` is one that refuses to register, five ways, on
+  purpose. What is **not** wired: the plugin's `fs.FS` (there is no reusable
+  "public body" reader to hand it, and inventing one is the most likely way to
+  put a secret where a plugin can see it) and the plugin route mounter (the
+  router arrives at Boot as an opaque `http.Handler`, so there is nothing to
+  mount onto). Both are nil rather than faked, and both are recorded in
+  `internal/app/plugins.go`.
+- **`internal/systems/core` is a `doc.go` and nothing else.** There is no core
+  system plugin. Core behaviour is core, not a plugin; the package exists so a
+  reader looking for "where is the built-in game system" finds a statement
+  rather than an empty directory.
+- **A panel body reaches the reader as escaped text, not markup.** `httpapi`
+  cannot import `internal/web`, so a panel's `templ.Component` is rendered to a
+  string and emitted as text — which means a plugin's panel loses its markup
+  this stage. The trade is deliberate and one-directional in the safe
+  direction: a body escaped on the way out cannot be a script even if a plugin
+  writes `templ.Raw`, which is what makes "a plugin cannot ship JavaScript" a
+  property of the pipeline rather than a claim about the plugins in the tree.
 - **No sample campaign.** `internal/sample` is a `doc.go`; the embedded
   campaign and its first-boot extraction are not written. The leak suite runs
   against a harness-seeded vault instead.
@@ -422,9 +446,9 @@ Concretely absent from the tree, so that nobody goes looking:
   the indexer writes none, because `md` yields attachment *names* with no mime
   or size, and inventing a sniffing table would be worse than leaving it to the
   page route's phase.
-- **No editor, no reveal/revoke route, no `/admin`, no plugin routes.** The route
-  table has twenty entries over seventeen distinct patterns, and they are all in
-  §5 above.
+- **No editor, no reveal/revoke route, no `/admin/users`, no plugin routes.** The
+  route table has twenty-one entries over eighteen distinct patterns, and they
+  are all in §5 above. `/admin/plugins` is the only admin surface.
 - **No edit affordance anywhere**, and that is a decision rather than an
   omission. `app.js` implements the `e` key by looking for a `data-edit-href`
   attribute; nothing renders one, because `/p/{path}/edit` does not exist until

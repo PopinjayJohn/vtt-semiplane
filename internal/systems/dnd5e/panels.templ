@@ -1,0 +1,62 @@
+package dnd5e
+
+// characterPanel is the right-sidebar panel shown beside a character page.
+//
+// It is a templ.Component and nothing else. There is no script element, no style
+// element, no inline event handler and no DOM handle anywhere in this file, and
+// that is not restraint — it is the only option the architecture offers. The Host
+// interface has no method that could install one, a plugin table may not carry a
+// JavaScript column, and app.js plus the stylesheet are core-owned. §2.6 of the
+// plan and S21 in §12 say the same thing from the other side: an N-plugin
+// implementation of hover handling is an arbitrary-script hole in the CSP and a
+// per-plugin accessibility bug, which is why the link-preview interaction is
+// written once in core.
+//
+// So this card is markup over a Go value. If a future contributor needs this
+// panel to react to something, the answer is a core component and a signal —
+// not a handler attribute here.
+//
+// The classes are core's. card, card-heading and the neutral palette are tokens
+// the committed stylesheet already defines, and reusing them is the whole of what
+// "a plugin ships no CSS" looks like in practice: no style element, no
+// stylesheet of its own, and no class name the stylesheet has never heard of.
+templ characterPanel() {
+	<section class="card" aria-labelledby="dnd5e-panel-heading">
+		<h2 id="dnd5e-panel-heading" class="card-heading flex items-center gap-2">
+			@pluginIcon("i-d20", "h-4 w-4")
+			D&amp;D 5e
+		</h2>
+		<p class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+			This page is a character sheet. The fields below are the ones the app
+			reads; everything else on the page is ordinary Markdown.
+		</p>
+		<ul class="mt-2 flex flex-wrap gap-1 text-xs">
+			for _, field := range characterFieldViews() {
+				<li class="rounded border border-neutral-300 px-1.5 py-0.5 dark:border-neutral-700">
+					{ field.Label }
+				</li>
+			}
+		</ul>
+		<p class="mt-3 text-sm">
+			<a href={ IndexHref } class="hover:underline">Open the D&amp;D 5e reference</a>
+		</p>
+	</section>
+}
+
+// pluginIcon is this package's copy of the shell's icon component.
+//
+// The copy exists because a plugin cannot import internal/web: httpapi imports
+// internal/app, internal/app imports the plugin registry, and the registry
+// imports this package — so a plugin that reached for web.Icon would close the
+// loop and the binary would not build. Two definitions of the sprite's path is
+// the smaller of the two problems; the larger one is the backwards edge, and it
+// belongs in core rather than in a plugin working around it.
+//
+// The icon tokens themselves are still the sprite's, checked against
+// web/static/icons.svg by a test, because a token the sprite does not define is
+// a silently empty <use> rather than a visible error.
+templ pluginIcon(name, class string) {
+	<svg class={ class } aria-hidden="true" focusable="false">
+		<use href={ spriteHref + name }></use>
+	</svg>
+}

@@ -1,0 +1,214 @@
+package web
+
+import (
+	"strings"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
+)
+
+// joinParts is the separator for a cell that lists several host-produced
+// strings.
+//
+// Every part on this page arrives pre-formatted from the view model: a count
+// carries its own plural and a capability is a name the host owns. The
+// template's only job is to put them next to each other, so it never pluralises
+// anything and never has to know what a panel is.
+//
+// Nothing on this page comes from a vault, which is why it needs neither
+// templ.Raw nor an html.WithUnsafe to be safe. The boot report is written by the
+// plugin lifecycle out of ids, versions, capability names, integers and refusal
+// reasons; a plugin is never handed vault content to put in a reason, and every
+// interpolation below is templ's escaping one, which is what makes a reason
+// that happens to contain a quote render as a quote rather than as markup.
+func joinParts(parts []string) string { return strings.Join(parts, ", ") }
+
+// AdminPlugins is the boot report, at /admin/plugins.
+//
+// It exists for one reader and one question — why is the panel that plugin was
+// supposed to contribute not on this page — and every decision below serves
+// making that answer findable. The refused rows are listed rather than filtered
+// out, their reasons are shown in full rather than trimmed, and the warnings are
+// shown even when every plugin registered cleanly.
+templ AdminPlugins(v httpapi.AdminPluginsView) {
+	<section aria-labelledby="admin-plugins-heading">
+		<h1 id="admin-plugins-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Plugins</h1>
+		<p class="mt-1 text-sm text-neutral-600">
+			What this binary registered when it started. A plugin it refused is listed here with
+			the reason it was refused, because a plugin that fails quietly fails for ever.
+		</p>
+		@pluginSummary(v)
+		@pluginWarnings(v.Warnings)
+		@pluginReport(v.Lines)
+	</section>
+}
+
+// pluginSummary is the headline: the three counts, above the table.
+//
+// It is the answer to "is anything wrong", so it is above the detail rather
+// than below it. All three are always shown, including the zeroes: a hidden
+// zero is a fact the reader has to guess at, and "0 skipped" is the sentence
+// that tells somebody the report below is worth reading.
+templ pluginSummary(v httpapi.AdminPluginsView) {
+	<div class="mt-4 flex flex-wrap items-center gap-2">
+		@Badge(itoa(v.Registered)+" registered", "bg-neutral-200 px-2 py-0.5 text-xs")
+		// Only the two that need attention are coloured. The registered count is
+		// neutral whatever it says, because a report that paints a healthy total
+		// green is a report where a red zero is the only thing the eye goes to,
+		// and the zeroes are what this page is for.
+		if v.Skipped > 0 {
+			@Badge(itoa(v.Skipped)+" skipped", "bg-secret-soft px-2 py-0.5 text-xs text-secret")
+		} else {
+			@Badge(itoa(v.Skipped)+" skipped", "bg-neutral-200 px-2 py-0.5 text-xs")
+		}
+		if v.Compat > 0 {
+			@Badge(itoa(v.Compat)+" on the compat shim", "bg-accent-600 px-2 py-0.5 text-xs text-white")
+		} else {
+			@Badge(itoa(v.Compat)+" on the compat shim", "bg-neutral-200 px-2 py-0.5 text-xs")
+		}
+		<span class="text-xs text-neutral-500">
+			host API level { itoa(v.HostLevel) }, admitting plugins written against it or the
+			{ itoa(v.APIWindow) } { plural(v.APIWindow, "level", "levels") } below it
+		</span>
+	</div>
+}
+
+// pluginWarnings is the refusals that are not about one plugin.
+//
+// It renders whatever the report holds, and the reason it is not conditional on
+// a skipped plugin is the whole point of the section: a panel dropped for
+// naming an unknown slot, or a nav item pointing outside its prefix, is most
+// surprising precisely when the report below looks perfect. A warning shown only
+// alongside a failure would be silent in exactly the case it exists for.
+//
+// When there are none it says so rather than collapsing, so that the absence is
+// a sentence an administrator can read as "nothing was dropped" instead of a
+// heading with nothing under it.
+templ pluginWarnings(warnings []string) {
+	<section aria-labelledby="plugin-warnings-heading" class="mt-6">
+		<h2 id="plugin-warnings-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+			@Icon("i-warning", "h-4 w-4")
+			Boot warnings
+			<span class="badge bg-neutral-200 px-1.5 text-xs">{ itoa(len(warnings)) }</span>
+		</h2>
+		if len(warnings) == 0 {
+			<p class="mt-2 text-sm text-neutral-500">Nothing was dropped at boot.</p>
+		} else {
+			<ul class="mt-2 space-y-1">
+				for _, warning := range warnings {
+					<li class="text-sm">{ warning }</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+// pluginReport is the table, or the reason there is no table.
+templ pluginReport(lines []httpapi.PluginReportLine) {
+	<section aria-labelledby="plugin-report-heading" class="mt-6">
+		<h2 id="plugin-report-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+			@Icon("i-list", "h-4 w-4")
+			Every plugin offered
+		</h2>
+		if len(lines) == 0 {
+			<div class="mt-2">
+				@EmptyState("No plugins are registered with this build", noPluginsReport())
+			</div>
+		} else {
+			// The wrapper scrolls rather than widening: #content is a grid column
+			// with a minimum inline size of zero, so a table this wide without a
+			// scroll container of its own would push the whole shell sideways.
+			<div class="mt-2 overflow-x-auto">
+				<table class="table">
+					<caption class="sr-only">
+						Every plugin this build offered at boot, what it was granted and what it contributed
+					</caption>
+					<thead>
+						<tr>
+							for _, heading := range []string{
+								"Id", "Name", "Kind", "Version", "Status", "API / host", "Granted", "Contributed",
+							} {
+								<th scope="col">{ heading }</th>
+							}
+						</tr>
+					</thead>
+					<tbody>
+						for _, line := range lines {
+							@pluginRow(line)
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</section>
+}
+
+// pluginRow is one plugin: its facts, and then its reason if it has one.
+//
+// The reason is a row of its own rather than a cell, because it is a sentence
+// about the plugin rather than a fact about it, and a refusal reason is long
+// enough that putting it in a column would make every other column narrower than
+// its content. It is rendered whenever it is non-empty rather than only for a
+// skipped row: the report says a reason is empty for a healthy row, so a row
+// that carries one anyway is a host that has said something, and hiding it
+// because its status did not match would be hiding a fact about the host.
+templ pluginRow(line httpapi.PluginReportLine) {
+	<tr data-report-plugin={ line.ID } data-status={ line.Status }>
+		<td>{ line.ID }</td>
+		<td>{ line.Name }</td>
+		<td>@Badge(line.Kind, "bg-neutral-200 px-1.5 py-0.5 text-xs")</td>
+		<td>{ line.Version }</td>
+		<td>@statusBadge(line.Status)</td>
+		<td>
+			<span>{ itoa(line.APILevel) }</span>
+			<span class="text-neutral-500">/ { itoa(line.HostLevel) }</span>
+		</td>
+		<td>{ joinParts(line.Capabilities) }</td>
+		<td>{ joinParts(line.Counts) }</td>
+	</tr>
+	if line.Reason != "" {
+		<tr data-report-plugin={ line.ID } data-status={ line.Status }>
+			<td colspan="8" class="whitespace-pre-wrap">
+				<span class="font-semibold">Why: </span>{ line.Reason }
+			</td>
+		</tr>
+	}
+}
+
+// statusBadge is a plugin's boot outcome, and there are three of them rather
+// than two.
+//
+// `compat` is the one that matters here. A plugin running the shim registered
+// cleanly and is not broken; what it is, is written against a host interface
+// this binary no longer implements, and version skew that nobody can see gets
+// shimmed for ever. Rendering it as `ok` is how that happens, so it has its own
+// colour, its own word, and its own `data-status` on the row — three carriers,
+// so that a reader who cannot see the colour still reads the word.
+//
+// The words come from the status itself rather than from a word chosen here, so
+// a status this template has never heard of shows up under its own name
+// instead of being reported as healthy.
+templ statusBadge(status string) {
+	if status == string(plugin.StatusCompat) {
+		@Badge(status, "bg-accent-600 px-1.5 py-0.5 text-xs text-white")
+	} else if status == string(plugin.StatusSkipped) {
+		@Badge(status, "bg-secret-soft px-1.5 py-0.5 text-xs text-secret")
+	} else {
+		@Badge(status, "bg-revealed-soft px-1.5 py-0.5 text-xs text-revealed")
+	}
+}
+
+// noPluginsReport explains an empty report.
+//
+// Two different things produce an empty table — a build that offers no plugins,
+// and a server that was never handed a registry — and the second says so as a
+// warning above rather than being folded into this sentence. So a reader who
+// reaches this text knows the plugin lifecycle ran, and a reader who does not
+// reach it knows it did not.
+templ noPluginsReport() {
+	<p>
+		Nothing was offered to the host at boot. A plugin this binary does not offer is
+		not a refused plugin: a refused one is listed above, with the reason it was
+		refused.
+	</p>
+}

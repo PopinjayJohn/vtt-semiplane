@@ -29,11 +29,58 @@ templ ContextPanels(d ContextData) {
 			@relatedPanel(d.Related)
 		}
 	}
+	// The plugin panels sit between the page's own panels and the campaign's,
+	// and the campaign panel stays last whatever a plugin contributes: a system
+	// plugin is an addition to the campaign, not a replacement for the column
+	// core owns. A slot with nothing in it renders nothing at all, so a page
+	// whose type no plugin claims looks exactly as it did before any of this
+	// existed.
+	@pluginPanels(d.Panels)
 	// The campaign panel is rendered when the view model carried one. A carried
 	// panel with every field omitted still renders, because that is a reader who
 	// may see none of it rather than a surface with no campaign state.
 	if d.Campaign != nil {
 		@CampaignStatusPanel(*d.Campaign)
+	}
+}
+
+// pluginPanels is the plugin layer's contribution to the right column.
+//
+// The loop is over the slot list rather than over the panels, so the order comes
+// from one place — httpapi.PluginPanelSlots — and a panel whose slot that list
+// does not name is not rendered rather than rendered wherever it arrived. The
+// slot words in each heading describe the region the plugin asked for within
+// this group; a plugin that asked for the left column gets the bottom of this
+// one, because the left column has no panel region yet.
+//
+// The body is emitted as text. A panel's markup reaches the reader as visible
+// characters, which is the cost of the view model carrying a string rather than
+// a component, and it is the reason a panel cannot ship a script: whatever it
+// rendered, this escapes it.
+//
+// The selection is written as an `if` rather than as a `continue`, and that is
+// not a style preference: templ v0.3.1020 compiles a `continue` inside a `for`
+// whose body contains markup into the literal text "continue", so the skip
+// silently becomes four words on the page and the panel renders in every slot.
+templ pluginPanels(panels []httpapi.PluginPanel) {
+	for _, slot := range httpapi.PluginPanelSlots() {
+		@pluginPanelGroup(slot, panels)
+	}
+}
+
+// pluginPanelGroup is one slot's panels, in the slot's own order.
+templ pluginPanelGroup(slot string, panels []httpapi.PluginPanel) {
+	for i, panel := range panels {
+		if panel.Slot == slot {
+			<section
+				aria-labelledby={ "plugin-panel-" + slot + "-" + itoa(i) }
+				class="card"
+				data-plugin-slot={ slot }
+			>
+				<h2 id={ "plugin-panel-" + slot + "-" + itoa(i) } class="card-heading">{ panel.Title }</h2>
+				<p class="text-sm text-neutral-600 dark:text-neutral-300">{ panel.Body }</p>
+			</section>
+		}
 	}
 }
 

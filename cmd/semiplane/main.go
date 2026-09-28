@@ -177,6 +177,10 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 	// stdlib one, so it is this reference that has to survive installHandler.
 	var api *httpapi.Server
 	a, err := app.Boot(ctx, app.Options{
+		// The one map entry, from registry.go. The boot runs the plugin
+		// lifecycle and hands back what it produced; installHandler below passes
+		// that to the router.
+		Plugins: builtinPlugins(),
 		Config:  cfg,
 		Handler: mount,
 		Logger:  logger(cfg, stderr),
@@ -241,6 +245,12 @@ func installHandler(cfg config.Config, a *app.App, mount *httpapi.Deferred, stde
 		Build:         app.Info(),
 		Assets:        web.Assets(),
 		Renderer:      web.NewRenderer(),
+		// What the boot's plugin lifecycle produced. It is nil in a boot that ran
+		// no lifecycle — a one-shot command, or a test — and the request path
+		// reads that as "no plugins" and /admin/plugins renders an explicit empty
+		// state rather than an empty table that would read as a build offering
+		// none.
+		Plugins: a.PluginRegistry(),
 	})
 	if err != nil {
 		return nil, err

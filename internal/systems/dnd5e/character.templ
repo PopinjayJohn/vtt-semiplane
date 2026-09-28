@@ -1,0 +1,186 @@
+package dnd5e
+
+// characterEditor renders one character sheet's fields as a labelled form.
+//
+// It is a pure component over a Sheet, and a Sheet is a flat Go value with no
+// vault type in it. That is deliberate: a component that took a core page, a
+// store row or a render model would be a component whose fields are somebody
+// else's decisions, and the first field anybody added would be a secret body.
+// Whatever the host passes in is what gets rendered, and when the host passes
+// nothing the component says so rather than rendering an empty form as though it
+// were a character.
+//
+// The inputs are readonly, there is no submit control and there is no CSRF
+// field, because this plugin mounts no write route: a form whose button posts
+// to nothing is a control with nothing behind it, which §7 of the working
+// agreement calls a bug. A write path needs a POST route and the host's CSRF
+// check, and a plugin may reach neither — so the file stays canonical and this
+// surface stays a view of it.
+templ characterEditor(sheet Sheet) {
+	<section aria-labelledby="dnd5e-sheet-heading" class="dnd5e-sheet">
+		if sheet.Missing() {
+			<h1 id="dnd5e-sheet-heading" class="text-2xl font-semibold tracking-tight">
+				No character sheet
+			</h1>
+			@emptyState("Nothing to show", noCharacterSheet())
+		} else {
+			<h1 id="dnd5e-sheet-heading" class="text-2xl font-semibold tracking-tight">
+				{ sheet.Name }
+			</h1>
+			<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+				<code>{ sheet.Path }</code>
+				<span aria-hidden="true">·</span>
+				<span>character</span>
+				if sheet.Href() != "" {
+					<a href={ sheet.Href() } class="hover:underline">open the page</a>
+				}
+			</p>
+			<p class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+				Read-only. Every field here is read from this file's frontmatter,
+				and nothing on this page writes to it.
+			</p>
+			<form class="mt-4 grid gap-3 sm:grid-cols-2" aria-labelledby="dnd5e-sheet-heading">
+				for _, field := range characterFieldViews() {
+					@characterField(field, sheet.value(field.Key))
+				}
+			</form>
+		}
+	</section>
+}
+
+// characterField is one labelled input for one declared frontmatter field.
+//
+// It is a component rather than markup in the loop so that a field with a
+// different type is one branch here instead of a branch in the loop, and so that
+// a label, an input and an id cannot end up describing different fields — the
+// failure mode of a hand-written `for` that no longer matches its input.
+templ characterField(field fieldView, value string) {
+	<div>
+		<label for={ "dnd5e-" + field.Key } class="block text-sm font-medium">
+			{ field.Label }
+			if field.Required {
+				<span class="text-xs font-normal text-neutral-500 dark:text-neutral-400">(required)</span>
+			}
+		</label>
+		<input
+			id={ "dnd5e-" + field.Key }
+			name={ field.Key }
+			type={ inputType(field.Kind) }
+			value={ value }
+			readonly
+			aria-describedby={ "dnd5e-" + field.Key + "-help" }
+			class="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+		/>
+		if field.Help != "" {
+			<p id={ "dnd5e-" + field.Key + "-help" } class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+				{ field.Help }
+			</p>
+		}
+	</div>
+}
+
+// dnd5eIndex renders the plugin's own page: what it contributes, and the
+// character sheets the vault holds.
+//
+// It is a real destination rather than a page whose only content is the fact
+// that the plugin is installed, because the nav item points at it and a nav link
+// to an empty page is exactly the affordance-with-nothing-behind-it §7 names.
+templ dnd5eIndex(view indexView) {
+	<section aria-labelledby="dnd5e-index-heading">
+		<h1 id="dnd5e-index-heading" class="text-2xl font-semibold tracking-tight">D&amp;D 5e</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			Two page types, one sidebar panel, and the character sheets this vault
+			has. Speeds are in { view.SpeedUnit }.
+		</p>
+		if view.Problem != "" {
+			<div class="rounded-md border border-secret/40 bg-secret-soft p-3 text-sm text-secret">
+				<p class="mb-1 font-semibold">The list below may be incomplete</p>
+				<p>{ view.Problem }</p>
+			</div>
+		}
+		<div class="mt-4 space-y-4">
+			for _, pt := range view.PageTypes {
+				@pageTypeCard(pt)
+			}
+		</div>
+		<div class="mt-8">
+			<h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+				@pluginIcon("i-book", "h-4 w-4")
+				{ countLabel(len(view.Characters), "character sheet") }
+			</h2>
+			if len(view.Characters) == 0 {
+				@emptyState("No character sheets yet", noCharacters())
+			} else {
+				<ul class="mt-2 divide-y divide-neutral-200 rounded border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+					for _, sheet := range view.Characters {
+						<li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+							<a href={ sheet.Href() } class="font-medium hover:underline">{ sheet.Name }</a>
+							<code class="text-xs text-neutral-500 dark:text-neutral-400">{ sheet.Path }</code>
+							<span class="ml-auto text-xs text-neutral-500 dark:text-neutral-400">{ sheet.classAndLevel() }</span>
+						</li>
+					}
+				</ul>
+			}
+		</div>
+	</section>
+}
+
+// pageTypeCard is one claimed page type and the fields it renders.
+templ pageTypeCard(pt pageTypeView) {
+	<section class="card" aria-labelledby={ "dnd5e-pt-" + pt.ID }>
+		<h2 id={ "dnd5e-pt-" + pt.ID } class="card-heading flex items-center gap-2">
+			@pluginIcon(pt.Icon, "h-4 w-4")
+			{ pt.Name }
+			<code class="text-xs font-normal text-neutral-500 dark:text-neutral-400">{ pt.ID }</code>
+		</h2>
+		<dl class="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+			for _, field := range pt.Fields {
+				<div>
+					<dt class="text-sm font-medium">
+						{ field.Label }
+						if field.Required {
+							<span class="text-xs font-normal text-neutral-500 dark:text-neutral-400">(required)</span>
+						}
+					</dt>
+					<dd class="text-xs text-neutral-600 dark:text-neutral-400">
+						<code>{ field.Key }</code> · { field.Kind }
+						if field.Help != "" {
+							<div>{ field.Help }</div>
+						}
+					</dd>
+				</div>
+			}
+		</dl>
+	</section>
+}
+
+// emptyState is what a panel shows when it has nothing.
+//
+// It is a component rather than markup at each call site because the absence is
+// the load-bearing part: a missing character must look like a missing character
+// and not like a page that failed to render, and that means the absence is
+// always named rather than implied by blank space.
+templ emptyState(title string, body templ.Component) {
+	<div class="empty-state">
+		<p class="empty-state-title">{ title }</p>
+		@body
+	</div>
+}
+
+// noCharacterSheet is the body of the sheet's empty state.
+templ noCharacterSheet() {
+	<p>
+		Nothing in this vault is a character page at that path. A character sheet
+		is a Markdown file whose frontmatter carries <code>type: character</code>;
+		add one and this page fills in from its fields.
+	</p>
+}
+
+// noCharacters is the body of the index's empty state.
+templ noCharacters() {
+	<p>
+		No page in this vault declares <code>type: character</code> yet. The
+		fields a sheet may carry are listed above, and the file stays the source of
+		truth for all of them.
+	</p>
+}
