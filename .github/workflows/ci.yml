@@ -1,0 +1,134 @@
+# CI skeleton for the P0 foundations. The gate order here is the contract:
+# a failure in fmt or lint should never cost a test run.
+#
+# Every action is pinned to a full commit SHA with the version in a comment.
+# zizmor (security.yml) fails the build on a tag reference, and a tag is a
+# mutable string.
+#
+# Later phases add: integration, race, coverage, a11y and e2e jobs.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  # Templ is pinned in go.mod via the tool directive; CI uses the same version.
+  GO_VERSION: "1.26.0"
+
+jobs:
+  fmt-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: gofmt -l . | tee /tmp/fmt.txt; test ! -s /tmp/fmt.txt
+      - run: go tool templ fmt -check .
+
+  generate-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go mod download
+      - run: go tool templ generate ./...
+      - name: generated code is committed and current
+        run: git diff --exit-code -- 'internal/**/*_templ.go'
+
+  css-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install the pinned tailwind CLI
+        run: make tools
+      - run: make css
+      - name: the committed stylesheet is current
+        run: git diff --exit-code -- web/static/app.css
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: golangci/golangci-lint-action@7119f3d5ddced62a10a044847a6c6bb0f7a5e76a # v7.0.0
+        with:
+          version: v2.5.0
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go build ./...
+      - name: the release build is a single static file
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o /tmp/semiplane ./cmd/semiplane
+          /tmp/semiplane version
+          ldd /tmp/semiplane 2>&1 | grep -qi "not a dynamic executable"
+
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ["1.26.0", "1.27.0"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - run: ./scripts/test.sh
+      - name: no test may write into the repository
+        run: |
+          test -z "$(git status --porcelain)" || \
+            (echo "a test wrote into the repository:"; git status --porcelain; exit 1)
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: ./scripts/test.sh -race
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: ./scripts/test.sh -coverprofile=coverage.out -covermode=atomic
+      - name: security-relevant packages must not lose coverage
+        run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: coverage
+          path: coverage.out

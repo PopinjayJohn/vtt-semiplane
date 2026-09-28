@@ -1,0 +1,172 @@
+package web
+
+import (
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// Login is the sign-in form.
+templ Login(v httpapi.LoginView) {
+	<section aria-labelledby="login-heading" class="mx-auto max-w-sm">
+		<h1 id="login-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Sign in</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			Sign in to read the campaign as your account does.
+		</p>
+		if v.Problem != "" {
+			<p role="alert" class="mt-4 rounded-md border border-secret/40 bg-secret-soft px-3 py-2 text-sm text-secret">
+				{ v.Problem }
+			</p>
+		}
+		<form action="/login" method="post" class="mt-4 space-y-3">
+			@CSRFInput(v.CSRF)
+			if v.Next != "" {
+				<input type="hidden" name="next" value={ v.Next }/>
+			}
+			<div>
+				<label for="username" class="block text-sm font-medium">Username</label>
+				<input
+					id="username"
+					name="username"
+					type="text"
+					autocomplete="username"
+					required
+					class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+			</div>
+			<div>
+				<label for="passphrase" class="block text-sm font-medium">Passphrase</label>
+				<input
+					id="passphrase"
+					name="passphrase"
+					type="password"
+					autocomplete="current-password"
+					required
+					class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+			</div>
+			<button type="submit" class="w-full rounded bg-accent-600 px-3 py-2 text-sm font-medium text-white">
+				Sign in
+			</button>
+		</form>
+	</section>
+}
+
+// Setup is the first-run form: the one that claims the first administrator.
+templ Setup(v httpapi.SetupView) {
+	<section aria-labelledby="setup-heading" class="mx-auto max-w-sm">
+		<h1 id="setup-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Set up this campaign</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			No account exists yet. The one you create now is the campaign's administrator, and
+			this page disappears the moment it exists — not merely for you, but for anyone
+			probing for it.
+		</p>
+		if v.Problem != "" {
+			<p role="alert" class="mt-4 rounded-md border border-secret/40 bg-secret-soft px-3 py-2 text-sm text-secret">
+				if v.Field == "username" {
+					<span class="font-semibold">Username: </span>
+				} else if v.Field == "passphrase" {
+					<span class="font-semibold">Passphrase: </span>
+				}
+				{ v.Problem }
+			</p>
+		}
+		<form action="/setup" method="post" class="mt-4 space-y-3">
+			@CSRFInput(v.CSRF)
+			<div>
+				<label for="display_name" class="block text-sm font-medium">Name</label>
+				<input
+					id="display_name"
+					name="display_name"
+					type="text"
+					autocomplete="name"
+					class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+			</div>
+			<div>
+				<label for="username" class="block text-sm font-medium">Username</label>
+				<input
+					id="username"
+					name="username"
+					type="text"
+					autocomplete="username"
+					required
+					class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+			</div>
+			<div>
+				<label for="passphrase" class="block text-sm font-medium">Passphrase</label>
+				<input
+					id="passphrase"
+					name="passphrase"
+					type="password"
+					autocomplete="new-password"
+					required
+					class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+			</div>
+			<button type="submit" class="w-full rounded bg-accent-600 px-3 py-2 text-sm font-medium text-white">
+				Create the administrator
+			</button>
+		</form>
+	</section>
+}
+
+// Invite is the invite redemption form.
+templ Invite(v httpapi.InviteView) {
+	<section aria-labelledby="invite-heading" class="mx-auto max-w-sm">
+		<h1 id="invite-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Join the campaign</h1>
+		if v.Invalid {
+			<p role="alert" class="mt-4 rounded-md border border-secret/40 bg-secret-soft px-3 py-2 text-sm text-secret">
+				That invite cannot be used. Ask the campaign's administrator for a new one.
+			</p>
+		} else {
+			<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+				Choose a username and a passphrase. The administrator chose what this invite
+				grants, not you.
+			</p>
+			if v.Problem != "" {
+				<p role="alert" class="mt-4 rounded-md border border-secret/40 bg-secret-soft px-3 py-2 text-sm text-secret">
+					{ v.Problem }
+				</p>
+			}
+			<form action={ "/invite/" + v.Token } method="post" class="mt-4 space-y-3">
+				@CSRFInput(v.CSRF)
+				<input type="hidden" name="token" value={ v.Token }/>
+				<div>
+					<label for="display_name" class="block text-sm font-medium">Name</label>
+					<input
+						id="display_name"
+						name="display_name"
+						type="text"
+						autocomplete="name"
+						class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+					/>
+				</div>
+				<div>
+					<label for="username" class="block text-sm font-medium">Username</label>
+					<input
+						id="username"
+						name="username"
+						type="text"
+						autocomplete="username"
+						required
+						class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+					/>
+				</div>
+				<div>
+					<label for="passphrase" class="block text-sm font-medium">Passphrase</label>
+					<input
+						id="passphrase"
+						name="passphrase"
+						type="password"
+						autocomplete="new-password"
+						required
+						class="mt-1 w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+					/>
+				</div>
+				<button type="submit" class="w-full rounded bg-accent-600 px-3 py-2 text-sm font-medium text-white">
+					Create my account
+				</button>
+			</form>
+		}
+	</section>
+}

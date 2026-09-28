@@ -1,0 +1,27 @@
+package web
+
+import (
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// ErrorPage is the one shape every non-2xx response renders.
+//
+// It carries the status, a fixed heading and a fixed detail. There is no field
+// for a path, a title, a request id or a reason, and that is the property the
+// authorization tests depend on: the body for a page a viewer may not read is
+// byte-identical to the body for a page that does not exist, because both are
+// rendered from this model with nothing filled in that could differ.
+templ ErrorPage(v httpapi.ErrorView) {
+	<section aria-labelledby="error-heading" class="mx-auto max-w-prose py-12 text-center">
+		<p class="text-sm font-semibold uppercase tracking-widest text-neutral-500 dark:text-neutral-400">
+			{ itoa(v.Status) }
+		</p>
+		<h1 id="error-heading" data-focus-target class="mt-2 text-3xl font-semibold tracking-tight">
+			{ v.Heading }
+		</h1>
+		<p class="mt-3 text-neutral-600 dark:text-neutral-400">{ v.Detail }</p>
+		<p class="mt-6">
+			<a href="/" class="rounded bg-accent-600 px-3 py-2 text-sm font-medium text-white">Back to the campaign</a>
+		</p>
+	</section>
+}

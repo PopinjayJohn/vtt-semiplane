@@ -1,0 +1,140 @@
+package web
+
+import (
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// RegionDoc is the swappable region on its own.
+type RegionDoc struct {
+	// Shell is the layout's half of the view model. The region itself does not
+	// render it: a fragment must not carry the masthead, the navigation or the
+	// asset tags, or a morph would replace the reader's whole page with a piece
+	// of one. It is here so the region's identity matches the document's.
+	Shell httpapi.Shell
+	// Body is the content the region wraps.
+	Body templ.Component
+}
+
+// RegionView is the element a fragment replaces and a document contains.
+//
+// Layout renders it too, rather than repeating the markup, because the id and
+// the tabindex have to agree between the two: a morph that swapped in a
+// differently-identified element would work once, and then the next response
+// would look for an id that is no longer in the document.
+templ RegionView(region RegionDoc) {
+	<div id="page-region" tabindex="-1">
+		@region.Body
+	</div>
+}
+
+// Doc is one whole HTML document.
+type Doc struct {
+	// Title is the document title: the page's own title for a page view, and a
+	// fixed name for every other surface.
+	Title string
+	// Shell is the part of the view model the layout needs.
+	Shell httpapi.Shell
+	// Body is the content region, the same component a fragment renders.
+	Body templ.Component
+}
+
+// Layout is the shell: the head, the masthead, the primary navigation, the main
+// region, and the footer.
+//
+// It is server-rendered and there is no client-side framework. Every landmark is
+// a real element with an accessible name, the skip link is the first focusable
+// thing in the document, and the main region carries the id that an in-place
+// navigation replaces — so the same markup is a complete page on a first
+// request and a complete region on a fragment request.
+templ Layout(doc Doc) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="referrer" content="same-origin"/>
+			<title>{ doc.Title } · { doc.Shell.Campaign }</title>
+			<link rel="stylesheet" href="/_/assets/app.css"/>
+			<link rel="icon" type="image/svg+xml" href="/_/assets/icons.svg"/>
+			<link rel="search" type="application/json" title="Search" href="/api/search"/>
+			<script defer type="module" src="/_/assets/vendor/datastar.js"></script>
+			<script defer src="/_/assets/app.js"></script>
+		</head>
+		<body class="min-h-screen">
+			<a
+				href="#main"
+				class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-neutral-900 focus:px-3 focus:py-2 focus:text-neutral-50"
+			>
+				Skip to content
+			</a>
+			<header class="border-b border-neutral-200 dark:border-neutral-800">
+				<div class="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
+					<a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
+						@Icon("i-d20", "h-6 w-6 text-accent-600")
+						<span>{ doc.Shell.Campaign }</span>
+					</a>
+					@Nav(doc.Shell)
+					<form action="/search" method="get" role="search" class="ml-auto flex items-center gap-2" data-search>
+						<label for="q" class="sr-only">Search the campaign</label>
+						<input
+							id="q"
+							name="q"
+							type="search"
+							placeholder="Search"
+							autocomplete="off"
+							class="w-40 rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+						/>
+						<button type="submit" class="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700">
+							@Icon("i-search", "h-4 w-4")
+							<span class="sr-only">Search</span>
+						</button>
+					</form>
+				</div>
+			</header>
+			<main id="main" class="mx-auto max-w-6xl px-4 py-6">
+				@RegionView(RegionDoc{Shell: doc.Shell, Body: doc.Body})
+			</main>
+			<footer class="mx-auto max-w-6xl px-4 pb-8 pt-4 text-xs text-neutral-500 dark:text-neutral-400">
+				<p>
+					Semiplane — the Markdown files in this vault are the campaign. Nothing here edits them behind your back.
+				</p>
+				if doc.Shell.Dev {
+					<p class="mt-1 font-semibold text-secret">Development mode: rate limiting is off.</p>
+				}
+			</footer>
+		</body>
+	</html>
+}
+
+// Nav is the primary navigation.
+templ Nav(shell httpapi.Shell) {
+	<nav aria-label="Primary" class="flex items-center gap-1 text-sm">
+		<a
+			href="/"
+			class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+		>
+			@Icon("i-book", "mr-1 inline h-4 w-4")
+			Campaign
+		</a>
+		if shell.Principal.Authenticated() {
+			<form action="/logout" method="post" class="ml-2">
+				@CSRFInput(shell.CSRF)
+				<button
+					type="submit"
+					class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+				>
+					@Icon("i-logout", "mr-1 inline h-4 w-4")
+					Sign out
+				</button>
+			</form>
+		} else {
+			<a
+				href="/login"
+				class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+			>
+				Sign in
+			</a>
+		}
+	</nav>
+}
+

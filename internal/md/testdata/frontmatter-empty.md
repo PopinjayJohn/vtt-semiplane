@@ -1,0 +1,6 @@
+---
+---
+
+# Empty frontmatter
+
+Body.

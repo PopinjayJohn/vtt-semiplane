@@ -1,0 +1,85 @@
+package web
+
+import (
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// Home is the dashboard.
+templ Home(v httpapi.HomeView) {
+	<section aria-labelledby="home-heading">
+		<h1 id="home-heading" class="text-2xl font-semibold tracking-tight">Campaign</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			{ itoa(v.PageCount) } pages indexed. These are the ones that changed most recently.
+		</p>
+		<div class="mt-4">
+			@PageList(v.Pages, "No pages have been indexed yet. Add a Markdown file to the vault and it will appear here.")
+		</div>
+		@TagCloud(v.Tags)
+	</section>
+}
+
+// Page is one page: its title, its rendered body, the secrets on it, and the
+// panels around it.
+//
+// The body is the one place in this file that receives pre-rendered HTML, and it
+// receives it from PreRendered, which is the single funnel. Everything else here
+// is an ordinary templ expression and is escaped by templ.
+templ Page(v httpapi.PageView) {
+	<div class="flex flex-col gap-8 lg:flex-row-reverse">
+		<article class="min-w-0 flex-1">
+			<header class="border-b border-neutral-200 pb-3 dark:border-neutral-800">
+				<h1 data-focus-target class="text-2xl font-semibold tracking-tight">{ v.Card.Title }</h1>
+				<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+					<code>{ v.Card.Path }</code>
+					<span aria-hidden="true">·</span>
+					<span>{ v.Card.PageType }</span>
+				</p>
+			</header>
+			if v.Truncated {
+				@Callout("border-secret/40 bg-secret-soft text-secret", "This page is longer than one view", navp())
+			}
+			for _, problem := range v.Problems {
+				@Callout("border-secret/40 bg-secret-soft text-secret", "The parser reported a problem", Text(problem))
+			}
+			<div class="prose-vtt mt-6 max-w-none">
+				@PreRendered(v.Body)
+			</div>
+			if len(v.Secrets) > 0 {
+				<section aria-labelledby="secrets-heading" class="mt-8 space-y-3">
+					<h2 id="secrets-heading" class="text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+						Secrets on this page
+					</h2>
+					for _, secret := range v.Secrets {
+						if secret.Hidden {
+							@SecretLock(secret)
+						} else {
+							@SecretRevealed(secret)
+						}
+					}
+				</section>
+			}
+		</article>
+		<aside
+			aria-label="Context"
+			class="w-full shrink-0 space-y-6 lg:w-64"
+		>
+			@BacklinkList(v.Backlinks, v.BacklinkCount)
+			@Toc(v.Toc)
+		</aside>
+	</div>
+}
+
+// navp is the truncation notice's body.
+//
+// It is a component rather than a string so that the wording lives in the
+// template with everything else, and so that a caller changing the budget does
+// not have to find the sentence that explains it.
+templ navp() {
+	<p>
+		Only the first part of this file is shown, because goldmark's inline parser gets
+		quadratic in the length of a single line and an unbounded render is a way to pin
+		this server with one saved note. The file itself is untouched: it is the view
+		that is clipped, and it will render in full once the page is split into shorter
+		lines or moved to a page of its own.
+	</p>
+}

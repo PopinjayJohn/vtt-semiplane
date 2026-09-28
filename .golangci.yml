@@ -1,0 +1,59 @@
+version: 2
+
+# Pinned action SHAs live in the workflow files, not here: zizmor fails a
+# workflow that references a tag instead of a digest.
+
+run:
+  timeout: 15m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gocritic
+    - godot
+    - misspell
+    - nakedret
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+  disable:
+    # Generated templ output is not ours to lint.
+    - staticcheck # re-enabled below with the generated paths excluded
+
+  settings:
+    godot:
+      # Comments end in a period, except top-level declaration comments that
+      # are the sentence themselves.
+      scope: toplevel
+      capital: false
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+        - name: unreachable-code
+        - name: error-strings
+    govet:
+      enable:
+        - shadow
+  exclusions:
+    generated: lax
+    rules:
+      - path: _templ\.go$
+        linters:
+          - revive
+          - gocritic
+          - godot
+      - path: internal/store/migrations/
+        linters:
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

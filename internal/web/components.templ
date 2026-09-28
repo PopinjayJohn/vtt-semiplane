@@ -1,0 +1,201 @@
+package web
+
+import (
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
+)
+
+// Text turns a string into a component, escaped.
+//
+// It exists so that a component taking a templ.Component can be handed a plain
+// string without a caller having to reach for a raw. It escapes exactly as a
+// string expression in a template does, which is the point: a call site that
+// looks like a raw and is not is the mistake this removes.
+templ Text(value string) {
+	{ value }
+}
+
+// CSRFInput is the hidden field every form carries.
+//
+// Every mutation is CSRF-checked and the check compares the submitted value
+// against the session's own token, so a form without this field is a form the
+// server refuses. It is rendered from one component so that a new form cannot
+// forget it: adding a form means calling this, and there is no other way to
+// emit the input.
+templ CSRFInput(token string) {
+	<input type="hidden" name="csrf" value={ token }/>
+}
+
+// Icon references a symbol from the sprite at /_/assets/icons.svg.
+//
+// The sprite is a file in the binary, so this is a same-origin reference and
+// the content security policy's script-src and style-src 'self' cover it. An
+// icon that fails to resolve costs an affordance rather than a message: every
+// state that uses an icon also carries its words in the markup.
+templ Icon(name, class string) {
+	<svg class={ class } aria-hidden="true" focusable="false">
+		<use href={ "/_/assets/icons.svg#" + name }></use>
+	</svg>
+}
+
+// Wikilink returns the attributes an internal link to a page carries.
+//
+// It is plugin.WikiLink rather than a hand-written attribute, so the name the
+// shell binds to and the name a plugin emits are one string with one
+// definition. The value is a page id: never a title, never a path, and never
+// anything a reader of the page could learn from it.
+func Wikilink(pageID int64) templ.Attributes { return plugin.WikiLink(pageID) }
+
+// PageList is a list of pages: the dashboard's recent pages and a search's
+// hits, with the same card shape so that the two do not drift.
+templ PageList(cards []httpapi.PageCard, empty string) {
+	if len(cards) == 0 {
+		<p class="rounded border border-dashed border-neutral-300 p-4 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-400">
+			{ empty }
+		</p>
+	} else {
+		<ul class="divide-y divide-neutral-200 rounded border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+			for _, card := range cards {
+				<li class="flex items-baseline gap-3 px-3 py-2">
+					<a href={ card.Href() } class="font-medium hover:underline">{ card.Title }</a>
+					<code class="text-xs text-neutral-500 dark:text-neutral-400">{ card.Path }</code>
+					if !card.UpdatedAt.IsZero() {
+						<time
+							class="ml-auto shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
+							datetime={ card.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00") }
+							data-updated-at={ card.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00") }
+						>
+							{ card.UpdatedAt.UTC().Format("2006-01-02") }
+						</time>
+					}
+				</li>
+			}
+		</ul>
+	}
+}
+
+// Callout is the box an md passthrough block renders into, and the shape a
+// problem notice uses.
+//
+// The label is the point: an unsupported Obsidian construct is shown as source
+// and named, so a reader knows the odd rendering is the app's doing and not a
+// corrupted file.
+templ Callout(kind, label string, body templ.Component) {
+	<div class={ "rounded-md border p-3 text-sm " + kind }>
+		<p class="mb-1 font-semibold">{ label }</p>
+		@body
+	</div>
+}
+
+// SecretLock is the affordance shown in place of a secret the reader may not
+// read.
+//
+// It carries the id and one word. Not the byte length, not the author, not the
+// title, not the visibility finer than "hidden", and not an excerpt: each of
+// those is a fact about a secret this reader was refused, and the response size
+// is an observation every reader can make. The id is here because it is how the
+// page's own later editor finds the fence again, and it is an opaque handle
+// that grants nothing on its own.
+templ SecretLock(secret httpapi.SecretView) {
+	<div class="secret-locked" data-secret-id={ secret.ID }>
+		@Icon("i-lock", "h-4 w-4 shrink-0")
+		<span class="font-semibold">Hidden</span>
+		<span class="text-xs opacity-80">{ secret.Label }</span>
+	</div>
+}
+
+// SecretRevealed is a secret this reader may read.
+//
+// The body is shown as preformatted text rather than as rendered Markdown: a
+// revealed secret is a block the author wrote for the table, and rendering its
+// contents as page content would put the page's own link resolution and heading
+// structure inside a box the author did not ask to be part of them.
+templ SecretRevealed(secret httpapi.SecretView) {
+	<details class="secret-revealed" open>
+		<summary class="cursor-pointer select-none font-semibold">
+			@Icon("i-unlock", "mr-1 inline h-4 w-4")
+			Shared with the table
+		</summary>
+		<pre class="mt-2 overflow-x-auto whitespace-pre-wrap text-sm text-neutral-800 dark:text-neutral-200">{ secret.Body }</pre>
+	</details>
+}
+
+// BacklinkChip is one referring page in the aside.
+templ BacklinkChip(chip httpapi.BacklinkChip) {
+	<li>
+		<a
+			href={ chip.Card.Href() }
+			class="inline-flex items-center gap-1 text-sm hover:underline"
+		>
+			@Icon("i-backlink", "h-3 w-3 shrink-0 opacity-70")
+			<span>{ chip.Card.Title }</span>
+		</a>
+	</li>
+}
+
+// BacklinkList is the aside's backlink panel, with the count from the
+// identical query rather than from the length of the list.
+templ BacklinkList(chips []httpapi.BacklinkChip, count int) {
+	<section aria-labelledby="backlinks-heading">
+		<h2 id="backlinks-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+			@Icon("i-backlink", "h-4 w-4")
+			Linked from
+			<span class="rounded bg-neutral-200 px-1.5 text-xs dark:bg-neutral-800">{ count }</span>
+		</h2>
+		if len(chips) == 0 {
+			<p class="mt-2 text-sm text-neutral-500 dark:text-neutral-400">No other page links here yet.</p>
+		} else {
+			<ul class="mt-2 space-y-1">
+				for _, chip := range chips {
+					@BacklinkChip(chip)
+				}
+			</ul>
+		}
+	</section>
+}
+
+// Toc is the aside's table of contents, indented by heading level.
+templ Toc(entries []httpapi.TocEntry) {
+	<section aria-labelledby="toc-heading">
+		<h2 id="toc-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+			@Icon("i-list", "h-4 w-4")
+			On this page
+		</h2>
+		if len(entries) == 0 {
+			<p class="mt-2 text-sm text-neutral-500 dark:text-neutral-400">This page has no headings.</p>
+		} else {
+			<ol class="mt-2 space-y-1 text-sm">
+				for _, entry := range entries {
+					<li style={ "margin-inline-start:" + itoa((entry.Level-1)*10) + "px" }>
+						<a href={ "#" + entry.Slug } class="hover:underline">{ entry.Text }</a>
+					</li>
+				}
+			</ol>
+		}
+	</section>
+}
+
+// TagCloud is the dashboard's tag list.
+templ TagCloud(tags []httpapi.TagCard) {
+	if len(tags) > 0 {
+		<section aria-labelledby="tags-heading" class="mt-8">
+			<h2 id="tags-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+				@Icon("i-tag", "h-4 w-4")
+				Tags
+			</h2>
+			<ul class="mt-2 flex flex-wrap gap-2">
+				for _, tag := range tags {
+					<li>
+						<a
+							href={ "/search?q=" + urlQueryEscape(tag.Name) }
+							class="inline-flex items-center gap-1 rounded-full border border-neutral-300 px-2 py-0.5 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+						>
+							<span>#{ tag.Name }</span>
+							<span class="text-xs text-neutral-500 dark:text-neutral-400">{ tag.Count }</span>
+						</a>
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}

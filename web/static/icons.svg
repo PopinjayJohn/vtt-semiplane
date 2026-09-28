@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The icon sprite. Drawn by hand in plain SVG, inlined in the binary, and served
+  from /_/assets/icons.svg.
+
+  There is no icon font and there is no remote sprite. An icon font would mean a
+  fetch for a resource the page cannot render without, and a remote sprite would
+  be a request from a third-party origin in the request path, which §2.5 forbids
+  outright. Every symbol here is a <symbol> with a viewBox, so a component can
+  reference it with <use href="/_/assets/icons.svg#i-lock"> and the browser
+  fetches one file, once, for the whole page.
+
+  Every symbol is drawn on a 24x24 grid with a 2px stroke, so they sit together
+  without one being optically heavier than the next. Each is monochrome and uses
+  currentColor, which means an icon always matches the text beside it and a
+  secret-state icon never has to be recoloured for a dark theme.
+
+  Colour is never the only carrier of meaning: every secret state also carries a
+  text label in the markup, so an icon that fails to resolve costs an
+  affordance and not a message.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <defs>
+    <style>
+      symbol { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <!-- A padlock: the shackle and the body. Used for a secret the reader may not
+       see, always beside the words "hidden". -->
+  <symbol id="i-lock" viewBox="0 0 24 24">
+    <rect x="4" y="10" width="16" height="11" rx="2"/>
+    <path d="M8 10V7a4 4 0 0 1 8 0v3"/>
+    <circle cx="12" cy="15.5" r="1.25" fill="currentColor" stroke="none"/>
+  </symbol>
+
+  <!-- An open padlock: a secret that is currently revealed to the table. -->
+  <symbol id="i-unlock" viewBox="0 0 24 24">
+    <rect x="4" y="10" width="16" height="11" rx="2"/>
+    <path d="M8 10V7a4 4 0 0 1 7.5-2"/>
+    <circle cx="12" cy="15.5" r="1.25" fill="currentColor" stroke="none"/>
+  </symbol>
+
+  <!-- The magnifier, for search. -->
+  <symbol id="i-search" viewBox="0 0 24 24">
+    <circle cx="11" cy="11" r="7"/>
+    <path d="m20 20-4-4"/>
+  </symbol>
+
+  <!-- A book, for the dashboard link. -->
+  <symbol id="i-book" viewBox="0 0 24 24">
+    <path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/>
+    <path d="M8 3v18"/>
+  </symbol>
+
+  <!-- A hash, for a tag. -->
+  <symbol id="i-tag" viewBox="0 0 24 24">
+    <path d="M4 4h7l9 9-7 7-9-9z"/>
+    <circle cx="8.5" cy="8.5" r="1.25" fill="currentColor" stroke="none"/>
+  </symbol>
+
+  <!-- A back arrow, for the backlink chip. -->
+  <symbol id="i-backlink" viewBox="0 0 24 24">
+    <path d="M9 14 4 9l5-5"/>
+    <path d="M4 9h9a7 7 0 0 1 0 14h-3"/>
+  </symbol>
+
+  <!-- A list, for the table of contents. -->
+  <symbol id="i-list" viewBox="0 0 24 24">
+    <path d="M8 6h13M8 12h13M8 18h13"/>
+    <circle cx="3.5" cy="6" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="3.5" cy="12" r="1" fill="currentColor" stroke="none"/>
+    <circle cx="3.5" cy="18" r="1" fill="currentColor" stroke="none"/>
+  </symbol>
+
+  <!-- A warning triangle, for a parse problem or a truncated render. -->
+  <symbol id="i-warning" viewBox="0 0 24 24">
+    <path d="M12 4 2.5 20h19z"/>
+    <path d="M12 10v4"/>
+    <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/>
+  </symbol>
+
+  <!-- A d20: the campaign mark in the masthead. The shape is a hexagon with an
+       inner triangle, which is what a d20 looks like from above. -->
+  <symbol id="i-d20" viewBox="0 0 24 24">
+    <path d="M12 2 21 7v10l-9 5-9-5V7z"/>
+    <path d="m12 8 4 6-4 4-4-4z"/>
+  </symbol>
+
+  <!-- A sign-out arrow, for the logout button. -->
+  <symbol id="i-logout" viewBox="0 0 24 24">
+    <path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7"/>
+    <path d="M17 8l4 4-4 4"/>
+    <path d="M21 12h-9"/>
+  </symbol>
+</svg>

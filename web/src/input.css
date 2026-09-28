@@ -1,0 +1,238 @@
+/* Tailwind v4 entry point.
+ *
+ * There is no Node in the toolchain: the pinned standalone CLI reads this file
+ * and writes web/static/app.css, which is committed. `go build` therefore never
+ * needs a CSS toolchain, and the binary never fetches a stylesheet from a
+ * remote origin.
+ *
+ * Class names are discovered by the scanner below, so a class that only ever
+ * appears inside a .templ file is still found.
+ */
+
+@import "tailwindcss";
+
+/* Class names live in two places, and only two: the .templ components under
+ * internal/web, and the core app shell's JavaScript. Both are core-owned, which
+ * is the same rule the plugin boundary rests on — a plugin returns a
+ * templ.Component and can never ship a class name of its own.
+ *
+ * Scanning "../../internal" wholesale was the difference between a 0.24 s build
+ * and a 25-minute one: it walks internal/md/testdata, whose largest fixture is a
+ * megabyte of wikilinks on a single unbroken line, and a single line that long
+ * is pathological for candidate scanning. Pointing at the directory that holds
+ * the components removes the walk entirely. */
+@source "../../internal/web/*.templ";
+@source "../../internal/web/*.go";
+@source "../../web/static/app.js";
+
+/* Design tokens. A ten-step neutral ramp, one accent, and two semantic colours
+ * for secret state. Colour is never the only carrier of meaning, so every
+ * secret-state style also carries an icon and a text label in the markup. */
+@theme {
+	--color-neutral-50: oklch(0.985 0.002 250);
+	--color-neutral-100: oklch(0.967 0.003 250);
+	--color-neutral-200: oklch(0.92 0.005 250);
+	--color-neutral-300: oklch(0.85 0.007 250);
+	--color-neutral-400: oklch(0.71 0.01 250);
+	--color-neutral-500: oklch(0.55 0.012 250);
+	--color-neutral-600: oklch(0.44 0.013 250);
+	--color-neutral-700: oklch(0.35 0.013 250);
+	--color-neutral-800: oklch(0.26 0.012 250);
+	--color-neutral-900: oklch(0.19 0.011 250);
+	--color-neutral-950: oklch(0.13 0.01 250);
+
+	--color-accent-300: oklch(0.82 0.09 265);
+	--color-accent-400: oklch(0.72 0.12 265);
+	--color-accent-500: oklch(0.62 0.15 265);
+	--color-accent-600: oklch(0.53 0.15 265);
+	--color-accent-700: oklch(0.44 0.13 265);
+
+	/* A secret the viewer may not read. Always paired with a lock icon and a
+	 * text label; the colour is reinforcement, never the message. */
+	--color-secret: oklch(0.55 0.13 25);
+	--color-secret-soft: oklch(0.95 0.03 25);
+	/* A secret currently revealed to the table. */
+	--color-revealed: oklch(0.58 0.12 150);
+	--color-revealed-soft: oklch(0.95 0.04 150);
+
+	--font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+		"Helvetica Neue", Arial, "Noto Sans", sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+		"Liberation Mono", monospace;
+}
+
+@variant dark {
+	--color-secret: oklch(0.72 0.14 25);
+	--color-secret-soft: oklch(0.32 0.06 25);
+	--color-revealed: oklch(0.74 0.13 150);
+	--color-revealed-soft: oklch(0.3 0.05 150);
+}
+
+@layer base {
+	/* Focus is always visible, and never removed without a replacement. */
+	:focus-visible {
+		outline: 2px solid var(--color-accent-500);
+		outline-offset: 2px;
+	}
+
+	html {
+		color-scheme: light dark;
+		scrollbar-gutter: stable;
+	}
+
+	body {
+		@apply bg-neutral-50 text-neutral-900 antialiased;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		body {
+			@apply bg-neutral-950 text-neutral-100;
+		}
+	}
+
+	/* Every transition in the app is disabled for a reader who asked for
+	 * reduced motion, not just the ones we remembered. */
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.01ms !important;
+			scroll-behavior: auto !important;
+		}
+	}
+
+	@media print {
+		/* The print stylesheet hides the chrome and gives the content the
+		 * whole page. The player-safe view additionally suppresses DM chrome. */
+		[data-print="hide"],
+		nav[aria-label="Primary"],
+		aside[aria-label="Context"] {
+			display: none !important;
+		}
+
+		main {
+			overflow: visible !important;
+			max-width: none !important;
+			padding: 0 !important;
+		}
+	}
+}
+
+@layer components {
+	/* Markdown prose lives here, never as @apply inside a .templ file: the
+	 * rendered content is vault-derived, and the styling for it belongs to
+	 * core, not to whichever template happened to render it. */
+	.prose-vtt {
+		@apply text-neutral-800 leading-relaxed;
+	}
+
+	.dark .prose-vtt {
+		@apply text-neutral-200;
+	}
+
+	.prose-vtt > * + * {
+		@apply mt-4;
+	}
+
+	.prose-vtt h1 {
+		@apply mt-8 text-2xl font-semibold tracking-tight;
+	}
+
+	.prose-vtt h2 {
+		@apply mt-8 border-b border-neutral-200 pb-1 text-xl font-semibold tracking-tight;
+	}
+
+	.dark .prose-vtt h2 {
+		@apply border-neutral-800;
+	}
+
+	.prose-vtt h3 {
+		@apply mt-6 text-lg font-semibold;
+	}
+
+	.prose-vtt h4,
+	.prose-vtt h5,
+	.prose-vtt h6 {
+		@apply mt-4 font-semibold;
+	}
+
+	.prose-vtt a {
+		@apply text-accent-600 underline underline-offset-2 hover:text-accent-500;
+	}
+
+	.prose-vtt ul {
+		@apply list-disc space-y-1 ps-6;
+	}
+
+	.prose-vtt ol {
+		@apply list-decimal space-y-1 ps-6;
+	}
+
+	.prose-vtt blockquote {
+		@apply border-s-4 border-neutral-200 ps-4 text-neutral-600 italic;
+	}
+
+	.dark .prose-vtt blockquote {
+		@apply border-neutral-700 text-neutral-400;
+	}
+
+	.prose-vtt code {
+		@apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em];
+	}
+
+	.dark .prose-vtt code {
+		@apply bg-neutral-800;
+	}
+
+	.prose-vtt pre {
+		@apply overflow-x-auto rounded-lg bg-neutral-100 p-4 text-sm;
+	}
+
+	.dark .prose-vtt pre {
+		@apply bg-neutral-900;
+	}
+
+	.prose-vtt pre code {
+		@apply bg-transparent p-0;
+	}
+
+	.prose-vtt table {
+		@apply w-full border-collapse text-left text-sm;
+	}
+
+	.prose-vtt th,
+	.prose-vtt td {
+		@apply border border-neutral-200 px-3 py-2 align-top;
+	}
+
+	.dark .prose-vtt th,
+	.dark .prose-vtt td {
+		@apply border-neutral-800;
+	}
+
+	.prose-vtt hr {
+		@apply my-8 border-neutral-200;
+	}
+
+	/* Unsupported Obsidian syntax: shown as source, visibly escaped, and
+	 * labelled so the DM knows why it looks odd. */
+	.passthrough {
+		@apply rounded-md border border-dashed border-neutral-300 bg-neutral-100 p-3 font-mono text-xs whitespace-pre-wrap;
+	}
+
+	.dark .passthrough {
+		@apply border-neutral-700 bg-neutral-900;
+	}
+
+	/* The secret lock. The icon and the text label are the message; the
+	 * background is reinforcement. */
+	.secret-locked {
+		@apply flex items-center gap-2 rounded-md border border-secret/40 bg-secret-soft px-3 py-2 text-sm text-secret;
+	}
+
+	.secret-revealed {
+		@apply flex items-center gap-2 rounded-md border border-revealed/40 bg-revealed-soft px-3 py-2 text-sm text-revealed;
+	}
+}

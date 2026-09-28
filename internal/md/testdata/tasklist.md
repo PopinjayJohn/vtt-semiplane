@@ -1,0 +1,5 @@
+- [ ] open task
+- [x] done task
+- [-] cancelled task
+- plain item
+  - [ ] nested task

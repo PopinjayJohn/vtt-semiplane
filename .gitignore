@@ -30,3 +30,17 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Kilo
+.kilo/
+.agent-manager.json
+
+# Build output and downloaded tools
+/dist/
+/.tools/
+
+# Local vaults and derived state. A vault holds plaintext DM secrets; it is
+# never committed.
+/vault/
+.semiplane/
+.semiplane-test/

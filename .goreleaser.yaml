@@ -1,0 +1,92 @@
+# Release configuration. One static binary per platform, CGO disabled.
+#
+# templ components, the stylesheet, the DataStar bundle, the icon sprite, the
+# sample campaign and the migration SQL are all embedded, so each artifact is a
+# single file with no runtime dependencies.
+
+version: 2
+
+project_name: semiplane
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: semiplane
+    main: ./cmd/semiplane
+    binary: semiplane{{ if .Env.WINDOWS }}.exe{{ end }}
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Version={{ .Version }}
+      - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Commit={{ .FullCommit }}
+      - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm: []
+    ignore:
+      - goos: darwin
+        goarch: arm64
+        goarm: ["7"]
+      - goos: linux
+        goarch: arm64
+        goarm: ["7"]
+      - goos: windows
+        goarch: arm64
+        goarm: ["7"]
+
+archives:
+  - id: semiplane
+    ids:
+      - semiplane
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+      - src: docs/SECRETS.md
+        if: exists
+    # The vault is never in an archive: a DM's plaintext secrets must not
+    # travel in a release artifact.
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--yes"
+      - "--keyless"
+      - "cosign"
+
+release:
+  prerelease: auto
+  draft: false
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# Optional: `COSIGN` must be present in the environment or the sign step is
+# skipped and the release is marked unsigned in the notes.

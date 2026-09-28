@@ -1,0 +1,2 @@
+- [ ] Buy rope 📅 2024-04-01 ⏳ 2024-04-05
+- [x] Fight the owlbear 🛫 2024-04-02 🔁 every week ➕ 2024-03-01
