@@ -39,15 +39,18 @@ secret was revealed.
 
 **The blast radius of a mistake** is bounded by two structural properties, not by
 care. A secret body is in the search index *only* while its visibility is
-`table`, and the app has no HTTP client, so there is no exfiltration path to
-reason about. The first is asserted at query time by
-`search.Query` (`secretIndexInvariantSQL`,
+`table`, and the shipped request path has no outbound network capability, so
+there is no exfiltration path to reason about. The first is asserted at query
+time by `search.Query` (`secretIndexInvariantSQL`,
 [`../internal/search/search.go`](../internal/search/search.go)) and by
 `TestSecretIndexInvariantIsAsserted`
 ([`../internal/search/search_test.go`](../internal/search/search_test.go)), which
 plants a hidden body behind `store`'s back to prove the assertion has teeth. The
-second is checked over the app's own rendered output by
-`TestNoRemoteAssetReference`
+second is `TestNoOutboundNetwork`
+([`../internal/architecture_test.go`](../internal/architecture_test.go)), which
+greps the tree for client-side capability; the output-side half of the same rule
+is `TestNoRemoteAssetReference`, which scans every page the server can render
+plus the committed stylesheet, shell script, sprite and vendored DataStar
 ([`../internal/httpapi/render_test.go`](../internal/httpapi/render_test.go)).
 
 ## The canonical predicate

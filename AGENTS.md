@@ -59,6 +59,18 @@ These are not style preferences. Each has a test or a grep that fails the build.
    panel that lists one row while counting three is an existence leak.
    `TestNoHandRolledVisibilityPredicates` fails any hand-rolled
    `visibility = 'literal'`.
+   **The predicate alone is not sufficient, and the grep cannot catch you
+   forgetting.** `SecretVisibleSQL`'s table clause has no authentication term —
+   it says `s.visibility = 'table'` and nothing about a session — so it and
+   `authz.CanReadSecret` disagree on exactly one case: an anonymous request
+   asking for a `table` secret. `store.publicOnlySQL`, `store`'s per-query
+   principal check and `search.Query`'s `p.Authenticated()` guard close it
+   today. A new secret-derived query that uses the canonical predicate *and*
+   forgets the principal check passes `TestNoHandRolledVisibilityPredicates`,
+   because it wrote no visibility comparison of its own. So: if your query can
+   return a `table` row, it needs the authentication check too, and
+   `TestPredicateMatrixAgrees` — which evaluates every such query as an
+   anonymous principal among others — is the gate that will notice.
 5. **Never add an HTTP client to the request path.** No telemetry, no
    analytics, no CDN fetches, no font or script from a remote origin. Every
    asset is embedded and served from `/_/assets/`. Enforced by
@@ -69,6 +81,19 @@ These are not style preferences. Each has a test or a grep that fails the build.
    run a process.
 6. **Never call `templ.Raw` on a vault-derived string.** And never enable
    goldmark's `html.WithUnsafe()`. Raw HTML in vault content is disabled.
+6a. **Two matrix rows where the code and the plan differ, recorded so neither is
+   a surprise.**
+   *Trigger a reindex or a backup* is admin-only in the plan and `PermDM` in
+   `authz.Policy` and the route table, so a DM may do both. That is accepted: a
+   DM is already trusted with every secret in plaintext, a backup is a copy of
+   what they can already read, and a reindex changes nothing. If that trust
+   boundary is ever tightened, the fix is one matrix row and one route's `Perm`.
+   *See the `secret_events` audit* has **no permission constant at all**, and
+   `secrets.Service.Events(ctx, secretID)` takes no principal — so a route added
+   for it would inherit no gate. Nothing calls it and no route is mounted, so
+   nothing leaks today; the events are metadata (action, actor, target) rather
+   than bodies. Whoever adds the audit view must add the permission and pass the
+   principal, not just the id.
 7. **Any new route must be added to the route table in
    `internal/httpapi/routes.go` and to `TestAuthorizationMatrix`.** The `Perm`
    middleware is the only place a role is compared; a grep test fails the build
