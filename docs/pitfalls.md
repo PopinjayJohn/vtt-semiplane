@@ -47,25 +47,41 @@ assertion**, and any branch that records a problem must still move the cursor.
 `segmentBody` now carries `if next <= pos { break }` as a standing assertion.
 A parser that makes no progress is how a 24-byte file eats a machine.
 
-## `make css` needs a local filesystem
+## `source(none)` on the Tailwind import is load-bearing
 
-The Tailwind v4 scanner takes about a second on local disk and **exceeds four
-minutes anywhere under `/mnt/gamedrive`**, with identical binary, input and
-component files. It is the mount's filesystem walk, not the CSS: narrowing the
-`@source` globs did not help, and neither did building in a temp directory. The
-decisive test is to run the same command in `/tmp` and in the repo.
+Tailwind's automatic source detection walks the project root looking for
+candidate class names. In this repository that walk reads
+`internal/md/testdata`, whose largest fixture is a megabyte of wikilinks on a
+single unbroken line, and a line that long is pathological for candidate
+scanning. Measured on a gamedrive checkout: **over 600 seconds, which reads as a
+hang.** The same command in `/tmp` finishes in about a second, so the cost is the
+walk over the mount, not the CSS.
 
-`web/static/app.css` is committed and is the artefact of record.
-`.tools/tailwindcss` is a fast-failing stub on this machine and the real binary
-sits beside it as `tailwindcss.real`. CI runs on a local filesystem and is
-unaffected. If you must regenerate here, copy the sources to `/tmp`, build, and
-copy the single output file back.
+The fix is one token:
 
-Keep the `@source` list in `web/src/input.css` explicit rather than pointing at
-`internal/`. It is on `internal/md/*.go` because the renderers emit class
-attributes for passthrough blocks, callouts and mermaid from Go — dropping that
-line silently removes those classes on the next rebuild. Narrowing it to the
-`.templ` files alone once did exactly that.
+```css
+@import "tailwindcss" source(none);
+@source "../../internal/web/*.templ";
+@source "../../internal/web/*.go";
+@source "../../internal/md/*.go";
+@source "../../web/static/app.js";
+```
+
+`source(none)` turns automatic detection off entirely and the explicit list
+supplies the candidates. `make css` then completes in **82 ms**. Narrowing the
+`@source` list alone does *not* fix it — the walk still happens, it just
+collects less. If the build ever hangs again, check that `source(none)` is still
+on the import before looking at anything else.
+
+Two things the explicit list must keep:
+
+- **`internal/md/*.go` is on it because the renderers emit class attributes from
+  Go** — `passthrough`, `callout`, `mermaid`, `secret-locked`. Dropping that
+  line silently removes those rules on the next rebuild, and nothing fails: the
+  build is clean, the CSS is just wrong.
+- **`web/static/app.css` is the artefact of record** and is committed. Never
+  hand-edit it; run `make css`. `css-check` in CI regenerates and diffs it, so
+  a build that cannot run locally is a build that fails only in CI.
 
 ## A background process still holds the tool call open
 
