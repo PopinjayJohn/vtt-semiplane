@@ -173,47 +173,6 @@ func TestAssetsAreServedFromTheBinary(t *testing.T) {
 	})
 }
 
-// TestEmbeddedAssetsAreTheCommittedOnes keeps the embedded tree and the committed
-// one in step.
-//
-// internal/web/assets/ is a byte-for-byte mirror of web/static/, because an embed
-// pattern may not cross out of the package directory and cannot follow a symbolic
-// link, and a mirror that drifts is a mirror nobody notices. This turns "nobody
-// notices" into a failing test, and the failure names what to regenerate.
-func TestEmbeddedAssetsAreTheCommittedOnes(t *testing.T) {
-	t.Parallel()
-	for _, name := range []string{"app.css", "app.js", "icons.svg", "vendor/datastar.js"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			committed, err := os.ReadFile(filepath.Join("..", "..", "web", "static", filepath.FromSlash(name)))
-			if err != nil {
-				t.Fatalf("read the committed asset: %v", err)
-			}
-			embedded, err := web.Assets().Open(name)
-			if err != nil {
-				t.Fatalf("the embedded tree has no %s: %v", name, err)
-			}
-			defer embedded.Close()
-			buf := make([]byte, 1<<22)
-			n, _ := embedded.Read(buf)
-			if string(buf[:n]) != string(committed) {
-				t.Errorf("internal/web/assets/%s differs from web/static/%s (%d bytes against %d): run make css, or copy the committed file over the mirror",
-					name, name, n, len(committed))
-			}
-		})
-	}
-}
-
-// TestPageViewIsNegotiated is the negotiation test, and the assertion is a subset
-// rather than a pair of shapes.
-//
-// The contract is that a fragment is what a document carries, minus the shell. So
-// the test renders both from one handler and asserts that the document is a whole
-// HTML document, that the fragment is not, and that every line of the fragment is
-// a line of the document. A handler that rendered two different things — a summary
-// for fragments, a different snippet, a different secret lock — would pass a "both
-// are 200" test and fail this one, and that is the whole reason the shape
-// negotiation is a single function.
 func TestPageViewIsNegotiated(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)

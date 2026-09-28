@@ -345,6 +345,15 @@ job, `git status --porcelain` must be empty.
   secret fence with an unparseable directive. Every `for` over a byte range
   needs an explicit progress assertion, and any branch that records a problem
   must still move the cursor.
+- **`make css` needs a local filesystem.** The Tailwind v4 scanner takes about
+  a second on local disk and exceeds four minutes anywhere under
+  `/mnt/gamedrive`, with identical binary, input and components — the mount's
+  filesystem walk is the cost, not the CSS, so neither narrowing the `@source`
+  globs nor building in a temp directory helps. The stylesheet is committed and
+  `web/static/app.css` is the artefact of record. Keep the `@source` list in
+  `web/src/input.css` explicit: `internal/md/*.go` is on it because the markdown
+  renderers emit class attributes for passthrough blocks, callouts and mermaid,
+  and dropping that line silently removes those classes on the next rebuild.
 - **Never run `go test ./...` bare on this machine.** It links and runs one
   test binary per package, up to `NumCPU` at a time, and every package that
   pulls in `modernc.org/sqlite` links a very large pure-Go libc. That exhausted

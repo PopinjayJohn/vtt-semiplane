@@ -11,18 +11,24 @@
 
 @import "tailwindcss";
 
-/* Class names live in two places, and only two: the .templ components under
- * internal/web, and the core app shell's JavaScript. Both are core-owned, which
- * is the same rule the plugin boundary rests on — a plugin returns a
- * templ.Component and can never ship a class name of its own.
+/* Class names come from three places, and all three are core-owned.
  *
- * Scanning "../../internal" wholesale was the difference between a 0.24 s build
- * and a 25-minute one: it walks internal/md/testdata, whose largest fixture is a
- * megabyte of wikilinks on a single unbroken line, and a single line that long
- * is pathological for candidate scanning. Pointing at the directory that holds
- * the components removes the walk entirely. */
+ *   internal/web/*.templ   the components
+ *   internal/web/*.go      the view helpers
+ *   internal/md/*.go       the markdown renderers, which emit class attributes
+ *                          for passthrough blocks, callouts and mermaid
+ *   web/static/app.js      the app shell
+ *
+ * Scanning "../../internal" wholesale was the difference between a fast build
+ * and an unusable one: it walks internal/md/testdata, whose largest fixture is a
+ * megabyte of wikilinks on a single unbroken line, and a line that long is
+ * pathological for candidate scanning. The list above is explicit for that
+ * reason — it is also what stops the next person from narrowing it to the
+ * components alone and silently dropping every class the renderer emits.
+ */
 @source "../../internal/web/*.templ";
 @source "../../internal/web/*.go";
+@source "../../internal/md/*.go";
 @source "../../web/static/app.js";
 
 /* Design tokens. A ten-step neutral ramp, one accent, and two semantic colours
