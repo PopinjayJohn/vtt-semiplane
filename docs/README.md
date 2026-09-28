@@ -52,10 +52,27 @@ a hand-rolled OR-chain leaks a `dm` secret to the page owner.
 Every package in the module is green, from `cmd/semiplane` to `internal/web`: the store
 and its migrations, the Markdown pipeline, vault I/O with an atomic writer and a
 single-instance lock, the indexer and the invalidation bus, Argon2id accounts
-with sessions and invites, the authorization policy, the router, and the templ
-view layer. The live-push path, the plugin registry and `Host`, the campaign
-status panel, the editor, the sample campaign extraction and the release
-pipeline are **not** built. `spec.md` says so per section.
+with sessions and invites, the authorization policy, the router, the templ
+view layer, and the two stages built on top of them.
+
+**Stage 1** is the data layer through to a readable page: the store and its
+migrations, the Markdown pipeline, vault I/O, the indexer and bus, accounts and
+the policy, the router, search, and the templ view layer.
+
+**Stage 2** is everything a reader navigates by: the tag cloud and tag pages,
+the file tree, the campaign status panel, the three-column shell with its
+keyboard model and accessibility work, the command palette, and the live-update
+stream at `/_/events` with its coalescing window, its buffer bound, its
+per-user and global caps, and its termination on any authorization change.
+
+Still **not** built: the plugin registry and `Host`, the editor, the sample
+campaign extraction and the release pipeline. `spec.md` says so per section, and
+a stage-2 consequence worth knowing is that there is deliberately **no edit
+link** anywhere: `/p/{path}/edit` does not exist, and an affordance for a route
+that answers 404 is a control that lies. `home.templ` records why, and
+`app.js` implements the `e` key by looking for an attribute that is therefore
+absent.
+
 
 ## Adding a document
 

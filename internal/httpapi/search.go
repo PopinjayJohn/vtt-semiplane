@@ -84,7 +84,7 @@ type jsonHit struct {
 func (s *Server) searchView(r *http.Request) SearchView {
 	q := searchQuery(r)
 	view := SearchView{
-		Shell: s.shell(r, "Search"),
+		Shell: s.liveShell(r, "Search"),
 		Query: q,
 	}
 	if q == "" {

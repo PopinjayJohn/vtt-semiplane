@@ -486,12 +486,116 @@ func TestNoOutboundNetwork(t *testing.T) {
 			return
 		}
 		for _, c := range clients {
-			if strings.Contains(line, c) {
-				t.Errorf("%s:%d: outbound network capability %q: every asset is embedded and served from /_/assets/",
-					rel, num, strings.TrimSpace(c))
+			if !strings.Contains(line, c) {
+				continue
 			}
+			// The carve-out is decided per file, not per line: what makes a
+			// request safe is that the file never sends it, and that is a
+			// property of the whole file. TestSyntheticRequestFilesAreStillOnlySynthetic
+			// is what actually holds the file to it, once, instead of every line
+			// of it.
+			if _, ok := syntheticRequestFiles[rel]; ok && isRequestConstructor(c) {
+				continue
+			}
+			t.Errorf("%s:%d: outbound network capability %q: every asset is embedded and served from /_/assets/",
+				rel, num, strings.TrimSpace(c))
 		}
 	})
+}
+
+// TestSyntheticRequestFilesAreStillOnlySynthetic holds the carve-out in
+// TestNoOutboundNetwork to the two claims that justify it, so that the exemption
+// cannot quietly become a loophole.
+//
+// The main test has to be line-based, because it walks line by line, and a
+// per-line rule on a request constructor would be checking the wrong thing: a
+// constructor call and the host it targets are usually three lines apart. So the
+// exemption is granted per file and this test is what keeps it honest, by
+// asserting that each exempt file still contains the reserved host and still
+// contains no client symbol whatsoever.
+func TestSyntheticRequestFilesAreStillOnlySynthetic(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+	if len(syntheticRequestFiles) == 0 {
+		t.Fatal("the carve-out table is empty: remove the machinery rather than leaving it dormant")
+	}
+	for rel, construct := range syntheticRequestFiles {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Errorf("%s is exempt from TestNoOutboundNetwork but does not exist: %v", rel, err)
+			continue
+		}
+		src := string(b)
+		if !strings.Contains(src, construct.host) {
+			t.Errorf("%s is exempt from TestNoOutboundNetwork but never names %q: the request it builds must target a host that cannot resolve",
+				rel, construct.host)
+		}
+		for _, c := range clientsExceptConstructors {
+			if strings.Contains(src, c) {
+				t.Errorf("%s is exempt from TestNoOutboundNetwork and contains %q: a file that may build a request may not be able to send one",
+					rel, c)
+			}
+		}
+	}
+}
+
+// requestConstructors are the two symbols that build an http.Request without
+// sending it. They are capability-free on their own — the capability is the
+// client that follows — and they are the one entry on the clients list a file may
+// be exempted from, under the conditions TestSyntheticRequestFilesAreStillOnlySynthetic
+// checks.
+var requestConstructors = []string{"http.NewRequest(", "http.NewRequestWithContext("}
+
+func isRequestConstructor(c string) bool {
+	for _, r := range requestConstructors {
+		if c == r {
+			return true
+		}
+	}
+	return false
+}
+
+// clientsExceptConstructors is the clients list without the request
+// constructors, which is what an exempt file is held to.
+var clientsExceptConstructors = func() []string {
+	var out []string
+	for _, c := range []string{
+		"http.Get(", "http.Head(", "http.Post(", "http.PostForm(",
+		"http.DefaultClient", "http.Client{",
+		"net.Dial(", "net.DialTimeout(", "net.DialTCP(",
+		"net.LookupHost(", "smtp.SendMail(",
+		`"net/smtp"`, `"net/rpc"`, `"net/http/httputil"`,
+	} {
+		if !isRequestConstructor(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}()
+
+// syntheticRequestFiles are the files allowed to *build* an http.Request without
+// sending it, and the host every such request must be built against.
+//
+// This is the one carve-out in TestNoOutboundNetwork and it is narrow on purpose.
+// The live-push path is required to deliver a subscriber's re-render by calling
+// the ordinary handler with a synthetic request carrying that subscriber's
+// captured principal, which is what makes the push and fetch paths literally the
+// same function — the property §4.5 calls the single most important thing about
+// the design. That needs a request object, and a request object is what
+// http.NewRequestWithContext returns.
+//
+// What makes it safe is not the file name and not a comment here. It is that the
+// request is never handed to a client: .invalid is the reserved TLD from RFC 2606
+// and resolves nowhere, and every other symbol on the clients list — http.Client,
+// http.Get, net.Dial — is still refused in this file exactly as everywhere else.
+// So a reader who wants to check the claim can grep this file for a client
+// symbol, and the check this test performs above refuses a request built against
+// any other host.
+//
+// A second file needing this would be a second reason to re-examine whether the
+// push path should be reaching for the handler at all.
+var syntheticRequestFiles = map[string]struct{ host string }{
+	"internal/httpapi/events.go": {host: "push.invalid"},
 }
 
 // TestNoProcessExecution enforces the other half of the same rule set: a

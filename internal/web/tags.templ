@@ -1,0 +1,48 @@
+package web
+
+import (
+	"net/url"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// tagHref is a tag's own page.
+//
+// The name is escaped as one path segment rather than as a query value, because
+// a tag may be hierarchical and a slash in it is part of the name: tags arrive
+// from frontmatter as "area/wild", and /tag/{name} matches exactly one segment.
+// Escaping the slash is what makes the link reach the route at all.
+func tagHref(name string) string {
+	return "/tag/" + url.PathEscape(name)
+}
+
+// Tags is the cloud, at /tags.
+templ Tags(v httpapi.TagsView) {
+	<section aria-labelledby="tags-page-heading">
+		<h1 id="tags-page-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Tags</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			{ itoa(len(v.Tags)) } { plural(len(v.Tags), "tag", "tags") } you may see. Each count is the pages carrying it that
+			you may read, so a tag that only appears inside a hidden secret counts as nothing.
+		</p>
+		@tagCloud(v.Tags, "", "Every tag")
+	</section>
+}
+
+// Tag is one tag's pages, at /tag/{name}.
+//
+// The cloud is the same component /tags renders, with this tag marked rather
+// than repeated: aria-current is how a link says "this is where you are", and
+// dropping the current tag from the list instead would be a cloud that changes
+// shape depending on which page of it you are standing on.
+templ Tag(v httpapi.TagView) {
+	<section aria-labelledby="tag-page-heading">
+		<h1 id="tag-page-heading" data-focus-target class="text-2xl font-semibold tracking-tight">#{ v.Tag.Name }</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			{ itoa(v.Tag.Count) } { plural(v.Tag.Count, "page", "pages") } { plural(v.Tag.Count, "carries", "carry") } this tag.
+		</p>
+		<div class="mt-4">
+			@PageList(v.Pages, "No page you may read carries this tag.")
+		</div>
+		@tagCloud(v.All, v.Tag.Name, "Every tag")
+	</section>
+}

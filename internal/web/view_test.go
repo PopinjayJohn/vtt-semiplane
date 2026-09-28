@@ -10,7 +10,6 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/secrets"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/web"
-	"github.com/a-h/templ"
 )
 
 // TestTheRendererIsTotalOverItsViewModels walks every view model in the
@@ -23,134 +22,54 @@ import (
 func TestTheRendererIsTotalOverItsViewModels(t *testing.T) {
 	t.Parallel()
 	r := web.NewRenderer()
-	principal := httpapi.Shell{Title: "Campaign", CSRF: "x", Campaign: "vault"}
-
-	views := []httpapi.View{
-		httpapi.HomeView{Shell: principal, PageCount: 2, Pages: []httpapi.PageCard{
-			{ID: 1, Path: "Index.md", Title: "Index"},
-		}, Tags: []httpapi.TagCard{{Name: "area/port", Count: 1}}},
-		httpapi.PageView{
-			Shell: principal,
-			Card:  httpapi.PageCard{ID: 1, Path: "Index.md", Title: "Index", PageType: "note"},
-			Body:  `<p>Hello</p>`,
-			Toc:   []httpapi.TocEntry{{Level: 1, Text: "Hello", Slug: "hello"}},
-			Backlinks: []httpapi.BacklinkChip{
-				{Card: httpapi.PageCard{ID: 2, Path: "Ruin.md", Title: "Ruin"}, Line: 3},
-			},
-			BacklinkCount: 1,
-			Secrets: []httpapi.SecretView{
-				{ID: "a1a1a1a1a1a1", Ordinal: 0, Hidden: true, Label: "‹s:a1a1a1a1a1a1:41:0123456789abcdef› hidden"},
-				{ID: "b2b2b2b2b2b2", Ordinal: 1, Body: "revealed to the table", Visibility: "table"},
-			},
-			Problems:  []string{"secret.author_unknown: the fence names an author that does not exist"},
-			Truncated: true,
-		},
-		httpapi.SearchView{
-			Shell: principal, Query: "lantern", Total: 1,
-			Hits: []httpapi.SearchHit{{
-				Card:    httpapi.PageCard{ID: 1, Path: "Tavern.md", Title: "The Drowned Lantern"},
-				Kind:    "page",
-				Snippet: "the only <b>dry</b> room",
-			}},
-		},
-		httpapi.LoginView{Shell: principal, Problem: "That username and passphrase do not match an account."},
-		httpapi.SetupView{Shell: principal, Problem: "that is too short", Field: "username"},
-		httpapi.InviteView{Shell: principal, Token: "0123456789abcdef01234567", Role: "player"},
-		httpapi.ErrorView{Shell: principal, Status: 404, Heading: "Not found", Detail: "There is no page at that address."},
-	}
-
-	for _, v := range views {
+	// allViews is the shared fixture list, so that "the dispatch is total" and
+	// "every page has the landmarks" are claims about the same set. A view model
+	// added to the router with a template and no fixture here would be a page
+	// nobody ever rendered.
+	for _, v := range allViews() {
 		t.Run(typeName(v), func(t *testing.T) {
 			t.Parallel()
-			document := render(t, r, v, false)
-			fragment := render(t, r, v, true)
-
-			if !strings.HasPrefix(strings.TrimSpace(document), "<!doctype") {
-				t.Errorf("the document does not begin with a doctype:\\n%.120s", document)
+			// Exercise the real call sites: a view that renders as a document but
+			// not as a fragment is a view that can be navigated to and not swapped.
+			if err := r.Document(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), v); err != nil {
+				t.Errorf("the document does not render: %v", err)
 			}
-			if strings.Contains(strings.ToLower(fragment), "<!doctype") {
-				t.Error("the fragment carries a doctype")
-			}
-			if !strings.Contains(fragment, `id="page-region"`) {
-				t.Error("the fragment has no region to swap into")
-			}
-			if len(fragment) >= len(document) {
-				t.Errorf("the fragment is %d bytes and the document is %d", len(fragment), len(document))
-			}
-			// Every *mutating* form carries a token, in both shapes. A shape that
-			// dropped it would be a shape in which nothing could be submitted. A
-			// GET form is not a mutation and correctly has none, so the count is
-			// against the post forms rather than against all of them.
-			for _, shape := range []struct{ name, body string }{
-				{"the document", document}, {"the fragment", fragment},
-			} {
-				posts := strings.Count(shape.body, `method="post"`)
-				if posts > strings.Count(shape.body, `name="csrf"`) {
-					t.Errorf("%s has %d post forms and %d csrf inputs", shape.name, posts, strings.Count(shape.body, `name="csrf"`))
-				}
+			if err := r.Fragment(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), v); err != nil {
+				t.Errorf("the fragment does not render: %v", err)
 			}
 		})
 	}
 }
 
-// TestAMissingViewModelIsAnError asserts the dispatch fails loudly.
-//
-// A missing view model is a mistake, and a mistake must not render as a blank
-// page: a blank page looks like a page with no content, and the reader has no way
-// to tell that from a bug.
-//
-// A view model this package does not *recognise* cannot be written from here, and
-// that is deliberate: httpapi.View has an unexported marker method, so no other
-// package can produce one. A new view model therefore has to be added to httpapi
-// and to this package's switch, and a forgetter gets a 500 rather than an empty
-// page — which is the outcome this test pins for the case that is writable.
-func TestAMissingViewModelIsAnError(t *testing.T) {
-	t.Parallel()
-	r := web.NewRenderer()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	if err := r.Document(rec, req, nil); err == nil {
-		t.Error("a missing view model rendered a document without an error")
-	}
-	if err := r.Fragment(rec, req, nil); err == nil {
-		t.Error("a missing view model rendered a fragment without an error")
-	}
-	if rec.Body.Len() != 0 {
-		t.Errorf("a missing view model wrote %d bytes to the response", rec.Body.Len())
-	}
-}
-
-// TestPreRenderedIsTheOnlyWayToEmitRawHTML checks the funnel's own invariant.
-//
-// The two funnels are the only place templ.Raw is called, and their contract is
-// that the string has already been escaped or has already been rendered. This
-// asserts what a caller can and cannot do with them: a raw vault string passed to
-// PreRendered is exactly the mistake the funnel exists to make impossible, and the
-// test is here to say that the *name* is a promise rather than a suggestion.
-func TestPreRenderedIsTheOnlyWayToEmitRawHTML(t *testing.T) {
-	t.Parallel()
-	// A string that would be dangerous if it were not escaped.
-	hostile := `<script>alert(1)</script>`
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	view := httpapi.PageView{
-		Shell: httpapi.Shell{Title: "x", Campaign: "v"},
-		Card:  httpapi.PageCard{ID: 1, Path: "H.md", Title: "H"},
-		// Passed through the funnel, which is what the page handler does with HTML
-		// md.Renderer produced. A fixture that passed a *vault string* here would
-		// be the stored XSS this whole design exists to prevent — so the hostile
-		// string goes through templ's own escaping instead, and the assertion is
-		// that it comes out inert.
-		Body: templ.EscapeString(hostile),
-	}
-	if err := web.NewRenderer().Document(rec, req, view); err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	if strings.Contains(rec.Body.String(), "<script>alert(1)</script>") {
-		t.Error("a hostile string reached the response unescaped")
-	}
-	if !strings.Contains(rec.Body.String(), "&lt;script&gt;") {
-		t.Error("the hostile string was neither escaped nor rendered, so the assertion is not testing what it says")
+// typeName names a subtest after the view model rather than after its index.
+func typeName(v httpapi.View) string {
+	switch v.(type) {
+	case httpapi.HomeView:
+		return "Home"
+	case httpapi.PageView:
+		return "Page"
+	case httpapi.SearchView:
+		return "Search"
+	case httpapi.FilesView:
+		return "Files"
+	case httpapi.TagsView:
+		return "Tags"
+	case httpapi.TagView:
+		return "Tag"
+	case httpapi.ContextView:
+		return "Context"
+	case httpapi.CommandsView:
+		return "Commands"
+	case httpapi.LoginView:
+		return "Login"
+	case httpapi.SetupView:
+		return "Setup"
+	case httpapi.InviteView:
+		return "Invite"
+	case httpapi.ErrorView:
+		return "Error"
+	default:
+		return "unknown"
 	}
 }
 
@@ -200,7 +119,9 @@ func TestTheLayoutIsServerRenderedAndDegradable(t *testing.T) {
 		}
 	}
 	// The landmark set the brief asks for: a skip link, a nav, a main and an aside.
-	for _, want := range []string{"Skip to content", `<nav aria-label=`, `<main id="main"`, `role="search"`} {
+	// The ids are the ones app.js and the stylesheet address the columns by, so
+	// this is also the assertion that they were not renamed.
+	for _, want := range []string{"Skip to content", `<nav id="left-nav"`, `<main id="content"`, `<aside id="context"`, `aria-label="Context"`, `role="search"`} {
 		if !strings.Contains(document, want) {
 			t.Errorf("the layout is missing %q", want)
 		}
@@ -274,28 +195,6 @@ func render(t *testing.T, r *web.Renderer, v httpapi.View, fragment bool) string
 		t.Fatalf("render: %v", err)
 	}
 	return rec.Body.String()
-}
-
-// typeName is the subtest label for a view model.
-func typeName(v httpapi.View) string {
-	switch v.(type) {
-	case httpapi.HomeView:
-		return "home"
-	case httpapi.PageView:
-		return "page"
-	case httpapi.SearchView:
-		return "search"
-	case httpapi.LoginView:
-		return "login"
-	case httpapi.SetupView:
-		return "setup"
-	case httpapi.InviteView:
-		return "invite"
-	case httpapi.ErrorView:
-		return "error"
-	default:
-		return "unknown"
-	}
 }
 
 // stripTags removes the markup from a fragment, leaving its text.

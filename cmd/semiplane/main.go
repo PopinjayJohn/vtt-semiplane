@@ -170,6 +170,12 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 	// be answered 503 is the length of one function call rather than the length
 	// of a reindex.
 	mount := httpapi.NewDeferred()
+	// The server is kept, not just its handler, because Shutdown on the router is
+	// not enough: a live-push stream is an HTTP request that never finishes, and
+	// http.Server.Shutdown waits for open requests. The registry has to be closed
+	// first, and the registry belongs to the httpapi.Server rather than to the
+	// stdlib one, so it is this reference that has to survive installHandler.
+	var api *httpapi.Server
 	a, err := app.Boot(ctx, app.Options{
 		Config:  cfg,
 		Handler: mount,
@@ -190,7 +196,7 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 		shutdown(a, stderr)
 		return exitFailure
 	}
-	if err := installHandler(cfg, a, mount, stderr); err != nil {
+	if api, err = installHandler(cfg, a, mount, stderr); err != nil {
 		fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		shutdown(a, stderr)
 		return exitFailure
@@ -198,6 +204,20 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 	if err := a.Run(ctx); err != nil {
 		fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		return exitFailure
+	}
+	// Before a.Run's own shutdown would have run, and deliberately: the streams
+	// have to be told to finish or a.Run's shutdown waits for a request that
+	// ends when the client leaves. A reader who closed their laptop is not a
+	// reader who should hold the process open.
+	if api != nil {
+		// A failure here is a deadline the operator already set, so it is
+		// reported rather than returned: the exit code of this function is
+		// decided by whether the campaign was served, and a slow reader who
+		// would not let go is not a reason to call the run a failure.
+		if err := api.Shutdown(context.Background()); err != nil {
+			logger(cfg, stderr).Warn("the live-update streams did not all finish",
+				"action", "http.events.shutdown", "err", err.Error())
+		}
 	}
 	return exitOK
 }
@@ -209,7 +229,7 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 // order and is handed to the router as an interface. This function is the only
 // place the two are wired together, so the dependency between them is one call
 // rather than an import in a dozen files.
-func installHandler(cfg config.Config, a *app.App, mount *httpapi.Deferred, stderr io.Writer) error {
+func installHandler(cfg config.Config, a *app.App, mount *httpapi.Deferred, stderr io.Writer) (*httpapi.Server, error) {
 	srv, err := httpapi.New(httpapi.Options{
 		Config:        cfg,
 		DB:            a.DB(),
@@ -223,10 +243,10 @@ func installHandler(cfg config.Config, a *app.App, mount *httpapi.Deferred, stde
 		Renderer:      web.NewRenderer(),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mount.Install(srv.Handler())
-	return nil
+	return srv, nil
 }
 
 // vaultCommand dispatches `vault info`, the only vault subcommand.

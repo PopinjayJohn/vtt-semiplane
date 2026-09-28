@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
@@ -44,6 +45,10 @@ type matrixRoute struct {
 	authenticated int
 	// extra marks a row that is not a row of the table.
 	extra bool
+	// timeout bounds the request for a route whose response never ends. The
+	// status line is written before such a response begins, so the deadline still
+	// observes the authorization decision — which is all a matrix row asks of it.
+	timeout time.Duration
 }
 
 // The status codes a matrix row asserts. Only four answers exist, and each is
@@ -109,6 +114,35 @@ var matrixRoutes = []matrixRoute{
 	{name: "invite form", method: http.MethodGet, pattern: "/invite/{token}", path: "/invite/whatever", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "search", method: http.MethodGet, pattern: "/search", path: "/search?q=lantern", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
 	{name: "search api", method: http.MethodGet, pattern: "/api/search", path: "/api/search?q=lantern", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	// The contextual-navigation surfaces. All four are PermAnonRead, so an
+	// anonymous reader with the flag on sees the campaign's structure and one with
+	// it off is sent to the login form — the same three answers as /search, and for
+	// the same reason: a tag, a file tree and a command palette are all public
+	// navigation over content the reader can already read.
+	{name: "tags", method: http.MethodGet, pattern: "/tags", path: "/tags", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	// A tag nobody carries, and a tag every page of which is hidden from this
+	// reader, are deliberately the same answer: 200 with no rows. A 404 would say
+	// "this tag does not exist", which is a statement about the campaign that a
+	// reader with no right to the tag's pages is not entitled to, and the two
+	// would differ only in whether the reader guessed right. The row is here to
+	// pin that, because the other row above it pins the case where the tag does
+	// exist and this reader can see a page under it.
+	{name: "tag that does not exist", method: http.MethodGet, pattern: "/tag/{name}", path: "/tag/nothing-carries-this", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	{name: "files", method: http.MethodGet, pattern: "/files", path: "/files", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	// The context column in one call. It is PermReadPage, and the page id is a
+	// real one, so this row is asserting that the right to read a page is also the
+	// right to read what links to it and what is on it.
+	{name: "page context api", method: http.MethodGet, pattern: "/api/pages/{id}/context", path: "/api/pages/1/context", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	{name: "page context api for a page that does not exist", method: http.MethodGet, pattern: "/api/pages/{id}/context", path: "/api/pages/999999/context", authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	// The command palette is PermSession, and both anonymous answers are the
+	// login redirect: the palette is an affordance for somebody who has signed in,
+	// not a capability anonymous read grants.
+	{name: "commands", method: http.MethodGet, pattern: "/_/commands", path: "/_/commands?q=lantern", authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303},
+	// The live-update stream, with a deadline because its response is written
+	// incrementally and never ends. The row exists to prove the gate, not the
+	// stream: the status line is on the wire before the first trigger would be.
+	{name: "events", method: http.MethodGet, pattern: "/_/events", path: "/_/events?page=Index.md", timeout: 2 * time.Second,
+		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303},
 	{name: "healthz", method: http.MethodGet, pattern: "/healthz", path: "/healthz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "readyz", method: http.MethodGet, pattern: "/readyz", path: "/readyz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "stylesheet", method: http.MethodGet, pattern: "/_/assets/*", path: "/_/assets/app.css", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
@@ -278,7 +312,7 @@ func performMatrixRow(t *testing.T, s *session, rt matrixRoute, role roleCase) (
 // become that role's own account, and {csrf} is the marker a form always carries
 // (the real token travels in the header, the way a script would send it).
 func statusOf(s *session, rt matrixRoute, role roleCase) int {
-	c := &call{method: rt.method, path: rt.path}
+	c := &call{method: rt.method, path: rt.path, timeout: rt.timeout}
 	if rt.form != nil {
 		form := url.Values{}
 		for k, v := range rt.form {
@@ -336,9 +370,11 @@ func TestTheMatrixCoversEveryRoute(t *testing.T) {
 			t.Errorf("the matrix has a row for %s, which the route table does not contain", key)
 		}
 		// Two patterns carry several rows on purpose: one per file for the
-		// assets, and one per kind of absence for a page. Anything else with two
-		// rows is a duplicate that would make a coverage count a lie.
-		if n > 1 && key != "GET /p/*" && key != "GET /_/assets/*" {
+		// assets, one per kind of absence for a page, and one per answer for a tag
+		// and for the context API. Anything else with two rows is a duplicate that
+		// would make a coverage count a lie.
+		if n > 1 && key != "GET /p/*" && key != "GET /_/assets/*" &&
+			key != "GET /tag/{name}" && key != "GET /api/pages/{id}/context" {
 			t.Errorf("the matrix has %d rows for %s", n, key)
 		}
 	}

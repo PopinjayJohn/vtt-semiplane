@@ -1,8 +1,6 @@
 package web
 
-import (
-	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
-)
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
 
 // Home is the dashboard.
 templ Home(v httpapi.HomeView) {
@@ -18,55 +16,63 @@ templ Home(v httpapi.HomeView) {
 	</section>
 }
 
-// Page is one page: its title, its rendered body, the secrets on it, and the
-// panels around it.
+// Page is one page: its title, its rendered body, and the secrets on it.
 //
 // The body is the one place in this file that receives pre-rendered HTML, and it
 // receives it from PreRendered, which is the single funnel. Everything else here
 // is an ordinary templ expression and is escaped by templ.
+//
+// The page's own panels — the table of contents, the backlinks, the related
+// pages, the campaign status — are not here. They are the shell's right column
+// and the layout renders them from the same view model, so a page rendered inside
+// the three-column shell and a context region fetched on its own cannot disagree
+// about what a page has around it. Rendering them here as well would put two
+// asides named "Context" on one page, which is one landmark too many and one
+// answer too many.
+//
+// There is deliberately no edit link, and that is a finding rather than an
+// omission. app.js implements the `e` key by looking for a data-edit-href
+// attribute, and an absent attribute is the correct absence here: there is no
+// /p/{path}/edit route until the editor stage lands, so an edit affordance would
+// be a control in the document for something that answers 404. A shortcut that
+// navigates to a 404 is worse than no shortcut, and hiding the link with CSS
+// would leave it in the document for a crawler and for the keyboard. When the
+// route exists, the handler answers httpapi.PermWritePage and the template
+// renders the link from that bool — never from a role comparison made here.
 templ Page(v httpapi.PageView) {
-	<div class="flex flex-col gap-8 lg:flex-row-reverse">
-		<article class="min-w-0 flex-1">
-			<header class="border-b border-neutral-200 pb-3 dark:border-neutral-800">
-				<h1 data-focus-target class="text-2xl font-semibold tracking-tight">{ v.Card.Title }</h1>
-				<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
-					<code>{ v.Card.Path }</code>
-					<span aria-hidden="true">·</span>
-					<span>{ v.Card.PageType }</span>
-				</p>
-			</header>
-			if v.Truncated {
-				@Callout("border-secret/40 bg-secret-soft text-secret", "This page is longer than one view", navp())
-			}
-			for _, problem := range v.Problems {
-				@Callout("border-secret/40 bg-secret-soft text-secret", "The parser reported a problem", Text(problem))
-			}
-			<div class="prose-vtt mt-6 max-w-none">
-				@PreRendered(v.Body)
-			</div>
-			if len(v.Secrets) > 0 {
-				<section aria-labelledby="secrets-heading" class="mt-8 space-y-3">
-					<h2 id="secrets-heading" class="text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-						Secrets on this page
-					</h2>
-					for _, secret := range v.Secrets {
-						if secret.Hidden {
-							@SecretLock(secret)
-						} else {
-							@SecretRevealed(secret)
-						}
+	<article class="prose-page">
+		<header class="border-b border-neutral-200 pb-3 dark:border-neutral-800">
+			<h1 data-focus-target class="text-2xl font-semibold tracking-tight">{ v.Card.Title }</h1>
+			<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+				<code>{ v.Card.Path }</code>
+				<span aria-hidden="true">·</span>
+				<span>{ v.Card.PageType }</span>
+			</p>
+		</header>
+		if v.Truncated {
+			@Callout("border-secret/40 bg-secret-soft text-secret", "This page is longer than one view", navp())
+		}
+		for _, problem := range v.Problems {
+			@Callout("border-secret/40 bg-secret-soft text-secret", "The parser reported a problem", Text(problem))
+		}
+		<div class="prose-vtt mt-6 max-w-none">
+			@PreRendered(v.Body)
+		</div>
+		if len(v.Secrets) > 0 {
+			<section aria-labelledby="secrets-heading" class="mt-8 space-y-3">
+				<h2 id="secrets-heading" class="text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+					Secrets on this page
+				</h2>
+				for _, secret := range v.Secrets {
+					if secret.Hidden {
+						@SecretLock(secret)
+					} else {
+						@SecretRevealed(secret)
 					}
-				</section>
-			}
-		</article>
-		<aside
-			aria-label="Context"
-			class="w-full shrink-0 space-y-6 lg:w-64"
-		>
-			@BacklinkList(v.Backlinks, v.BacklinkCount)
-			@Toc(v.Toc)
-		</aside>
-	</div>
+				}
+			</section>
+		}
+	</article>
 }
 
 // navp is the truncation notice's body.

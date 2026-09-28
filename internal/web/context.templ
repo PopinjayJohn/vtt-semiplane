@@ -1,0 +1,213 @@
+package web
+
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+
+// hostSystemNote is what the system layer says when the view model supplied no
+// phrase of its own.
+//
+// §3.3 requires a missing plugin to look like a missing plugin. A panel that
+// ends silently at the party list reads as a panel that failed to render, and a
+// reader who cannot tell those two apart stops trusting the panel that did.
+const hostSystemNote = "No game system is registered for this campaign, so this panel shows only what the vault's own frontmatter and tags say."
+
+// ContextPanels is the whole right column: the page's own context above, the
+// campaign's below.
+//
+// It is one component for two placements — the aside a page view renders inside
+// the shell, and the standalone region /api/pages/{id}/context answers with —
+// because two components rendering the same data is two places for the two to
+// disagree, and a context column that disagrees with itself depending on which
+// request produced it is worse than no second surface at all.
+templ ContextPanels(d ContextData) {
+	// The page-derived panels need a page. A view that is not about one has no
+	// table of contents and no backlinks, and showing "this page has no headings"
+	// about the search form is a lie told by a placeholder.
+	if d.Card != nil {
+		@Toc(d.Toc)
+		@BacklinkList(d.Backlinks, d.BacklinkCount)
+		if len(d.Related) > 0 {
+			@relatedPanel(d.Related)
+		}
+	}
+	// The campaign panel is rendered when the view model carried one. A carried
+	// panel with every field omitted still renders, because that is a reader who
+	// may see none of it rather than a surface with no campaign state.
+	if d.Campaign != nil {
+		@CampaignStatusPanel(*d.Campaign)
+	}
+}
+
+// Context is the right column as a region of its own, so the client can fetch
+// and swap it.
+//
+// Its heading is the one h1 the region owns, and that is why the region may only
+// be morphed into #content: a context column swapped into the shell's aside
+// would put a second h1 next to the page's. The heading is visually hidden
+// because the column's own panels are titled, and five h2s under a second
+// visible h1 about context would be a document with two outlines.
+templ Context(v httpapi.ContextView) {
+	<section aria-labelledby="context-region-heading">
+		<h1 id="context-region-heading" data-focus-target class="sr-only">Context for { v.Card.Title }</h1>
+		@ContextPanels(contextDataOf(v))
+	</section>
+}
+
+// relatedPanel is the pages-this-one panel.
+//
+// It is omitted rather than shown empty for the same reason the campaign panel
+// omits what a reader may not see: a panel that is always present and always
+// empty teaches a reader to stop reading panels.
+templ relatedPanel(cards []httpapi.PageCard) {
+	<section aria-labelledby="related-heading">
+		<h2 id="related-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+			@Icon("i-book", "h-4 w-4")
+			Related
+		</h2>
+		<ul class="mt-2 space-y-1">
+			for _, card := range cards {
+				<li>
+					<a href={ card.Href() } class="text-sm hover:underline">{ card.Title }</a>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+// CampaignStatusPanel is the campaign-wide panel of the right column.
+//
+// It is field-level authorized, and the shape of the rule is the whole point: a
+// field the reader may not see is omitted, not blanked, not locked, not replaced
+// with a row of dashes. A player sees a smaller panel rather than the same panel
+// with holes in it, and a hole is a disclosure — a locked row says there is
+// something behind it, and its height says how much.
+//
+// The one number the panel shows that it does not also list is ThreadCount, and
+// it is the count from the identical query rather than the length of the window
+// below it. A badge that disagrees with its own list is the existence leak
+// AGENTS.md §2.4 is about.
+templ CampaignStatusPanel(status httpapi.CampaignStatus) {
+	<section aria-labelledby="campaign-status-heading" class="card">
+		<h2 id="campaign-status-heading" class="card-heading">Campaign status</h2>
+		<div class="space-y-4">
+			if status.Session != nil {
+				@sessionPanel(status.Session)
+			}
+			if status.ThreadCount > 0 {
+				@threadsPanel(status.Threads, status.ThreadCount)
+			}
+			if len(status.LastActivity) > 0 {
+				@lastActivityPanel(status.LastActivity)
+			}
+			if len(status.Party) > 0 {
+				@partyPanel(status.Party)
+			}
+			@systemPanel(status.SystemNote)
+		</div>
+	</section>
+}
+
+// sessionPanel is the current session, or nothing at all.
+//
+// The number is the author's own, from the file's frontmatter, and a file that
+// declares none is shown as "Session log" rather than as "Session 0": a zero
+// there would be a fact about the file that the reader cannot check and that the
+// panel has no business asserting.
+templ sessionPanel(s *httpapi.SessionRef) {
+	<div data-status-field="session">
+		<h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Current session</h3>
+		<p class="mt-1 text-sm">
+			<a href={ s.Card.Href() } class="font-medium hover:underline">
+				if s.Number > 0 {
+					{ "Session " + itoa(s.Number) }
+				} else {
+					Session log
+				}
+			</a>
+			if s.Date != "" {
+				<span class="text-neutral-500 dark:text-neutral-400">· { s.Date }</span>
+			}
+		</p>
+	</div>
+}
+
+// threadsPanel is the closure queue: the open threads, newest first.
+//
+// The badge is the count over the whole predicate and the list is a window onto
+// it, so the two are rendered from different fields on purpose. Reading the
+// count off the list would make the panel claim that a page the reader may see
+// is the only one there is.
+templ threadsPanel(threads []httpapi.PageCard, count int) {
+	<div data-status-field="threads">
+		<h3 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+			Active threads
+			<span class="badge" data-count-for="threads">{ itoa(count) }</span>
+		</h3>
+		if len(threads) == 0 {
+			<p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">None of the open threads are pages you may read.</p>
+		} else {
+			<ul class="mt-1 space-y-1">
+				for _, thread := range threads {
+					<li>
+						<a href={ thread.Href() } class="text-sm hover:underline">{ thread.Title }</a>
+					</li>
+				}
+			</ul>
+		}
+	</div>
+}
+
+// lastActivityPanel is the most recently changed pages, other than this one.
+templ lastActivityPanel(cards []httpapi.PageCard) {
+	<div data-status-field="last-activity">
+		<h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Last activity</h3>
+		<ul class="mt-1 space-y-1">
+			for _, card := range cards {
+				<li>
+					<a href={ card.Href() } class="text-sm hover:underline">{ card.Title }</a>
+				</li>
+			}
+		</ul>
+	</div>
+}
+
+// partyPanel is the character sheets, with their owners.
+//
+// A member's Note is the system plugin's one-liner and is empty until a plugin
+// fills it, so an empty note is omitted rather than rendered as an empty line: a
+// blank row under a character's name is a thing the reader will ask about and
+// there is nobody to answer.
+templ partyPanel(members []httpapi.PartyMember) {
+	<div data-status-field="party">
+		<h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Party</h3>
+		<ul class="mt-1 space-y-1">
+			for _, member := range members {
+				<li>
+					<a href={ member.Card.Href() } class="text-sm hover:underline">{ member.Card.Title }</a>
+					if member.Owner != "" {
+						<span class="text-xs text-neutral-500 dark:text-neutral-400">· { member.Owner }</span>
+					}
+					if member.Note != "" {
+						<p data-party-note class="text-xs text-neutral-500 dark:text-neutral-400">{ member.Note }</p>
+					}
+				</li>
+			}
+		</ul>
+	</div>
+}
+
+// systemPanel is the plugin layer's slot.
+//
+// It always renders something, and what it renders is either the plugin's
+// contribution or the host's sentence about there not being one. Never nothing:
+// a slot that is empty when the plugin is absent and also empty when the plugin
+// contributed nothing is a slot nobody can trust.
+templ systemPanel(note string) {
+	<div data-status-field="system">
+		<h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Game system</h3>
+		if note != "" {
+			<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{ note }</p>
+		} else {
+			@EmptyState("No game system", Text(hostSystemNote))
+		}
+	</div>
+}

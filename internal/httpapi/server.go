@@ -143,6 +143,21 @@ type Server struct {
 	root string
 	// campaign is the vault directory's name.
 	campaign string
+
+	// streams is the live-update registry, and it is a field rather than a
+	// package-level map keyed by *Server.
+	//
+	// It was a map for a while, and the map was a workaround for this file not
+	// being writable at the time, not a design: AGENTS.md §4 says no global
+	// mutable state, and a map keyed by a pointer to a Server is a global that
+	// happens to be tidy. It is a field now.
+	//
+	// It is built eagerly in New rather than lazily on the first stream,
+	// because a registry that appears the first time somebody opens a stream
+	// means a boot report cannot count what is open, and counting what is open
+	// before the first request is the only version of the question worth asking.
+	// The bus subscription it makes is one closure, and Shutdown releases it.
+	streams *Events
 }
 
 // New builds a Server. It returns an error rather than a Server with a nil
@@ -185,7 +200,7 @@ func New(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: the secrets service: %w", err)
 	}
-	return &Server{
+	srv := &Server{
 		cfg:      opts.Config,
 		db:       opts.DB,
 		auth:     accounts,
@@ -207,7 +222,29 @@ func New(opts Options) (*Server, error) {
 		authorRetryer: opts.AuthorRetryer,
 		root:          opts.DB.Vault(),
 		campaign:      campaignName(opts.DB.Vault()),
-	}, nil
+	}
+	// Built here rather than on the first stream, so that the boot report can
+	// count open streams on a server that has served none yet.
+	srv.streams = newEvents(srv)
+	return srv, nil
+}
+
+// Shutdown releases everything this server owns that outlives a request.
+//
+// The one thing that needs it is the live-update registry, and the reason is
+// that http.Server.Shutdown does not know about it: an SSE stream is a request
+// that has not finished, so Shutdown waits for it, and a stream that waits for a
+// shutdown is a shutdown that waits for ever. Closing the registry first tells
+// every subscriber to finish, which is what lets the HTTP shutdown reach its
+// deadline instead of hitting it.
+//
+// The bus subscription the registry made is released here too, so a server that
+// is stopped and then dropped leaves nothing running.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.streams == nil {
+		return nil
+	}
+	return s.streams.Shutdown(ctx)
 }
 
 // Handler returns the fully wrapped handler: the route table behind the

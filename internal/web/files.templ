@@ -1,0 +1,94 @@
+package web
+
+import (
+	"encoding/hex"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// dirSignal is the DataStar signal that holds one directory's expanded state.
+//
+// The path is hex-encoded rather than slugged into a name. A slug is lossy —
+// Area/Ruin and Area-Ruin would share one signal, and a reader who opened one
+// would open the other — and the cost of getting it wrong is a tree that lies
+// about which directory is open, which is worse than an unreadable attribute.
+//
+// One signal per directory rather than one for the whole tree is what lets a
+// reader open two directories and leave them open across a page render.
+func dirSignal(path string) string {
+	return "$_open_" + hex.EncodeToString([]byte(path))
+}
+
+// Files is the vault as a tree, at /files.
+templ Files(v httpapi.FilesView) {
+	<section aria-labelledby="files-heading">
+		<h1 id="files-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Files</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			{ itoa(v.PageCount) } { plural(v.PageCount, "page", "pages") } you may read, in the folders the vault holds them in.
+		</p>
+		@FileTree(v.Tree)
+	</section>
+}
+
+// FileTree is the whole vault as a nested list of links.
+//
+// Every page is an ordinary anchor and every directory is an ordinary button
+// over an ordinary list, so with JavaScript blocked the tree is a fully expanded
+// list of links and the reader loses nothing but the collapsing. Collapsing is
+// the enhancement; the tree is the document.
+templ FileTree(node httpapi.FileNode) {
+	<ul id="page-tree" data-roving class="file-tree" aria-label="Files">
+		@fileEntries(node)
+	</ul>
+}
+
+// fileEntries is one node's contents: subdirectories first, then the pages the
+// node holds itself. A node that is a directory may also hold pages directly,
+// and rendering both is what stops a page at the root of the vault from
+// disappearing.
+templ fileEntries(node httpapi.FileNode) {
+	for _, child := range node.Children {
+		@fileDirectory(child)
+	}
+	for _, page := range node.Pages {
+		@filePage(page)
+	}
+}
+
+// fileDirectory is one folder, collapsed by a client signal.
+//
+// aria-expanded is bound to the same signal as the visibility, so the state a
+// screen reader is told and the state on the screen cannot disagree.
+//
+// A directory carries no count and no timestamp. FileNode has no field for
+// either, on purpose: a count in a sidebar is a number whose derivation a reader
+// cannot check, and a count that disagrees with a list somewhere else is an
+// existence leak wearing a number. Inventing one here from the rendered list
+// would reintroduce exactly that.
+templ fileDirectory(node httpapi.FileNode) {
+	<li class="file-dir" data-dir={ node.Path }>
+		<button
+			type="button"
+			class="file-dir-toggle"
+			aria-expanded="false"
+			data-attr:aria-expanded={ dirSignal(node.Path) + " ? 'true' : 'false'" }
+			data-on:click={ dirSignal(node.Path) + " = !" + dirSignal(node.Path) }
+		>
+			@Icon("i-chevron-right", "h-3 w-3 shrink-0 opacity-70")
+			<span class="file-dir-name">{ node.Name }</span>
+		</button>
+		<ul class="file-children" data-show={ dirSignal(node.Path) }>
+			@fileEntries(node)
+		</ul>
+	</li>
+}
+
+// filePage is one page, as a link.
+templ filePage(page httpapi.PageCard) {
+	<li class="file-page">
+		<a href={ page.Href() } data-page={ page.Path } class="file-page-link">
+			@Icon("i-book", "h-3 w-3 shrink-0 opacity-70")
+			<span>{ page.Title }</span>
+		</a>
+	</li>
+}

@@ -364,13 +364,19 @@ test asserts that no rendered page contains a remote asset reference.
 
 ---
 
-## 6. What stage 1 delivers, and what is not built yet
+## 6. What stages 1 and 2 deliver, and what is not built yet
 
 Stage 1 is the plan's **P0–P3 and P6** — every package in the module, from
 `cmd/semiplane` to `internal/web`. It is one binary that boots, takes the vault
 lock, indexes Markdown, authenticates a real account, and serves a page — with
 its table of contents, its backlinks, its tags and its secret boxes,
 authorization-filtered.
+
+Stage 2 is **P4 and P5**: the navigation surfaces and the shell around them. It
+added `GET /tags`, `GET /tag/{name}`, `GET /files`,
+`GET /api/pages/{id}/context`, `GET /_/commands` and `GET /_/events`; nine
+`store` queries behind them; the three-column layout with its campaign-status
+panel; and the live-update stream.
 
 Delivered and enforced today:
 
@@ -386,16 +392,19 @@ Delivered and enforced today:
 | Accounts, Argon2id, sessions, invites, CSRF | [`../internal/auth/`](../internal/auth/) |
 | The policy and the canonical predicate | [`../internal/authz/`](../internal/authz/) |
 | Router, middleware chain, route table, view models, negotiation | [`../internal/httpapi/`](../internal/httpapi/), [`../internal/web/`](../internal/web/) |
+| The tag, file-tree, related and campaign-status queries | [`../internal/store/tree.go`](../internal/store/tree.go), [`../internal/store/campaign.go`](../internal/store/campaign.go) |
+| The navigation handlers, the context endpoint and the palette | [`../internal/httpapi/tags.go`](../internal/httpapi/tags.go), [`files.go`](../internal/httpapi/files.go), [`context.go`](../internal/httpapi/context.go), [`commands.go`](../internal/httpapi/commands.go) |
+| The live-update stream: registry, coalescing window, buffer bound, caps, authorization termination | [`../internal/httpapi/events.go`](../internal/httpapi/events.go) |
+| The shell: three columns, campaign status, file tree, tag surfaces, palette, the component library | [`../internal/web/`](../internal/web/) |
+| The keyboard model, the region-swap protocol, roving tabindex, the typeahead | [`../web/static/app.js`](../web/static/app.js) |
 | Composition root, boot order, one-shot commands, CLI | [`../internal/app/`](../internal/app/), [`../cmd/semiplane/`](../cmd/semiplane/) |
 
 **Not built. Treat every row as a proposal, not as behaviour.** The plan's
-remaining phases are P4 (tags/file tree surfaces beyond the dashboard), P5 (the
-full UI shell, the campaign-status panel, live push), P7's remaining surfaces
-(the reveal/revoke *controls* and the admin audit view — the write path itself
-is built), P8 (the editor, revisions, renames through the app, the bulk link
-updater, the attachment-serve route), P9a/P9b (the plugin registry, the host
-implementation, the reserved-name table, the example plugins), P10 (the VTT) and
-P12.
+remaining phases are P7's remaining surfaces (the reveal/revoke *controls* and
+the admin audit view — the write path itself is built), P8 (the editor, revisions,
+renames through the app, the bulk link updater, the attachment-serve route),
+P9a/P9b (the plugin registry, the host implementation, the reserved-name table,
+the example plugins), P10 (the VTT) and P12.
 
 Concretely absent from the tree, so that nobody goes looking:
 
@@ -403,7 +412,9 @@ Concretely absent from the tree, so that nobody goes looking:
   interface, the `Kind`, the capabilities, the `Descriptor`. There is no
   `reserved.go`, no registry, no `Host` implementation, and
   `internal/systems/core` and `internal/systems/dnd5e` are a `doc.go` each.
-  `TestNoPluginSwitchInCore` skips while the registry is empty.
+  `TestNoPluginSwitchInCore` skips while the registry is empty. The sidebar
+  renders **no** plugin group at all for the same reason: an empty heading is a
+  heading nobody reads, and a group whose entries 404 is worse.
 - **No sample campaign.** `internal/sample` is a `doc.go`; the embedded
   campaign and its first-boot extraction are not written. The leak suite runs
   against a harness-seeded vault instead.
@@ -411,15 +422,37 @@ Concretely absent from the tree, so that nobody goes looking:
   the indexer writes none, because `md` yields attachment *names* with no mime
   or size, and inventing a sniffing table would be worse than leaving it to the
   page route's phase.
-- **No `/_/events`, no SSE, no live push.** `sync.Bus` is built and has no
-  subscriber.
 - **No editor, no reveal/revoke route, no `/admin`, no plugin routes.** The route
-  table has fourteen entries over eleven distinct patterns, and they are all in
+  table has twenty entries over seventeen distinct patterns, and they are all in
   §5 above.
-- **No DataStar binding.** The bundle is vendored and served, and the server
-  answers a fragment, but no template emits a `data-on:` attribute and
-  `app.js` selects `[data-on:click]`, so **every navigation in stage 1 is a
-  full page load.** That is the plan's §4.1 default column, not a gap.
+- **No edit affordance anywhere**, and that is a decision rather than an
+  omission. `app.js` implements the `e` key by looking for a `data-edit-href`
+  attribute; nothing renders one, because `/p/{path}/edit` does not exist until
+  P8. An affordance for a route that answers 404 is a control that lies, and
+  hiding it with CSS would leave it in the document for a crawler and for the
+  keyboard.
+- **No DataStar `@get` action is used.** The bundle is vendored and served, and
+  the server still answers a fragment for `Datastar-Request: true`, but the
+  palette's live search is a plain `fetch` in `app.js` — the reason is in
+  `internal/httpapi/datastar.go` and in [`pitfalls.md`](pitfalls.md), and it is
+  not a gap so much as a decision made against a contract that could not be
+  verified from outside. `/_/commands` is a **real page** for the same reason
+  every navigation is: the rows are links.
+
+### Two things stage 2 changed outside its own files
+
+- **`auth.Service.Destroy` and `store.AddPageOwner`/`RemovePageOwner` now bump
+  `authz_generation`.** They did not, and the omission was a live authorization
+  gap rather than a missing feature: a live-push stream captures its principal at
+  connect time and re-renders under it, so a sign-out that did not bump the
+  counter left a signed-out reader receiving content the server would now refuse
+  to serve, and a revoked page ownership left the former owner receiving that
+  page's `private` secrets. Nothing downstream re-checks — that is the design.
+  [`../internal/auth/signout_test.go`](../internal/auth/signout_test.go) pins it.
+- **`TestNoOutboundNetwork` has one per-file exemption.** The live-push path
+  builds a synthetic `http.Request` to call the ordinary handler with a
+  subscriber's principal, and the grep could not tell that apart from a client.
+  The exemption is held by `TestSyntheticRequestFilesAreStillOnlySynthetic`.
 
 ---
 

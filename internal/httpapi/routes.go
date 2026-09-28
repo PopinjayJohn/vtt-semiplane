@@ -83,6 +83,27 @@ func (s *Server) Routes() []Route {
 		{Method: http.MethodGet, Pattern: "/search", Perm: authz.PermAnonRead, Handle: s.searchPage},
 		{Method: http.MethodGet, Pattern: "/api/search", Perm: authz.PermAnonRead, Handle: s.searchAPI},
 
+		{Method: http.MethodGet, Pattern: "/tags", Perm: authz.PermAnonRead, Handle: s.tagsPage},
+		{Method: http.MethodGet, Pattern: "/tag/{name}", Perm: authz.PermAnonRead, Handle: s.tagPage},
+		{Method: http.MethodGet, Pattern: "/files", Perm: authz.PermAnonRead, Handle: s.filesPage},
+
+		// The one call a page view needs for its whole context column: the table
+		// of contents, the backlinks, the related pages and the campaign status
+		// in a single round trip. Four routes would have been four authorizations
+		// and four chances for one of them to be answered under a different rule
+		// than the other three.
+		{Method: http.MethodGet, Pattern: "/api/pages/{id}/context", Perm: authz.PermReadPage, Handle: s.pageContextAPI},
+
+		// The command palette's data source. It is PermSession rather than
+		// PermAnonRead because every row it returns is a destination inside the
+		// campaign, and an anonymous reader with anonymous read on has the
+		// campaign already: the palette is an affordance, not a capability.
+		{Method: http.MethodGet, Pattern: "/_/commands", Perm: authz.PermSession, Handle: s.commandsAPI},
+
+		// The live-update stream. See events.go for why it carries a trigger and
+		// never content.
+		{Method: http.MethodGet, Pattern: "/_/events", Perm: authz.PermSession, Handle: s.events},
+
 		{Method: http.MethodGet, Pattern: "/healthz", Perm: PermNone, Handle: s.healthz},
 		{Method: http.MethodGet, Pattern: "/readyz", Perm: PermNone, Handle: s.readyz},
 

@@ -449,6 +449,13 @@ type call struct {
 	noCSRF  bool
 	badCSRF bool
 	headers map[string]string
+	// timeout bounds the whole request, body included. It exists for the routes
+	// whose response never ends: /_/events holds its connection open and writes
+	// only when something changes, so a client that reads to EOF waits for ever.
+	// The status line is written before the stream begins, so a deadline is
+	// enough to assert on the authorization decision — which is all the matrix
+	// asks of that route — without the test hanging on the body.
+	timeout time.Duration
 }
 
 // get starts a GET.
@@ -549,7 +556,13 @@ func (s *session) send(c *call) *http.Response {
 		reader = strings.NewReader(c.form.Encode())
 		c.ctype = "application/x-www-form-urlencoded"
 	}
-	req, err := http.NewRequestWithContext(context.Background(), c.method, s.fx.HTTP.URL+c.path, reader)
+	ctx := context.Background()
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, c.method, s.fx.HTTP.URL+c.path, reader)
 	if err != nil {
 		s.t.Fatalf("build the request: %v", err)
 	}

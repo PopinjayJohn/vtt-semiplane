@@ -139,9 +139,86 @@ rather than a returned error.
   index time is shown to nobody — fail-closed, never a leak — but it stays
   invisible until a full reindex if that second call is missing.
 
+## A `templ`/`DataStar` pair that looks wired and is not
+
+Two of stage 2's integrations were built against a vendored DataStar bundle
+(v1.0.4, in `web/static/vendor/`) and were silently wrong. Both fail *quietly*:
+the element is never replaced, nothing is logged, and the feature simply does
+nothing.
+
+- **An `application/json` response is a signals patch, not a render.** The bundle
+  branches on the response content type before anything else and dispatches
+  `datastar-patch-signals`, merging the body into the reactive signal store. A
+  command palette returning its rows as JSON therefore did not render a palette
+  — it wrote every matched page's *title* into the document's signal state,
+  where any signal expression can read it.
+- **`datastar-patch-elements` cannot be written from outside with confidence.**
+  Its reader joins every `data:` line of the SSE frame into one message with a
+  **space**, then splits that message on newlines. A frame of three `data:` lines
+  therefore arrives as a single field named `selector` whose value is the rest of
+  the frame, and the client patches with the string ` mode inner elements
+  <section…`. There is no header-based targeting in 1.0 either —
+  `datastar-selector` and `datastar-mode` do not exist in this bundle at all.
+
+The command palette therefore uses a plain `fetch` and a `DOMParser`
+(`web/static/app.js`, `wireTypeaheads`), against a `?fragment=1` query parameter
+the server answers with `text/html`. The bytes still come from the same templ
+component through the same authorized handler under the same principal; only the
+envelope is ours, and the envelope is the part that is guesswork. The reasoning
+lives at the top of `internal/httpapi/datastar.go` and
+`TestTheVendoredDataStarStillRoutesJSONToSignals` fails if a dependency bump
+removes the branch that motivated it.
+
+The general lesson is the one this repository has already paid for twice: a
+contract you cannot verify from the outside is a contract you have guessed, and a
+guessed contract that only fails by not happening is the most expensive kind.
+
+## `gofmt` does not run on `.templ`, and a stray tab silently breaks generation
+
+A `templ` file's declarations belong at column 0. One tab in front of a single
+`templ` declaration makes `templ generate` fail with a Go parser error reading
+`expected declaration, found templ` — a message that points at Go syntax inside a
+file that is not Go, and at a line number that has nothing to do with the cause.
+
+Two habits that would have caught it:
+
+- **`gofmt -l .` covers `.go` only.** A `.templ` file is not valid Go, so gofmt
+  leaves it alone and reports nothing, clean or not. `make fmt-check` is the gate
+  for those, and it is `go tool templ fmt -fail .`.
+- **`templ fmt` is the formatter, and it is not `templ fmt -check`.** v0.3.1020
+  spells it `-fail`. The old `fmt-check` used `-check`, which printed a usage
+  error to stderr for every file it was handed; the shell test then read that
+  output as "unformatted templ" and the gate was red on a clean tree for a reason
+  nobody could see.
+
+## A document must not describe what the code already owns — but a finding is not a fact
+
+Stage 2 produced two findings that are worth recording because they are *not*
+things a reader of the code would find:
+
+- `TestNoOutboundNetwork` refused `http.NewRequestWithContext` in
+  `internal/httpapi/events.go`, where it builds a synthetic request to call the
+  ordinary handler with a subscriber's captured principal. The grep was
+  over-broad: a request constructor is not a client. Rather than delete the
+  symbol from the list, the exemption is granted **per file** and held by
+  `TestSyntheticRequestFilesAreStillOnlySynthetic`, which requires the file to
+  name the RFC 2606 reserved host `push.invalid` and to contain no client symbol
+  at all.
+- The matrix row for `GET /tag/{name}` on a tag nobody carries expects **200 with
+  no rows, not 404**. A 404 would tell a reader without rights to the tag's pages
+  that the tag does not exist, which is a statement about the campaign they are
+  not entitled to.
+
 ## Tooling that has never run here
 
-`make lint` — golangci-lint is not installed on this machine and is not
-fetchable. CI runs it. The gates that do work here are `go build ./...`,
+`make lint` runs `golangci-lint` from `$(go env GOPATH)/bin`, which is **not on
+`PATH` by default** — `make lint` fails with `command not found` on a healthy
+tree. Export the path first. With it on `PATH` the run is clean against the
+committed baseline; the working tree adds a handful of findings in test files,
+which is recorded in the stage 2 summary rather than left to be discovered.
+
+CI runs it. The gates that do work here are `go build ./...`,
 `go vet ./...`, `gofmt -l .`, `go tool templ generate ./...` reporting
-`updates=0`, and `./scripts/test.sh`. Do not report lint as passing.
+`updates=0`, `go tool templ fmt -fail .`, and `./scripts/test.sh`. Do not report
+lint as passing when it did not run.
+

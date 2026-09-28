@@ -1,8 +1,16 @@
 package web
 
-import (
-	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
-)
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+
+// shellGrid is the three-column layout the plan's diagram describes: 260px of
+// campaign navigation, the content at minmax(0, 1fr) and capped at a readable
+// measure, and 320px of context.
+//
+// The breakpoints are the stylesheet's, and only the class names are named here.
+// minmax(0, 1fr) rather than 1fr because a grid track's default minimum is the
+// content's, and one long unbroken word in a rendered page would otherwise push
+// the whole layout wider than the viewport.
+const shellGrid = "grid h-dvh overflow-hidden grid-cols-1 xl:grid-cols-[260px_minmax(0,1fr)_320px]"
 
 // RegionDoc is the swappable region on its own.
 type RegionDoc struct {
@@ -21,6 +29,10 @@ type RegionDoc struct {
 // the tabindex have to agree between the two: a morph that swapped in a
 // differently-identified element would work once, and then the next response
 // would look for an id that is no longer in the document.
+//
+// The id is also the whole of the swap protocol. DataStar replaces the element
+// the response names by id when the server sends no selector, so this is the
+// one string the client's region lookup and the server's fragment share.
 templ RegionView(region RegionDoc) {
 	<div id="page-region" tabindex="-1">
 		@region.Body
@@ -36,19 +48,28 @@ type Doc struct {
 	Shell httpapi.Shell
 	// Body is the content region, the same component a fragment renders.
 	Body templ.Component
+	// Context is the right column's data. It is on Doc rather than inside Body
+	// because the column is chrome: the same panels are on every view, and a view
+	// that carries none of them still gets the column, because a column that
+	// appears and disappears is a layout that reflows under the reader.
+	Context ContextData
 }
 
-// Layout is the shell: the head, the masthead, the primary navigation, the main
-// region, and the footer.
+// Layout is the shell: the head, the chrome bar, the three columns, the footer
+// and the two dialogs.
 //
 // It is server-rendered and there is no client-side framework. Every landmark is
 // a real element with an accessible name, the skip link is the first focusable
-// thing in the document, and the main region carries the id that an in-place
-// navigation replaces — so the same markup is a complete page on a first
-// request and a complete region on a fragment request.
+// thing in the document, and exactly one h1 exists per page — the content's,
+// because the columns are chrome and chrome is not allowed to compete with the
+// page for a document's first-level heading.
+//
+// The grid is named rather than configured here: the class names below are the
+// hooks web/src/input.css keys its breakpoints off, and the drawer state is a
+// client signal bound with data-show, so opening a sidebar costs no request.
 templ Layout(doc Doc) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang="en" class="dark-forced" data-print="safe">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -60,81 +81,294 @@ templ Layout(doc Doc) {
 			<script defer type="module" src="/_/assets/vendor/datastar.js"></script>
 			<script defer src="/_/assets/app.js"></script>
 		</head>
-		<body class="min-h-screen">
+		<body class="flex min-h-dvh flex-col">
+			// First element in the body, and the only thing a keyboard reader has
+			// to press Tab once to reach. It points at the content region rather
+			// than at the whole document, so the skip lands on the thing being read.
 			<a
-				href="#main"
+				href="#content"
 				class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:bg-neutral-900 focus:px-3 focus:py-2 focus:text-neutral-50"
 			>
 				Skip to content
 			</a>
-			<header class="border-b border-neutral-200 dark:border-neutral-800">
-				<div class="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-3">
-					<a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
-						@Icon("i-d20", "h-6 w-6 text-accent-600")
-						<span>{ doc.Shell.Campaign }</span>
-					</a>
-					@Nav(doc.Shell)
-					<form action="/search" method="get" role="search" class="ml-auto flex items-center gap-2" data-search>
-						<label for="q" class="sr-only">Search the campaign</label>
-						<input
-							id="q"
-							name="q"
-							type="search"
-							placeholder="Search"
-							autocomplete="off"
-							class="w-40 rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
-						/>
-						<button type="submit" class="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700">
-							@Icon("i-search", "h-4 w-4")
-							<span class="sr-only">Search</span>
-						</button>
-					</form>
-				</div>
-			</header>
-			<main id="main" class="mx-auto max-w-6xl px-4 py-6">
-				@RegionView(RegionDoc{Shell: doc.Shell, Body: doc.Body})
-			</main>
-			<footer class="mx-auto max-w-6xl px-4 pb-8 pt-4 text-xs text-neutral-500 dark:text-neutral-400">
-				<p>
-					Semiplane — the Markdown files in this vault are the campaign. Nothing here edits them behind your back.
-				</p>
-				if doc.Shell.Dev {
-					<p class="mt-1 font-semibold text-secret">Development mode: rate limiting is off.</p>
-				}
-			</footer>
+			@Header(doc.Shell, !doc.Context.Empty())
+			<div id="shell" class={ shellGrid } { shellAttributes(doc.Shell)... }>
+				@LeftNav(doc.Shell)
+				<main
+					id="content"
+					tabindex="-1"
+					class="col-start-1 row-start-1 min-w-0 overflow-y-auto px-4 py-6 focus:outline-none"
+				>
+					@RegionView(RegionDoc{Shell: doc.Shell, Body: doc.Body})
+				</main>
+				<aside
+					id="context"
+					aria-label="Context"
+					class="drawer drawer-right overflow-y-auto px-4 py-6"
+					data-drawer="right"
+					data-show="$_rightOpen"
+				>
+					@ContextPanels(doc.Context)
+				</aside>
+			</div>
+			@Footer(doc.Shell)
+			@Palette(doc.Shell)
+			@Shortcuts()
 		</body>
 	</html>
 }
 
-// Nav is the primary navigation.
-templ Nav(shell httpapi.Shell) {
-	<nav aria-label="Primary" class="flex items-center gap-1 text-sm">
-		<a
-			href="/"
-			class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-		>
-			@Icon("i-book", "mr-1 inline h-4 w-4")
-			Campaign
-		</a>
-		if shell.Principal.Authenticated() {
-			<form action="/logout" method="post" class="ml-2">
-				@CSRFInput(shell.CSRF)
-				<button
-					type="submit"
-					class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-				>
-					@Icon("i-logout", "mr-1 inline h-4 w-4")
-					Sign out
+// Header is the chrome bar: the campaign badge, the search box, the vault's sync
+// state, the two sidebar toggles, the palette and shortcut triggers, and the
+// user menu.
+//
+// hasContext decides whether the right-hand toggle exists at all. A view model
+// that carries no page and no campaign state — a search form, a command list —
+// gives the context column nothing to hold, and a toggle that opens an empty
+// panel is a control with nothing behind it, which AGENTS.md §7 names as a bug
+// rather than a cosmetic one. The column itself is always in the markup, because
+// a grid that reflows when a control appears is its own kind of wrong.
+templ Header(shell httpapi.Shell, hasContext bool) {
+	<header class="shell-header border-b border-neutral-200 dark:border-neutral-800">
+		<div class="flex items-center gap-2 px-3 py-2">
+			<button
+				type="button"
+				class="btn-icon lg:hidden"
+				aria-label="Campaign navigation"
+				aria-controls="left-nav"
+				aria-expanded="false"
+				data-drawer-toggle="left"
+				data-attr:aria-expanded="$_leftOpen ? 'true' : 'false'"
+				data-on:click="$_leftOpen = !$_leftOpen"
+			>
+				@Icon("i-menu", "h-5 w-5")
+				<span class="sr-only">Campaign navigation</span>
+			</button>
+			<a href="/" class="flex shrink-0 items-center gap-2 font-semibold tracking-tight">
+				@Icon("i-d20", "h-6 w-6 text-accent-600")
+				<span>{ shell.Campaign }</span>
+			</a>
+			// The field is not the one on /search: a search page renders its own
+			// full-width input, and two elements with one id on one page is one id
+			// the label points at the wrong element of. There is no loading
+			// indicator here because this form navigates rather than fetching, and
+			// an indicator on a submit button would be a spinner for a page load
+			// the browser is already showing.
+			<form action="/search" method="get" role="search" data-search class="ml-2 hidden items-center gap-2 sm:flex">
+				<label for="header-q" class="sr-only">Search the campaign</label>
+				<input
+					id="header-q"
+					name="q"
+					type="search"
+					placeholder="Search"
+					autocomplete="off"
+					class="w-40 rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+				/>
+				<button type="submit" class="btn-icon" aria-label="Search">
+					@Icon("i-search", "h-4 w-4")
+					<span class="sr-only">Search</span>
 				</button>
 			</form>
-		} else {
-			<a
-				href="/login"
-				class="rounded px-2 py-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-			>
-				Sign in
-			</a>
-		}
+			<div class="ml-auto flex items-center gap-2">
+				<p
+					id="sync-status"
+					data-attribute="sync-status"
+					aria-live="polite"
+					class="hidden text-xs text-neutral-500 md:block dark:text-neutral-400"
+				>
+					<span class="sr-only">Vault sync: </span>
+					<span data-sync-state>Up to date</span>
+				</p>
+				if shell.Principal.Authenticated() {
+					<button
+						type="button"
+						class="btn-icon"
+						aria-label="Command palette"
+						aria-controls="palette"
+						aria-expanded="false"
+						data-opens="palette"
+						data-attr:aria-expanded="$openPalette ? 'true' : 'false'"
+						data-on:click="$openPalette = true"
+					>
+						@Icon("i-command", "h-5 w-5")
+						<span class="sr-only">Command palette</span>
+					</button>
+				}
+				<button
+					type="button"
+					class="btn-icon"
+					aria-label="Keyboard shortcuts"
+					aria-controls="shortcuts"
+					aria-expanded="false"
+					data-opens="shortcuts"
+					data-attr:aria-expanded="$openShortcuts ? 'true' : 'false'"
+					data-on:click="$openShortcuts = true"
+				>
+					@Icon("i-keyboard", "h-5 w-5")
+					<span class="sr-only">Keyboard shortcuts</span>
+				</button>
+				if hasContext {
+					<button
+						type="button"
+						class="btn-icon xl:hidden"
+						aria-label="Page context"
+						aria-controls="context"
+						aria-expanded="false"
+						data-drawer-toggle="right"
+						data-attr:aria-expanded="$_rightOpen ? 'true' : 'false'"
+						data-on:click="$_rightOpen = !$_rightOpen"
+					>
+						@Icon("i-panel-right", "h-5 w-5")
+						<span class="sr-only">Page context</span>
+					</button>
+				}
+				@UserMenu(shell)
+			</div>
+		</div>
+	</header>
+}
+
+// UserMenu is the account control, and a real form when there is a session to
+// end.
+templ UserMenu(shell httpapi.Shell) {
+	if shell.Principal.Authenticated() {
+		<form action="/logout" method="post" class="contents">
+			@CSRFInput(shell.CSRF)
+			<button type="submit" class="btn-icon" aria-label="Sign out">
+				@Icon("i-logout", "h-5 w-5")
+				<span class="sr-only">Sign out</span>
+			</button>
+		</form>
+	} else {
+		<a href="/login" class="btn px-3 py-1.5 text-sm">Sign in</a>
+	}
+}
+
+// LeftNav is the campaign column: the core destinations, in the order the plan
+// puts them.
+//
+// The two groups the plan wraps around them are not here, and the reason is the
+// same for both. The plugin group renders every NavItem from every admitted
+// plugin, and internal/plugin has no registry and no Host implementation yet, so
+// there is nothing to iterate and an empty heading is exactly the broken control
+// AGENTS.md §7 forbids. The Admin group needs a permission the view model does
+// not carry: Shell has the principal, and a template that asks a principal
+// whether it is an administrator is the second place in the codebase answering a
+// question that belongs to the Perm middleware. Both wait for a field the
+// handler fills rather than for a guess made here.
+templ LeftNav(shell httpapi.Shell) {
+	<nav
+		id="left-nav"
+		aria-label="Campaign"
+		class="drawer drawer-left overflow-y-auto px-3 py-4"
+		data-drawer="left"
+		data-show="$_leftOpen"
+	>
+		<ul class="space-y-0.5">
+			@NavItem("/", "i-d20", "Dashboard")
+			// The plan's layout lists both Pages and Files and gives them one
+			// surface between them: the file tree at /files is the only view of
+			// the vault's pages as pages. They are separate entries because the
+			// diagram says so, and they are separate hrefs so that a later surface
+			// can claim one of them without renaming the other.
+			@NavItem("/files", "i-book", "Pages")
+			@NavItem("/tags", "i-tag", "Tags")
+			@NavItem("/files", "i-folder", "Files")
+			@NavItem("/search", "i-search", "Search")
+		</ul>
 	</nav>
 }
 
+// NavItem is one entry in the campaign column.
+//
+// The current entry is not marked here. Which page is open is a property of the
+// URL rather than of the template, and a fragment request did not pass through
+// a template that could have known; app.js sets aria-current from
+// location.pathname, which is the one value both shapes agree on.
+templ NavItem(href, icon, label string) {
+	<li>
+		<a href={ href } class="nav-item">
+			@Icon(icon, "h-4 w-4 shrink-0 opacity-80")
+			<span>{ label }</span>
+		</a>
+	</li>
+}
+
+// Footer says the one thing about the application that is true everywhere.
+templ Footer(shell httpapi.Shell) {
+	<footer class="border-t border-neutral-200 px-4 py-4 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+		<p>
+			Semiplane — the Markdown files in this vault are the campaign. Nothing here edits them behind your back.
+		</p>
+		if shell.Dev {
+			<p class="mt-1 font-semibold text-secret">Development mode: rate limiting is off.</p>
+		}
+	</footer>
+}
+
+// Palette is the command palette, rendered as chrome on every page and filled
+// by a fetch of /_/commands.
+//
+// It holds nothing of its own. The rows are a CommandsView, which is also a
+// page at /_/commands, and the dialog's form points at that page: with
+// JavaScript blocked the palette is a search box that navigates, and the rows it
+// would have shown are the page it navigates to. There is no second list of
+// commands anywhere in the codebase.
+templ Palette(shell httpapi.Shell) {
+	if shell.Principal.Authenticated() {
+		@Dialog("palette", "Command palette", "$openPalette") {
+			<form action="/_/commands" method="get" role="search" data-search class="flex items-center gap-2">
+				<label for="command-q" class="sr-only">Search pages, tags and actions</label>
+				<input
+					id="command-q"
+					name="q"
+					type="search"
+					autocomplete="off"
+					placeholder="Search pages, tags and actions"
+					class="w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+					{ typeaheadAttrs("/_/commands?into=palette&fragment=1&q=")... }
+				/>
+				<span data-busy-label class="sr-only">Loading…</span>
+				<button type="submit" class="btn-icon" aria-label="Search commands">
+					@Icon("i-search", "h-4 w-4")
+					<span class="sr-only">Search commands</span>
+				</button>
+			</form>
+			// The fetch is answered with a datastar-patch-elements event rather
+			// than a body: the vendored bundle has no header-based targeting in
+			// 1.0, and an application/json response is routed to a signals patch
+			// and would write these page titles into the document's reactive
+			// store. The patch replaces the rows below and never the input that
+			// asked for them, which is why `into=palette` and not the whole
+			// component.
+			<div id="palette-results" data-region-target="#palette-results" class="mt-3 max-h-96 overflow-y-auto">
+				@EmptyState("Nothing loaded yet", Text("Type to search the campaign for a page, a tag or an action."))
+			</div>
+		}
+	}
+}
+
+// Shortcuts is the keyboard reference, and it is static text because the keyboard
+// model is not negotiated with the server.
+//
+// A dialog for it rather than a help page because the reader who presses "?" is
+// asking about the page they are on, and a page load to answer that would throw
+// away the thing they are asking about.
+templ Shortcuts() {
+	@Dialog("shortcuts", "Keyboard shortcuts", "$openShortcuts") {
+		@Table("", []string{"Key", "What it does"}, [][]string{
+			{"Ctrl/⌘ + K", "Command palette"},
+			{"/", "Focus the search box"},
+			{"[", "Toggle the left sidebar"},
+			{"]", "Toggle the right sidebar"},
+			{"Esc", "Close any drawer, dialog or palette"},
+			{"?", "This list"},
+			{"g then h", "Go to the dashboard"},
+			{"g then s", "Go to search"},
+			{"g then t", "Go to tags"},
+			{"g then f", "Go to the file tree"},
+			{"e", "Edit the current page, when you may write it"},
+			{"Tab", "Move through the page; the skip link comes first"},
+		})
+	}
+}

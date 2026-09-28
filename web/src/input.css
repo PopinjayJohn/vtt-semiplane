@@ -36,9 +36,44 @@
 @source "../../internal/md/*.go";
 @source "../../web/static/app.js";
 
+/* The dark variant, defined rather than defaulted.
+ *
+ * The default is `prefers-color-scheme` alone, which cannot express a manual
+ * override: a reader who forces light on a dark machine still gets every
+ * `dark:` utility. This definition applies the utilities under either switch,
+ * and the `:not(.light)` exclusion is what makes a forced-light page win on a
+ * dark machine. Without it the two switches are not a pair, they are a race
+ * that the media query always wins.
+ *
+ * The class is on the root element and app.js owns it: it reads the
+ * `semiplane_theme` cookie (`dark` or `light`, absent means follow the OS) on
+ * load, sets `document.documentElement.classList` to hold `dark` or `light`,
+ * and rewrites the cookie when the reader toggles it. `color-scheme` is set
+ * from the same class below, which is what every `light-dark()` token in the
+ * theme block resolves against — so the class and the tokens cannot disagree.
+ * With this file blocked there is no override, and the OS preference is the
+ * whole answer, which is the safe direction to fail.
+ */
+@custom-variant dark {
+	@media (prefers-color-scheme: dark) {
+		&:where(:not(.light), :not(.light *)) {
+			@slot;
+		}
+	}
+	&:where(.dark, .dark *) {
+		@slot;
+	}
+}
+
 /* Design tokens. A ten-step neutral ramp, one accent, and two semantic colours
  * for secret state. Colour is never the only carrier of meaning, so every
- * secret-state style also carries an icon and a text label in the markup. */
+ * secret-state style also carries an icon and a text label in the markup.
+ *
+ * Every colour that has a dark counterpart is written once, as
+ * `light-dark(light, dark)`, which resolves against the element's computed
+ * `color-scheme`. One mechanism, two switches, and no second copy of the dark
+ * values to forget to update: the two rules that set `color-scheme` are the
+ * only place the theme is decided. */
 @theme {
 	--color-neutral-50: oklch(0.985 0.002 250);
 	--color-neutral-100: oklch(0.967 0.003 250);
@@ -60,11 +95,48 @@
 
 	/* A secret the viewer may not read. Always paired with a lock icon and a
 	 * text label; the colour is reinforcement, never the message. */
-	--color-secret: oklch(0.55 0.13 25);
-	--color-secret-soft: oklch(0.95 0.03 25);
+	--color-secret: light-dark(oklch(0.55 0.13 25), oklch(0.72 0.14 25));
+	--color-secret-soft: light-dark(oklch(0.95 0.03 25), oklch(0.32 0.06 25));
 	/* A secret currently revealed to the table. */
-	--color-revealed: oklch(0.58 0.12 150);
-	--color-revealed-soft: oklch(0.95 0.04 150);
+	--color-revealed: light-dark(oklch(0.58 0.12 150), oklch(0.74 0.13 150));
+	--color-revealed-soft: light-dark(oklch(0.95 0.04 150), oklch(0.3 0.05 150));
+
+	/* The shell's own surfaces. A sticky header, a sheet and a tab bar cannot
+	 * be the body background, because content scrolls under them. */
+	--color-surface: light-dark(oklch(0.985 0.002 250), oklch(0.13 0.01 250));
+	--color-surface-raised: light-dark(oklch(1 0 0), oklch(0.19 0.011 250));
+
+	/* A border that carries meaning — a sheet's edge, a column's separator, a
+	 * scrim's boundary — is neutral-500 in light and neutral-600 in dark, which
+	 * is 4.7:1 and 7.4:1 against its surface. WCAG 1.4.11 wants 3:1 for a
+	 * border that is needed to identify a control, and a sheet edge is one. */
+	--color-rule: light-dark(oklch(0.55 0.012 250), oklch(0.44 0.013 250));
+
+	/* A decorative rule inside prose — under a heading, around a table cell.
+	 * Not a control boundary, so it is the ramp's own soft steps rather than
+	 * the 3:1 rule above. */
+	--color-prose-rule: light-dark(oklch(0.92 0.005 250), oklch(0.26 0.012 250));
+	--color-prose: light-dark(oklch(0.26 0.012 250), oklch(0.92 0.005 250));
+	--color-prose-muted: light-dark(oklch(0.44 0.013 250), oklch(0.85 0.007 250));
+	--color-prose-code: light-dark(oklch(0.967 0.003 250), oklch(0.26 0.012 250));
+	--color-prose-pre: light-dark(oklch(0.967 0.003 250), oklch(0.19 0.011 250));
+	--color-passthrough-rule: light-dark(oklch(0.85 0.007 250), oklch(0.35 0.013 250));
+	--color-passthrough-bg: light-dark(oklch(0.967 0.003 250), oklch(0.19 0.011 250));
+
+	/* Body text, and the one ink every layout rule is measured against.
+	 * 16.9:1 light and 15.2:1 dark: the ramp's soft end is a background, not
+	 * a text colour. */
+	--color-ink: light-dark(oklch(0.19 0.011 250), oklch(0.967 0.003 250));
+
+	/* The focus ring, at 5:1 on the light surface and 9:1 on the dark one.
+	 * WCAG 1.4.11 wants 3:1 for a focus indicator and the ring is the only one
+	 * a keyboard reader has, so it is a token rather than the accent default. */
+	--color-focus: light-dark(oklch(0.53 0.15 265), oklch(0.82 0.09 265));
+
+	/* Shown only while a drawer is open, over content, in both themes: a
+	 * scrim is an occlusion and not a surface, so it does not switch. */
+	--color-scrim: oklch(0.13 0.01 250 / 0.55);
+	--color-scrollbar: light-dark(oklch(0.55 0.012 250), oklch(0.44 0.013 250));
 
 	--font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
 		"Helvetica Neue", Arial, "Noto Sans", sans-serif;
@@ -72,37 +144,38 @@
 		"Liberation Mono", monospace;
 }
 
-@variant dark {
-	--color-secret: oklch(0.72 0.14 25);
-	--color-secret-soft: oklch(0.32 0.06 25);
-	--color-revealed: oklch(0.74 0.13 150);
-	--color-revealed-soft: oklch(0.3 0.05 150);
-}
-
 @layer base {
-	/* Focus is always visible, and never removed without a replacement. */
+	/* Focus is always visible, and never removed without a replacement. This
+	 * is `focus-visible:outline-2 focus-visible:outline-offset-2` written
+	 * once, globally, rather than repeated on every focusable thing in the
+	 * markup — a rule that has to be remembered at every call site is a rule
+	 * that will be missed at one. */
 	:focus-visible {
-		outline: 2px solid var(--color-accent-500);
+		outline: 2px solid var(--color-focus);
 		outline-offset: 2px;
 	}
 
 	html {
-		color-scheme: light dark;
+		/* The dark value is set by the two switches below, which is why this
+		 * is `light` and not `light dark`: a `light dark` here would resolve
+		 * from the OS preference even on a page that has overridden it. */
+		color-scheme: light;
 		scrollbar-gutter: stable;
 	}
 
+	/* The body paints its own surface from a token rather than from a media
+	 * query, so a forced-light page on a dark machine is light here as well as
+	 * everywhere else. */
 	body {
-		@apply bg-neutral-50 text-neutral-900 antialiased;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		body {
-			@apply bg-neutral-950 text-neutral-100;
-		}
+		@apply antialiased;
+		background-color: var(--color-surface);
+		color: var(--color-ink);
 	}
 
 	/* Every transition in the app is disabled for a reader who asked for
-	 * reduced motion, not just the ones we remembered. */
+	 * reduced motion, not just the ones we remembered. This is the global
+	 * counterpart to `motion-reduce:transition-none`, which a component can
+	 * apply to itself and which therefore cannot be relied on alone. */
 	@media (prefers-reduced-motion: reduce) {
 		*,
 		*::before,
@@ -116,7 +189,10 @@
 
 	@media print {
 		/* The print stylesheet hides the chrome and gives the content the
-		 * whole page. The player-safe view additionally suppresses DM chrome. */
+		 * whole page. The player-safe view additionally suppresses DM chrome.
+		 * The id and class rules live in the unlayered block below, next to the
+		 * layout they override; what is here is the markup that has no other
+		 * home. */
 		[data-print="hide"],
 		nav[aria-label="Primary"],
 		aside[aria-label="Context"] {
@@ -131,20 +207,37 @@
 	}
 }
 
+/* The two dark switches. Everything else in this file reads the theme out of
+ * `color-scheme`, so these two rules are the whole manual-override
+ * mechanism, and `!important` is not needed: they are unlayered, which beats
+ * every layer regardless of specificity. */
+@media (prefers-color-scheme: dark) {
+	:root:where(:not(.light)) {
+		color-scheme: dark;
+	}
+}
+
+:root:where(.dark) {
+	color-scheme: dark;
+}
+
 @layer components {
 	/* Markdown prose lives here, never as @apply inside a .templ file: the
 	 * rendered content is vault-derived, and the styling for it belongs to
 	 * core, not to whichever template happened to render it. */
 	.prose-vtt {
-		@apply text-neutral-800 leading-relaxed;
-	}
-
-	.dark .prose-vtt {
-		@apply text-neutral-200;
+		@apply leading-relaxed;
+		color: var(--color-prose);
 	}
 
 	.prose-vtt > * + * {
 		@apply mt-4;
+	}
+
+	/* A heading is a link target, and the column header is sticky, so an
+	 * anchored heading must not land underneath it. */
+	.prose-vtt :is(h1, h2, h3, h4) {
+		scroll-margin-block-start: 4rem;
 	}
 
 	.prose-vtt h1 {
@@ -152,11 +245,8 @@
 	}
 
 	.prose-vtt h2 {
-		@apply mt-8 border-b border-neutral-200 pb-1 text-xl font-semibold tracking-tight;
-	}
-
-	.dark .prose-vtt h2 {
-		@apply border-neutral-800;
+		@apply mt-8 border-b pb-1 text-xl font-semibold tracking-tight;
+		border-color: var(--color-prose-rule);
 	}
 
 	.prose-vtt h3 {
@@ -182,27 +272,19 @@
 	}
 
 	.prose-vtt blockquote {
-		@apply border-s-4 border-neutral-200 ps-4 text-neutral-600 italic;
-	}
-
-	.dark .prose-vtt blockquote {
-		@apply border-neutral-700 text-neutral-400;
+		@apply border-s-4 ps-4 italic;
+		border-color: var(--color-prose-rule);
+		color: var(--color-prose-muted);
 	}
 
 	.prose-vtt code {
-		@apply rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em];
-	}
-
-	.dark .prose-vtt code {
-		@apply bg-neutral-800;
+		@apply rounded px-1 py-0.5 font-mono text-[0.9em];
+		background-color: var(--color-prose-code);
 	}
 
 	.prose-vtt pre {
-		@apply overflow-x-auto rounded-lg bg-neutral-100 p-4 text-sm;
-	}
-
-	.dark .prose-vtt pre {
-		@apply bg-neutral-900;
+		@apply overflow-x-auto rounded-lg p-4 text-sm;
+		background-color: var(--color-prose-pre);
 	}
 
 	.prose-vtt pre code {
@@ -215,26 +297,21 @@
 
 	.prose-vtt th,
 	.prose-vtt td {
-		@apply border border-neutral-200 px-3 py-2 align-top;
-	}
-
-	.dark .prose-vtt th,
-	.dark .prose-vtt td {
-		@apply border-neutral-800;
+		@apply border px-3 py-2 align-top;
+		border-color: var(--color-prose-rule);
 	}
 
 	.prose-vtt hr {
-		@apply my-8 border-neutral-200;
+		@apply my-8 border-t;
+		border-color: var(--color-prose-rule);
 	}
 
 	/* Unsupported Obsidian syntax: shown as source, visibly escaped, and
 	 * labelled so the DM knows why it looks odd. */
 	.passthrough {
-		@apply rounded-md border border-dashed border-neutral-300 bg-neutral-100 p-3 font-mono text-xs whitespace-pre-wrap;
-	}
-
-	.dark .passthrough {
-		@apply border-neutral-700 bg-neutral-900;
+		@apply rounded-md border border-dashed p-3 font-mono text-xs whitespace-pre-wrap;
+		border-color: var(--color-passthrough-rule);
+		background-color: var(--color-passthrough-bg);
 	}
 
 	/* The secret lock. The icon and the text label are the message; the
@@ -245,5 +322,435 @@
 
 	.secret-revealed {
 		@apply flex items-center gap-2 rounded-md border border-revealed/40 bg-revealed-soft px-3 py-2 text-sm text-revealed;
+	}
+
+	/* The shell's own controls. These names come from the components; they are
+	 * here rather than in a .templ file for the same reason .prose-vtt is:
+	 * they are core's, and a class in a template is styling a component from
+	 * the outside. */
+
+	.btn {
+		@apply inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm;
+		border-color: var(--color-rule);
+		background-color: var(--color-surface-raised);
+		color: var(--color-ink);
+	}
+
+	/* An icon-only control. The sr-only label beside the icon is the name, so
+	 * the button's own box can stay square. */
+	.btn-icon {
+		@apply items-center justify-center rounded-md p-1.5;
+		border-color: transparent;
+	}
+
+	.nav-item {
+		@apply flex items-center gap-2 rounded-md px-2 py-1.5 text-sm;
+		color: var(--color-ink);
+	}
+
+	.nav-item:hover {
+		background-color: light-dark(oklch(0.967 0.003 250), oklch(0.26 0.012 250));
+	}
+
+	/* aria-current is written by app.js from the URL, so the current entry is
+	 * styled from the same attribute rather than from a class that would have
+	 * to be kept in step with it. */
+	.nav-item[aria-current="page"] {
+		@apply font-semibold;
+		background-color: light-dark(oklch(0.92 0.005 250), oklch(0.35 0.013 250));
+		box-shadow: inset 2px 0 0 var(--color-accent-500);
+	}
+
+	/* A dialog opened with the open attribute rather than showModal, because
+	 * the open state is a signal the trigger's aria-expanded is also bound to.
+	 * It is positioned here so the attribute alone is a usable dialog. */
+	.dialog {
+		@apply fixed z-50 m-0 max-h-[85dvh] overflow-y-auto rounded-lg p-4;
+		inset-block-start: 12dvh;
+		inset-inline-start: 50%;
+		translate: -50% 0;
+		border: 1px solid var(--color-rule);
+		background-color: var(--color-surface-raised);
+		color: var(--color-ink);
+		box-shadow: 0 18px 40px oklch(0.13 0.01 250 / 0.28);
+	}
+
+	.dialog::backdrop {
+		background-color: var(--color-scrim);
+	}
+
+	.table {
+		@apply w-full border-collapse text-left text-sm;
+	}
+
+	.table th,
+	.table td {
+		@apply border px-2 py-1 align-top;
+		border-color: var(--color-prose-rule);
+	}
+
+	/* The file tree. A roving-tabindex group, so its rows are focusable and
+	 * the focus ring is the only affordance a keyboard reader needs to see
+	 * where they are: the ring is on the row, not on a wrapping element that
+	 * would draw a box around the whole tree. */
+	.file-tree,
+	.file-tree ul {
+		@apply list-none p-0;
+	}
+
+	.file-tree ul {
+		@apply ps-4 border-s;
+		border-color: var(--color-prose-rule);
+	}
+
+	.file-dir-toggle {
+		@apply flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-start text-sm;
+		color: var(--color-ink);
+	}
+
+	.file-dir-toggle:hover,
+	.file-page-link:hover {
+		background-color: light-dark(oklch(0.967 0.003 250), oklch(0.26 0.012 250));
+	}
+
+	.file-dir-toggle[aria-expanded="true"] .file-dir-name {
+		@apply font-semibold;
+	}
+
+	.file-page-link {
+		@apply flex items-center gap-1.5 rounded px-1.5 py-1 text-sm;
+		color: var(--color-ink);
+	}
+
+	.command-row {
+		@apply flex w-full items-center gap-2 rounded px-2 py-1.5 text-start text-sm;
+		color: var(--color-ink);
+	}
+
+	.command-row:hover {
+		background-color: light-dark(oklch(0.967 0.003 250), oklch(0.26 0.012 250));
+	}
+
+	.empty-state {
+		@apply rounded-md border border-dashed p-3 text-sm;
+		border-color: var(--color-prose-rule);
+		color: var(--color-prose-muted);
+	}
+
+	.empty-state-title {
+		@apply font-semibold;
+		color: var(--color-ink);
+	}
+
+	.card-heading {
+		@apply mb-1 text-sm font-semibold;
+	}
+}
+
+/* ==========================================================================
+ * The three-column shell.
+ *
+ * Everything from here to the end of the file is unlayered, and that is the
+ * point rather than an accident of ordering. Tailwind emits `@layer theme,
+ * base, components, utilities`, and a rule inside any of those layers loses to
+ * a utility class however specific it is — so a media query that wanted to
+ * override the `grid-cols-[260px_minmax(0,1fr)_320px]` class on #shell could
+ * not, in any layer, at any specificity. An unlayered rule beats every layer,
+ * which is the only reason the breakpoints below can do their job.
+ *
+ * The shell is written narrow-first. §3.2 is a table of widths and the markup
+ * carries the widest layout as a class, so the narrow layouts are the states
+ * written here and the class is the one that gets overridden.
+ *
+ * The contract with the markup is four ids and three classes, and the ids are
+ * the ones app.js looks for as well:
+ *
+ *   #shell     the grid wrapper
+ *   #left-nav  the left column, a drawer below 1024px
+ *   #content   the centre column, and the scroll container for the page
+ *   #context   the right column, a drawer below 1280px
+ *
+ *   .drawer-scrim   the occlusion behind an open drawer
+ *   .sheet          a sidebar while it is a drawer
+ *   .sidebar-open   on #shell, while either is open
+ *   .tab-bar        the four entries of the under-768px bottom bar
+ *
+ * A sidebar's own class never changes. The open state is a class on #shell,
+ * because a drawer that carries both `.sheet` and an open class has two
+ * sources of truth for one thing, and a `data-show` on a sidebar is a bug at
+ * the widths where that sidebar is a column: the inline display:none it writes
+ * when the signal is false would hide a column that is not supposed to be
+ * dismissable. The scrim may use either, and the CSS honours both.
+ *
+ * The drawer rules are keyed on the ids, not on `.sheet`, so a sidebar is a
+ * drawer at the widths §3.2 says it is one whatever the markup happens to call
+ * it. `.sheet` and `.drawer-scrim` are for the elements the ids do not cover.
+ * ========================================================================== */
+
+#shell {
+	grid-template-rows: minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr);
+}
+
+/* Explicit placement, at every width, because the two sidebars drop out of the
+ * flow as drawers and auto-placement would then shift what is left: the centre
+ * would slide into column one the moment a drawer closed. Source order is the
+ * column order — left, centre, right — and each width states that rather than
+ * inferring it. */
+#content {
+	grid-area: 1 / 1;
+}
+
+/* The three columns are the scroll containers, not the document, so a long
+ * page scrolls its centre and leaves the nav where it is. `min-*` of 0 is what
+ * stops a wide child — a table, a long unbroken word in a secret — from
+ * widening the column instead of scrolling inside it. */
+:is(#left-nav, #content, #context) {
+	min-inline-size: 0;
+	min-block-size: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+
+/* Only the column a reader is actually in shows a scrollbar. The gutter is
+ * still reserved by `scrollbar-gutter: stable`, so a scrollbar appearing does
+ * not move the content it is next to. */
+:is(#left-nav, #content, #context) {
+	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+	transition: scrollbar-color 120ms ease;
+}
+
+:is(#left-nav, #content, #context):is(:hover, :focus-within) {
+	scrollbar-color: var(--color-scrollbar) transparent;
+}
+
+:is(#left-nav, #content, #context)::-webkit-scrollbar {
+	inline-size: 10px;
+	block-size: 10px;
+}
+
+:is(#left-nav, #content, #context)::-webkit-scrollbar-thumb {
+	border: 3px solid transparent;
+	border-radius: 9999px;
+	background-color: transparent;
+	background-clip: content-box;
+}
+
+:is(#left-nav, #content, #context):is(:hover, :focus-within)::-webkit-scrollbar-thumb {
+	background-color: var(--color-scrollbar);
+}
+
+/* The header of a column sticks to the top of that column, which is what §3.2
+ * means by "headers are sticky": the scroller is the column. A header that
+ * does not paint its own background shows the page through it. */
+:is(#left-nav, #content, #context) > :is(header, [data-sticky]),
+:is(#left-nav, #content, #context) > :first-child > :is(header, [data-sticky]) {
+	position: sticky;
+	inset-block-start: 0;
+	z-index: 20;
+	background-color: var(--color-surface-raised);
+}
+
+:is(#left-nav, #context) {
+	background-color: var(--color-surface);
+}
+
+/* The occlusion behind an open drawer. `data-show` writes display:none inline
+ * when the signal is false, and an inline style beats a rule in this file, so
+ * a scrim driven either way ends up in the same place. */
+.drawer-scrim {
+	display: none;
+	position: fixed;
+	inset: 0;
+	z-index: 30;
+	background-color: var(--color-scrim);
+}
+
+/* A drawer is hidden with display rather than slid off-screen, because one that
+ * is only translated out of the way is still in the accessibility tree and
+ * still takes a tab stop. */
+:is(#left-nav, #context, .sheet) {
+	display: none;
+}
+
+.sidebar-open :is(#left-nav, #context) {
+	display: block;
+}
+
+.sidebar-open :is(.drawer-scrim, .sheet),
+:is(.drawer-scrim, .sheet).sidebar-open {
+	display: block;
+}
+
+/* The bottom tab bar, under 768px only: four entries — Pages, Search, Context,
+ * Menu — at the size a finger can hit. */
+.tab-bar {
+	display: none;
+	position: fixed;
+	inset-inline: 0;
+	inset-block-end: 0;
+	z-index: 30;
+	align-items: stretch;
+	justify-content: space-around;
+	min-block-size: 3.5rem;
+	padding-block-end: env(safe-area-inset-bottom, 0);
+	border-block-start: 1px solid var(--color-rule);
+	background-color: var(--color-surface-raised);
+}
+
+.tab-bar :is(a, button) {
+	display: grid;
+	place-items: center;
+	flex: 1 1 0;
+	min-inline-size: 44px;
+	min-block-size: 44px;
+}
+
+/* Minimum interactive target: 24×24 on a pointer, 44×44 under 768px (§3.5).
+ * Scoped to the chrome and to dialogs — a prose link is text, and forcing a
+ * box on it would wreck the line box. */
+:where(header, #left-nav, #context, .tab-bar, dialog) :where(button, a, summary, [role="button"]) {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-inline-size: 24px;
+	min-block-size: 24px;
+}
+
+@media (max-width: 767px) {
+	:where(header, #left-nav, #context, .tab-bar, dialog) :where(button, a, summary, [role="button"]) {
+		min-inline-size: 44px;
+		min-block-size: 44px;
+	}
+}
+
+/* < 768px: one column. Both sidebars are full-height sheets over a scrim and
+ * the tab bar takes the bottom, so the content column is padded clear of it
+ * rather than the shell, which does not scroll. */
+@media (max-width: 767px) {
+	#content {
+		padding-block-end: calc(3.5rem + env(safe-area-inset-bottom, 0));
+	}
+
+	.tab-bar {
+		display: flex;
+	}
+}
+
+/* The shared shape of a drawer, wherever one is. Fixed to the block axis, full
+ * height, its own scroller, and an edge that is a control boundary and so has
+ * to clear 3:1. */
+@media (max-width: 1279px) {
+	:is(#left-nav, #context, .sheet) {
+		position: fixed;
+		inset-block: 0;
+		z-index: 40;
+		inline-size: min(88vw, 22rem);
+		background-color: var(--color-surface-raised);
+		box-shadow: 0 0 0 1px var(--color-rule), 0 18px 40px oklch(0.13 0.01 250 / 0.22);
+	}
+}
+
+@media (max-width: 1279px) {
+	#left-nav {
+		inset-inline-start: 0;
+	}
+
+	#context {
+		inset-inline-end: 0;
+	}
+}
+
+/* 768–1023px: the centre is the whole width, the left collapses to a
+ * hamburger drawer and the right stays an overlay drawer. */
+@media (min-width: 768px) {
+	#shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* 1024–1279px: the left column is back and the right is a drawer. */
+@media (min-width: 1024px) {
+	#shell {
+		grid-template-columns: 260px minmax(0, 1fr);
+	}
+
+	#left-nav {
+		grid-area: 1 / 1;
+		position: relative;
+		/* !important, and the only one in this file that beats an inline
+		 * style: the sidebar's open state is a data-show bound to the same
+		 * signal as the header's toggle, and that inline display:none would
+		 * otherwise hide a column that is not supposed to be dismissable. §3.2
+		 * makes this a column from here up, and a column a stale signal can
+		 * hide is the bug this line prevents. */
+		display: block !important;
+		inline-size: auto;
+		box-shadow: none;
+		border-inline-end: 1px solid var(--color-rule);
+	}
+
+	#content {
+		grid-area: 1 / 2;
+	}
+}
+
+/* 1280px and up: three columns, each scrolling on its own, and the drawer
+ * state is inert. The scrim and the sheets are reset here at the same
+ * specificity as the rules that open them, so an open signal left over from a
+ * narrow window cannot pull a column off the page. */
+@media (min-width: 1280px) {
+	#shell {
+		grid-template-columns: 260px minmax(0, 1fr) 320px;
+	}
+
+	#context {
+		grid-area: 1 / 3;
+		position: relative;
+		display: block !important;
+		inline-size: auto;
+		box-shadow: none;
+		border-inline-start: 1px solid var(--color-rule);
+	}
+
+	.sidebar-open :is(.drawer-scrim, .sheet),
+	:is(.drawer-scrim, .sheet).sidebar-open {
+		display: none;
+	}
+}
+
+@media print {
+	/* The chrome goes and the content takes the page. The ids are here rather
+	 * than only in the layout block because a print sheet is the one case where
+	 * a fixed-position sheet has to be removed from the flow entirely, and
+	 * `display: none` is the only thing that does that. */
+	#left-nav,
+	#context,
+	.drawer-scrim,
+	.sheet,
+	.tab-bar,
+	dialog,
+	.skip-link {
+		display: none !important;
+	}
+
+	#shell,
+	#content {
+		display: block !important;
+		block-size: auto !important;
+		max-inline-size: none !important;
+		overflow: visible !important;
+		padding: 0 !important;
+	}
+
+	/* The player-safe view. Everything a DM alone gets is marked
+	 * `data-dm-only` in the markup and is suppressed here, so what comes out
+	 * of the printer is exactly what a player may read. It is the *view* that
+	 * is safe: the printer still holds everything the reader may open, which
+	 * is stated here rather than implied. */
+	html[data-print="safe"] [data-dm-only] {
+		display: none !important;
 	}
 }

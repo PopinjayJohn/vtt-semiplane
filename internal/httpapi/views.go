@@ -49,6 +49,18 @@ type Shell struct {
 	Campaign string
 	// Dev reports development mode, so the layout can say so out loud.
 	Dev bool
+	// CurrentPageID is the page this response is about, or 0 for a view that is
+	// not a page. It is what the last-activity panel excludes and what the live
+	// push's refetch target is seeded from, so neither has to guess.
+	CurrentPageID int64
+	// Push is the seed for the client's DataStar signals: whether a stream is
+	// open for this tab, and the URL the shell refetches when it is triggered.
+	// Both are plain strings, and a stream is only ever opened for an
+	// authenticated principal, so nothing here is a capability.
+	PushEnabled bool
+	// CurrentPageURL is the page's canonical URL, empty for a view that is not
+	// about a page.
+	CurrentPageURL string
 }
 
 // PageCard is a page as a view model: an identity and a display string.
@@ -135,6 +147,9 @@ type HomeView struct {
 	Tags []TagCard
 	// PageCount is how many pages the index holds.
 	PageCount int
+	// Status is the campaign status panel, which appears on every page because
+	// it is campaign state rather than page state.
+	Status CampaignStatus
 }
 
 // PageView is one page, with everything around it that is authorized for this
@@ -162,6 +177,14 @@ type PageView struct {
 	// that the body shown here is a prefix of it. The file is untouched; only
 	// the view is clipped.
 	Truncated bool
+	// Status is the campaign status panel. It is on the page view rather than
+	// fetched separately because the right column is rendered with the page and
+	// a panel that arrived a request later is a panel that flashed.
+	Status CampaignStatus
+	// Related are the pages sharing the most tags with this one. They are
+	// rendered in the right column, and the panel is omitted when the list is
+	// empty rather than shown with nothing in it.
+	Related []PageCard
 }
 
 // SearchView is a search result page.
@@ -189,6 +212,181 @@ type SearchHit struct {
 	// hit: no excerpt of a revealed secret is ever rendered.
 	Snippet string
 }
+
+// FileNode is one directory in the file tree, or a file with no children.
+//
+// A directory is a path prefix and nothing else: it carries no counts, no
+// timestamps and no existence flags, because a count in a sidebar is a number
+// whose derivation a reader cannot check and a mismatch is a leak. The leaves
+// carry the pages.
+type FileNode struct {
+	// Name is the final path segment, for display.
+	Name string
+	// Path is the directory's vault-relative path, slash-separated, without a
+	// trailing slash. It is empty for the root.
+	Path string
+	// Dir reports whether this node has children of its own rather than
+	// holding pages directly.
+	Dir bool
+	// Pages are the files in a leaf node, by title.
+	Pages []PageCard
+	// Children are the subdirectories of a directory node, by name.
+	Children []FileNode
+}
+
+// FilesView is the whole vault as a tree.
+type FilesView struct {
+	Shell
+	// Tree is the root node. Its Path is empty and its Dir is true.
+	Tree FileNode
+	// PageCount is how many pages the tree holds in total.
+	PageCount int
+}
+
+// TagsView is the tag cloud, with every tag the viewer may see.
+type TagsView struct {
+	Shell
+	// Tags are the tags, alphabetically, each with its own filtered count.
+	Tags []TagCard
+}
+
+// TagView is one tag and the pages carrying it.
+type TagView struct {
+	Shell
+	// Tag is the tag being shown, with the count from the same query that
+	// produced Pages.
+	Tag TagCard
+	// Pages are the pages this viewer may see carrying the tag.
+	Pages []PageCard
+	// All is every tag, so the page can render the same cloud as /tags with
+	// this one marked, without a second request.
+	All []TagCard
+}
+
+// SessionRef is the current session log, as the campaign status panel names it.
+type SessionRef struct {
+	// Card identifies the log.
+	Card PageCard
+	// Number is the session's own number, from its `session:` frontmatter, or 0
+	// when the file does not declare one. It is a value the author wrote; it is
+	// never inferred from a position in a list.
+	Number int
+	// Date is the `date:` frontmatter rendered as a day, or empty when the file
+	// declares none. It is a day and not a timestamp because that is what a
+	// session log carries.
+	Date string
+}
+
+// PartyMember is one character in the party list.
+//
+// The one-liner is a system-specific value that no core code can produce, so
+// the field exists and is empty until a plugin fills it. An empty field is
+// omitted by the template rather than rendered blank, which is the same
+// field-level rule the rest of the panel follows.
+type PartyMember struct {
+	// Card identifies the character sheet.
+	Card PageCard
+	// Owner is the display name of the player who owns the sheet, or "" when it
+	// is unowned. It is a name the account table holds, never a username that
+	// would let a reader enumerate accounts.
+	Owner string
+	// Note is the system plugin's one-liner, empty in v1.
+	Note string
+}
+
+// CampaignStatus is the right sidebar's campaign-wide panel.
+//
+// It is built as a list of independently authorized fields, and a field the
+// reader may not see is *omitted* rather than blanked or locked: a player sees
+// a smaller panel, not the same panel with holes in it. Every field below is
+// resolved through the same canonical predicate as a page render, and the two
+// rollups — Threads and LastActivity — are counted under that same predicate,
+// so a page whose only mention is inside a secret the reader cannot read
+// contributes zero rather than one.
+type CampaignStatus struct {
+	// Session is the current session log, or nil when the viewer may not see
+	// one or the vault has no `#session` page.
+	Session *SessionRef
+	// Threads are the open threads, newest first.
+	Threads []PageCard
+	// ThreadCount is what Threads would have held in total. It comes from a
+	// count over the identical predicate, so the badge and the list cannot
+	// disagree.
+	ThreadCount int
+	// LastActivity is the most recently updated pages other than the one open.
+	LastActivity []PageCard
+	// Party are the character sheets, by title.
+	Party []PartyMember
+	// SystemNote is the plugin layer's contribution. It is a fixed phrase naming
+	// the absence of a system, never a blank: a missing plugin must look like a
+	// missing plugin rather than like a panel that failed to render.
+	SystemNote string
+}
+
+// ContextView is everything a page view's right column carries, in one model.
+//
+// It is one type rather than four because it is one route: §9.2's
+// /api/pages/{id}/context exists so that opening a page costs one request, and
+// four separate models would be four places where the same page's context could
+// be assembled inconsistently.
+type ContextView struct {
+	Shell
+	// Card identifies the page.
+	Card PageCard
+	// Toc is the table of contents, filtered by the canonical predicate.
+	Toc []TocEntry
+	// Backlinks are the references to this page the viewer may see.
+	Backlinks []BacklinkChip
+	// BacklinkCount is what Backlinks would have held in total, from the
+	// identical query.
+	BacklinkCount int
+	// Related are the pages this one shares the most tags with, and the panels
+	// around it do not show when it is empty.
+	Related []PageCard
+	// Status is the campaign-wide panel.
+	Status CampaignStatus
+}
+
+// Command is one row of the command palette.
+type Command struct {
+	// Label is what the reader sees.
+	Label string
+	// Href is where activating it navigates. Every command is a real URL, so
+	// the palette is a list of links and works with JavaScript disabled.
+	Href string
+	// Kind is "page", "tag" or "action", and is what the palette's icon and its
+	// grouping key are. It is a closed set of three so that a caller cannot
+	// invent a fourth kind that nothing renders.
+	Kind string
+	// Hint is the keyboard tail shown at the right, empty when there is none.
+	Hint string
+}
+
+// CommandsView is the command palette's result set.
+//
+// It is a View so that the palette can be rendered as a full page — which is what
+// it is, with JavaScript disabled, and what makes the same rows reachable by
+// following a link.
+type CommandsView struct {
+	Shell
+	// Query is what the reader typed, echoed so the field keeps it.
+	Query string
+	// Commands are the rows, in the order the palette shows them: actions first,
+	// then pages, then tags.
+	Commands []Command
+}
+
+// The command kinds. A closed set of three, because a kind is what a template
+// switches on and an open set is a runtime error in the middle of a palette.
+const (
+	// CommandPage is a destination inside the vault.
+	CommandPage = "page"
+	// CommandTag is a tag page.
+	CommandTag = "tag"
+	// CommandAction is a destination in the shell itself, such as the search
+	// form or the campaign home.
+	CommandAction = "action"
+)
 
 // LoginView is the login form, and the form's own error.
 type LoginView struct {
@@ -250,13 +448,18 @@ type ErrorView struct {
 	Detail string
 }
 
-func (v HomeView) isView()   {}
-func (v PageView) isView()   {}
-func (v SearchView) isView() {}
-func (v LoginView) isView()  {}
-func (v SetupView) isView()  {}
-func (v InviteView) isView() {}
-func (v ErrorView) isView()  {}
+func (v HomeView) isView()     {}
+func (v PageView) isView()     {}
+func (v SearchView) isView()   {}
+func (v FilesView) isView()    {}
+func (v TagsView) isView()     {}
+func (v TagView) isView()      {}
+func (v ContextView) isView()  {}
+func (v CommandsView) isView() {}
+func (v LoginView) isView()    {}
+func (v SetupView) isView()    {}
+func (v InviteView) isView()   {}
+func (v ErrorView) isView()    {}
 
 // The ViewShell methods hand the layout's half of each model back through the
 // interface, so that a renderer can be handed a View without knowing what kind it
@@ -271,6 +474,21 @@ func (v PageView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the SearchView.
 func (v SearchView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the FilesView.
+func (v FilesView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the TagsView.
+func (v TagsView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the TagView.
+func (v TagView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the ContextView.
+func (v ContextView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the CommandsView.
+func (v CommandsView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the LoginView.
 func (v LoginView) ViewShell() Shell { return v.Shell }
@@ -299,4 +517,22 @@ type Renderer interface {
 	// the asset tags. Its bytes are a strict subset of Document's for the same
 	// view, which is what lets a swapped region and a full page be compared.
 	Fragment(w http.ResponseWriter, r *http.Request, v View) error
+	// Region renders one named sub-region of v, and returns its bytes: the rows
+	// of the command palette rather than the palette's form, the body of a dialog
+	// rather than the dialog.
+	//
+	// It returns bytes rather than taking a writer because a patch has to look at
+	// the element before it goes on the wire — the element-patch frame cannot
+	// carry a newline — and a caller holding a writer would have to buffer it
+	// itself to do the same check.
+	//
+	// It exists because a patch replaces a chosen element, and the chosen element
+	// is usually smaller than the view. A handler that assembled the patch body
+	// itself would be the second place that knows what a palette row looks like,
+	// and the second copy is the one that stops being updated.
+	//
+	// An unknown name is an error, not empty bytes: a caller asking for a region
+	// that does not exist has a bug, and rendering nothing for it would turn that
+	// bug into a permanently blank panel.
+	Region(v View, name string) ([]byte, error)
 }

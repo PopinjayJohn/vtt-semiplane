@@ -126,8 +126,11 @@ check: fmt-check generate-check css-check lint test ## the CI gate, locally
 .PHONY: fmt-check
 fmt-check: ## fail if anything is unformatted
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "unformatted:"; echo "$$out"; exit 1; fi
-	@out=$$(find . -name '*.templ' -not -path './.git/*' -exec $(GO) tool templ fmt -check {} \; 2>&1); \
-		if [ -n "$$out" ]; then echo "unformatted templ:"; echo "$$out"; exit 1; fi
+	@# templ v0.3.1020 spells this -fail, not -check. The old spelling made every
+	@# invocation print a usage error to stderr, which the shell test below then
+	# saw as output and reported as ten unformatted files — so the gate was not
+	# merely misnamed, it was red on a clean tree and nobody could tell why.
+	@$(GO) tool templ fmt -fail .
 
 .PHONY: generate-check
 generate-check: generate ## fail if generated code is stale

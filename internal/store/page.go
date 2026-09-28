@@ -353,10 +353,20 @@ VALUES (?, ?, ?, ?)
 ON CONFLICT(page_id, user_id) DO UPDATE SET is_owner = excluded.is_owner`
 
 // AddPageOwner grants a user ownership of a page.
+//
+// It bumps the authorization generation, because ownership is an authorization
+// input and not only a display one: a page owner may read that page's `private`
+// secrets, so a grant changes who may read a body, and any live-push stream
+// captured under the old ownership would keep serving it. The bump and the
+// insert are the caller's transaction, so a caller that rolls back for any reason
+// leaves the counter alone too.
 func AddPageOwner(ctx context.Context, e Execer, po PageOwner) error {
 	if _, err := e.ExecContext(ctx, addPageOwnerSQL,
 		po.PageID, po.UserID, boolToInt(po.IsOwner), FormatTime(po.AddedAt)); err != nil {
 		return fmt.Errorf("store: add owner %d of page %d: %w", po.UserID, po.PageID, err)
+	}
+	if _, err := BumpAuthzGeneration(ctx, e); err != nil {
+		return err
 	}
 	return nil
 }
@@ -364,10 +374,18 @@ func AddPageOwner(ctx context.Context, e Execer, po PageOwner) error {
 // RemovePageOwner revokes a user's ownership of a page. It does not touch
 // pages.owner_id; the caller that manages the primary owner keeps the two in
 // step, and only within the caller's transaction.
+//
+// It bumps the authorization generation for the reason AddPageOwner does, and the
+// direction matters more here: a revoke is the one that must take effect, since
+// a stream captured while the user owned the page is serving them a body they may
+// no longer fetch.
 func RemovePageOwner(ctx context.Context, e Execer, pageID, userID int64) error {
 	if _, err := e.ExecContext(ctx,
 		`DELETE FROM page_owners WHERE page_id = ? AND user_id = ?`, pageID, userID); err != nil {
 		return fmt.Errorf("store: remove owner %d of page %d: %w", userID, pageID, err)
+	}
+	if _, err := BumpAuthzGeneration(ctx, e); err != nil {
+		return err
 	}
 	return nil
 }

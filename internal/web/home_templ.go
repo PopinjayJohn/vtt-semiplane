@@ -8,9 +8,7 @@ package web
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import (
-	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
-)
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
 
 // Home is the dashboard.
 func Home(v httpapi.HomeView) templ.Component {
@@ -41,7 +39,7 @@ func Home(v httpapi.HomeView) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(itoa(v.PageCount))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 12, Col: 22}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 10, Col: 22}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -71,12 +69,29 @@ func Home(v httpapi.HomeView) templ.Component {
 	})
 }
 
-// Page is one page: its title, its rendered body, the secrets on it, and the
-// panels around it.
+// Page is one page: its title, its rendered body, and the secrets on it.
 //
 // The body is the one place in this file that receives pre-rendered HTML, and it
 // receives it from PreRendered, which is the single funnel. Everything else here
 // is an ordinary templ expression and is escaped by templ.
+//
+// The page's own panels — the table of contents, the backlinks, the related
+// pages, the campaign status — are not here. They are the shell's right column
+// and the layout renders them from the same view model, so a page rendered inside
+// the three-column shell and a context region fetched on its own cannot disagree
+// about what a page has around it. Rendering them here as well would put two
+// asides named "Context" on one page, which is one landmark too many and one
+// answer too many.
+//
+// There is deliberately no edit link, and that is a finding rather than an
+// omission. app.js implements the `e` key by looking for a data-edit-href
+// attribute, and an absent attribute is the correct absence here: there is no
+// /p/{path}/edit route until the editor stage lands, so an edit affordance would
+// be a control in the document for something that answers 404. A shortcut that
+// navigates to a 404 is worse than no shortcut, and hiding the link with CSS
+// would leave it in the document for a crawler and for the keyboard. When the
+// route exists, the handler answers httpapi.PermWritePage and the template
+// renders the link from that bool — never from a role comparison made here.
 func Page(v httpapi.PageView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -98,14 +113,14 @@ func Page(v httpapi.PageView) templ.Component {
 			templ_7745c5c3_Var3 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<div class=\"flex flex-col gap-8 lg:flex-row-reverse\"><article class=\"min-w-0 flex-1\"><header class=\"border-b border-neutral-200 pb-3 dark:border-neutral-800\"><h1 data-focus-target class=\"text-2xl font-semibold tracking-tight\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<article class=\"prose-page\"><header class=\"border-b border-neutral-200 pb-3 dark:border-neutral-800\"><h1 data-focus-target class=\"text-2xl font-semibold tracking-tight\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var4 string
 		templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(v.Card.Title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 31, Col: 86}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 45, Col: 85}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 		if templ_7745c5c3_Err != nil {
@@ -118,7 +133,7 @@ func Page(v httpapi.PageView) templ.Component {
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(v.Card.Path)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 33, Col: 24}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 47, Col: 23}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 		if templ_7745c5c3_Err != nil {
@@ -131,7 +146,7 @@ func Page(v httpapi.PageView) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(v.Card.PageType)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 35, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/home.templ`, Line: 49, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -188,19 +203,7 @@ func Page(v httpapi.PageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</article><aside aria-label=\"Context\" class=\"w-full shrink-0 space-y-6 lg:w-64\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = BacklinkList(v.Backlinks, v.BacklinkCount).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = Toc(v.Toc).Render(ctx, templ_7745c5c3_Buffer)
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</aside></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</article>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -234,7 +237,7 @@ func navp() templ.Component {
 			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "<p>Only the first part of this file is shown, because goldmark's inline parser gets quadratic in the length of a single line and an unbounded render is a way to pin this server with one saved note. The file itself is untouched: it is the view that is clipped, and it will render in full once the page is split into shorter lines or moved to a page of its own.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "<p>Only the first part of this file is shown, because goldmark's inline parser gets quadratic in the length of a single line and an unbounded render is a way to pin this server with one saved note. The file itself is untouched: it is the view that is clipped, and it will render in full once the page is split into shorter lines or moved to a page of its own.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

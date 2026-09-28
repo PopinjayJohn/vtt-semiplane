@@ -1,0 +1,121 @@
+package web
+
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+
+// commandKindHeading is what each kind of command's group is called, and its
+// icon. The set is closed because a template switches on the kind, and an open
+// set is a runtime error in the middle of a palette.
+var commandKindHeading = map[string]string{
+	httpapi.CommandAction: "Actions",
+	httpapi.CommandPage:   "Pages",
+	httpapi.CommandTag:    "Tags",
+}
+
+var commandKindIcon = map[string]string{
+	httpapi.CommandAction: "i-command",
+	httpapi.CommandPage:   "i-book",
+	httpapi.CommandTag:    "i-tag",
+}
+
+// Commands is the command palette as a page, at /_/commands.
+//
+// It is a page and not a dialog because the palette's rows are a list of links,
+// and a list of links that only exists inside a dialog is a list of links that
+// does not exist at all without JavaScript. This is that list, at a URL a reader
+// can be sent to, and the dialog fetches this same view.
+//
+// The form is the one in the dialog, wired the same way: typing patches the rows
+// below and nothing else, so the input being typed into is never replaced by the
+// response that answers it.
+templ Commands(v httpapi.CommandsView) {
+	<section aria-labelledby="commands-heading">
+		<h1 id="commands-heading" data-focus-target class="text-2xl font-semibold tracking-tight">Commands</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			Every command is a link to a real address, so this list is the palette with
+			everything switched off.
+		</p>
+		<form action="/_/commands" method="get" role="search" data-search class="mt-4 flex items-center gap-2">
+			<label for="commands-q" class="sr-only">Search pages, tags and actions</label>
+			<input
+				id="commands-q"
+				name="q"
+				type="search"
+				value={ v.Query }
+				autocomplete="off"
+				placeholder="Search pages, tags and actions"
+				class="w-full rounded border border-neutral-300 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900"
+				{ typeaheadAttrs("/_/commands?into=page&fragment=1&q=")... }
+			/>
+			<span data-busy-label class="sr-only">Loading…</span>
+			<button type="submit" class="btn-icon" aria-label="Search commands">
+				@Icon("i-search", "h-4 w-4")
+				<span class="sr-only">Search commands</span>
+			</button>
+		</form>
+		<div id="command-results" data-region-target="#command-results" class="mt-4">
+			@CommandGroups(v.Commands, v.Shell.CurrentPageURL)
+		</div>
+	</section>
+}
+
+// CommandGroups is the palette's rows, grouped by kind.
+//
+// The groups are omitted when they are empty rather than rendered with a heading
+// and nothing under it, because a heading that is always there is a heading
+// nobody reads. The order is the one CommandsView documents: actions first,
+// because they are what a reader is reaching for, then pages, then tags.
+templ CommandGroups(commands []httpapi.Command, current string) {
+	@CommandKind(commands, httpapi.CommandAction, current)
+	@CommandKind(commands, httpapi.CommandPage, current)
+	@CommandKind(commands, httpapi.CommandTag, current)
+}
+
+// CommandKind is one group of the palette.
+templ CommandKind(commands []httpapi.Command, kind, current string) {
+	if rows := commandsOfKind(commands, kind); len(rows) > 0 {
+		<section aria-labelledby={ "commands-" + kind }>
+			<h2 id={ "commands-" + kind } class="text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+				{ commandKindHeading[kind] }
+			</h2>
+			<ul class="mt-2 space-y-1">
+				for _, command := range rows {
+					@CommandRow(command, current)
+				}
+			</ul>
+		</section>
+	}
+}
+
+// CommandRow is one command.
+//
+// aria-current marks the row that points at the page the reader is on. It is
+// compared against the shell's current URL rather than a boolean the handler set,
+// because the URL is the one thing both the document and the fragment agree on.
+templ CommandRow(command httpapi.Command, current string) {
+	<li>
+		<a
+			href={ command.Href }
+			aria-current={ boolAttr(command.Href == current && current != "") }
+			class="command-row"
+		>
+			@Icon(commandKindIcon[command.Kind], "h-4 w-4 shrink-0 opacity-70")
+			<span class="font-medium">{ command.Label }</span>
+			if command.Hint != "" {
+				<kbd class="ml-auto shrink-0 rounded border border-neutral-300 px-1 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+					{ command.Hint }
+				</kbd>
+			}
+		</a>
+	</li>
+}
+
+// commandsOfKind is one kind's rows, in the order the model gave them.
+func commandsOfKind(commands []httpapi.Command, kind string) []httpapi.Command {
+	var out []httpapi.Command
+	for _, command := range commands {
+		if command.Kind == kind {
+			out = append(out, command)
+		}
+	}
+	return out
+}

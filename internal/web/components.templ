@@ -1,9 +1,66 @@
 package web
 
 import (
+	"strings"
+
 	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 )
+
+// classNames joins the non-empty class names a component was given.
+//
+// It exists because a component takes its modifiers as arguments and most calls
+// pass one that is sometimes empty — a tone, a variant, a side — and
+// "btn " + "" is a class attribute with a hole in it. The tailwind classes are
+// what the stylesheet keys its rules off, and a class list with a hole in it is
+// a class list that does not compare equal to itself in a test.
+func classNames(parts ...string) string {
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// boolAttr is an ARIA tri-state as the attribute value it needs.
+//
+// "false" rather than an absent attribute, because a false aria-current and a
+// false aria-selected are both meaningful and both are what the ARIA spec says
+// they are. Omitting the attribute says something weaker and different.
+func boolAttr(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+// typeaheadAttrs is the enhancement that makes an input fetch as it is typed.
+//
+// It is a hook rather than a DataStar action, and that was a deliberate reversal.
+//
+// The first version emitted `data-on:input__debounce=150ms` with an `@get`. It
+// does not work, and internal/httpapi/datastar.go records the whole of why: the
+// vendored bundle's element-patch format could not be established from outside
+// with confidence, and its handling of an application/json response is a signals
+// patch rather than a render. Guessing at a minified dependency's wire format is
+// the kind of thing that looks finished and is silently inert, so the fetch is
+// ours and the markup is a hook the client reads.
+//
+// The reader's term never reaches the markup. The prefix is a Go string
+// concatenation and the term is appended and encoded in the client, so there is
+// no attribute value in the document that a reader can influence.
+//
+// The debounce is the reason this is not a plain input handler: a request per
+// keystroke on a local SQLite vault is a request per keystroke, and the reader
+// types words.
+func typeaheadAttrs(urlPrefix string) templ.Attributes {
+	return templ.Attributes{
+		"data-typeahead":          urlPrefix,
+		"data-typeahead-debounce": "150",
+	}
+}
 
 // Text turns a string into a component, escaped.
 //
@@ -39,12 +96,154 @@ templ Icon(name, class string) {
 }
 
 // Wikilink returns the attributes an internal link to a page carries.
-//
 // It is plugin.WikiLink rather than a hand-written attribute, so the name the
 // shell binds to and the name a plugin emits are one string with one
 // definition. The value is a page id: never a title, never a path, and never
 // anything a reader of the page could learn from it.
 func Wikilink(pageID int64) templ.Attributes { return plugin.WikiLink(pageID) }
+
+// Button is the shell's button. The kind is a class the stylesheet defines, not
+// a variant this package knows about, so a new look is a new token and not a new
+// component.
+templ Button(label, kind string, attrs templ.Attributes) {
+	<button type="button" class={ classNames("btn", kind) } { attrs... }>
+		{ label }
+	</button>
+}
+
+// IconButton is a button whose entire content is an icon.
+//
+// It carries the name twice on purpose. aria-label is what a screen reader
+// announces, and the sr-only span is what the button looks like to a reader
+// browsing its text content, which is not the same reader and not the same
+// browser. An icon-only control with neither is a control with no name, and it
+// is invisible to the second reader entirely.
+templ IconButton(icon, label, kind string, attrs templ.Attributes) {
+	<button type="button" class={ classNames("btn-icon", kind) } aria-label={ label } { attrs... }>
+		@Icon(icon, "h-5 w-5")
+		<span class="sr-only">{ label }</span>
+	</button>
+}
+
+// Badge is a count or a state marker.
+//
+// It is never the only thing carrying the number: whatever a badge counts, the
+// list it counts is rendered next to it, so a reader who cannot see the badge
+// reads the same number off the list.
+templ Badge(text, tone string) {
+	<span class={ classNames("badge", tone) }>{ text }</span>
+}
+
+// Card is a titled box in a column. The heading id is the argument rather than
+// derived so that two cards on one page cannot collide.
+templ Card(heading, id string) {
+	<section class="card" aria-labelledby={ id }>
+		<h2 id={ id } class="card-heading">{ heading }</h2>
+		{ children... }
+	</section>
+}
+
+// EmptyState is what a panel shows when it has nothing.
+//
+// It is a component rather than a sentence at each call site because §3.3 makes
+// the empty state load-bearing: a missing plugin has to look like a missing
+// plugin and not like a panel that failed to render, and that means the absence
+// is always named rather than implied by blank space.
+templ EmptyState(title string, body templ.Component) {
+	<div class="empty-state">
+		<p class="empty-state-title">{ title }</p>
+		@body
+	</div>
+}
+
+// Dialog is a modal surface driven by one signal.
+//
+// Escape and a click outside both write false to that signal, and the same
+// signal is what the invoking button's aria-expanded is bound to, so the visual
+// state, the accessibility state and the focus state cannot disagree: they are
+// one boolean read three times. Focus is the client's half — a native dialog
+// traps it once showModal has run, and returning it to the invoker is keyed off
+// the data-opens attribute every trigger carries.
+templ Dialog(id, label, openSignal string) {
+	<dialog
+		id={ id }
+		aria-label={ label }
+		class="dialog"
+		data-dialog={ id }
+		data-attr:open={ openSignal }
+		data-on:keydown={ "$evt.key === 'Escape' && (" + openSignal + " = false)" }
+		data-on:click-outside={ openSignal + " = false" }
+	>
+		{ children... }
+	</dialog>
+}
+
+// Table is a data table with a header row and no styling decisions of its own.
+//
+// It is the shape the keyboard reference and any future index list wants, and
+// it carries the two things a table is only correct with: a caption, when the
+// surrounding heading is not the table's own name, and header cells scoped to
+// the column.
+templ Table(caption string, headers []string, rows [][]string) {
+	<table class="table">
+		if caption != "" {
+			<caption>{ caption }</caption>
+		}
+		<thead>
+			<tr>
+				for _, header := range headers {
+					<th scope="col">{ header }</th>
+				}
+			</tr>
+		</thead>
+		<tbody>
+			for _, row := range rows {
+				<tr>
+					for _, cell := range row {
+						<td>{ cell }</td>
+					}
+				</tr>
+			}
+		</tbody>
+	</table>
+}
+
+// Tab is one entry of a tab list.
+type Tab struct {
+	// ID is the stable name both the tab and its panel are addressed by, and the
+	// value the selection signal holds.
+	ID string
+	// Label is what the reader sees.
+	Label string
+	// Href is where activating the tab navigates. Tabs here are real URLs, so
+	// the list works with JavaScript disabled and the back button means something.
+	Href string
+}
+
+// Tabs is a WAI-ARIA tab list whose selection lives in one signal.
+//
+// Selection follows the signal and the signal is the only thing that changes:
+// aria-selected is bound to it with data-attr rather than written out, which is
+// what stops the accessible state and the visual state drifting apart when a tab
+// is activated from the keyboard. Moving between tabs is the client's job —
+// ArrowLeft and ArrowRight move and activate, per the pattern — and the
+// data-tab hooks are what it looks for.
+templ Tabs(tabs []Tab, selected, signal string) {
+	<div role="tablist" aria-label="Sections" class="tabs" data-tabs={ signal }>
+		for _, tab := range tabs {
+			<a
+				role="tab"
+				href={ tab.Href }
+				data-tab={ tab.ID }
+				aria-selected={ boolAttr(tab.ID == selected) }
+				data-attr:aria-selected={ signal + " === '" + tab.ID + "' ? 'true' : 'false'" }
+				data-on:click={ signal + " = '" + tab.ID + "'" }
+			>
+				{ tab.Label }
+			</a>
+		}
+	</div>
+}
 
 // PageList is a list of pages: the dashboard's recent pages and a search's
 // hits, with the same card shape so that the two do not drift.
@@ -96,6 +295,9 @@ templ Callout(kind, label string, body templ.Component) {
 // is an observation every reader can make. The id is here because it is how the
 // page's own later editor finds the fence again, and it is an opaque handle
 // that grants nothing on its own.
+//
+// The icon and the word are both there because colour is never the only carrier
+// of meaning, and neither is an icon.
 templ SecretLock(secret httpapi.SecretView) {
 	<div class="secret-locked" data-secret-id={ secret.ID }>
 		@Icon("i-lock", "h-4 w-4 shrink-0")
@@ -175,19 +377,32 @@ templ Toc(entries []httpapi.TocEntry) {
 	</section>
 }
 
-// TagCloud is the dashboard's tag list.
+// TagCloud is the dashboard's tag list, and the /tags page's cloud.
 templ TagCloud(tags []httpapi.TagCard) {
+	@tagCloud(tags, "", "Tags")
+}
+
+// tagCloud is TagCloud with the two things /tag/{name} needs and the dashboard
+// does not: the tag being looked at, which is marked rather than omitted, and a
+// heading that is not the page's own.
+//
+// A tag links to its tag page and not to a search for its name. The route
+// exists, it is reachable without JavaScript, and a search for a bare tag name
+// matches page text as well as the tag, so the old href was a worse answer to
+// the same question.
+templ tagCloud(tags []httpapi.TagCard, current, heading string) {
 	if len(tags) > 0 {
-		<section aria-labelledby="tags-heading" class="mt-8">
+		<section aria-labelledby="tags-heading" class="tags">
 			<h2 id="tags-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
 				@Icon("i-tag", "h-4 w-4")
-				Tags
+				{ heading }
 			</h2>
 			<ul class="mt-2 flex flex-wrap gap-2">
 				for _, tag := range tags {
 					<li>
 						<a
-							href={ "/search?q=" + urlQueryEscape(tag.Name) }
+							href={ tagHref(tag.Name) }
+							aria-current={ boolAttr(tag.Name == current) }
 							class="inline-flex items-center gap-1 rounded-full border border-neutral-300 px-2 py-0.5 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
 						>
 							<span>#{ tag.Name }</span>

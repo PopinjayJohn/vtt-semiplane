@@ -47,14 +47,18 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "count the pages", err)
 		return
 	}
+	status, err := s.campaignStatus(ctx, who, 0)
+	if err != nil {
+		s.fail(w, r, "read the campaign status", err)
+		return
+	}
 
 	view := HomeView{
-		Shell:     s.shell(r, "Campaign"),
+		Shell:     s.liveShell(r, "Campaign"),
 		Pages:     pageCards(pages),
+		Tags:      tagCards(tags),
 		PageCount: int(total),
-	}
-	for _, t := range tags {
-		view.Tags = append(view.Tags, TagCard{Name: t.Name, Count: t.PageCount})
+		Status:    status,
 	}
 	if err := s.Render(w, r, view); err != nil {
 		s.fail(w, r, "render the dashboard", err)
@@ -109,22 +113,12 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toc, err := store.TOC(ctx, s.db.Reader(), who, row.ID)
+	// The right column is resolved once, by the same builder the context API
+	// uses, so the HTML view and the JSON view cannot describe two different
+	// campaigns for one page.
+	aside, err := s.pageAsideFor(ctx, who, row.ID)
 	if err != nil {
-		s.fail(w, r, "read the table of contents", err)
-		return
-	}
-	backlinks, err := store.ListBacklinks(ctx, s.db.Reader(), who, row.ID)
-	if err != nil {
-		s.fail(w, r, "read the backlinks", err)
-		return
-	}
-	// The count comes from the identical query rather than from len(backlinks),
-	// which is what §2.4 demands: a panel whose number disagrees with its own
-	// list is an existence leak, and there is nothing here that could disagree.
-	backlinkCount, err := store.BacklinkCount(ctx, s.db.Reader(), who, row.ID)
-	if err != nil {
-		s.fail(w, r, "count the backlinks", err)
+		s.fail(w, r, "read the page's context", err)
 		return
 	}
 	pageSecrets, err := s.pageSecrets(ctx, who, row)
@@ -133,28 +127,24 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	card := cardOf(row)
 	view := PageView{
-		Shell:         s.shell(r, row.TitleOr(row.Basename)),
-		Card:          cardOf(row),
+		Shell:         s.liveShell(r, card.Title),
+		Card:          card,
 		Body:          body,
-		BacklinkCount: backlinkCount,
+		Toc:           aside.toc,
+		Backlinks:     aside.backlinks,
+		BacklinkCount: aside.backlinkCount,
+		Related:       aside.related,
+		Status:        aside.status,
 		Secrets:       pageSecrets,
 		Truncated:     truncated,
 	}
-	for _, h := range toc {
-		view.Toc = append(view.Toc, TocEntry{Level: h.Level, Text: h.Text, Slug: h.Slug})
-	}
-	for _, b := range backlinks {
-		view.Backlinks = append(view.Backlinks, BacklinkChip{
-			Card: PageCard{
-				ID:       b.Page.ID,
-				Path:     b.Page.Path,
-				Title:    titleOr(b.Page.Title, b.Page.Path),
-				PageType: md.DefaultPageType,
-			},
-			Line: b.Line,
-		})
-	}
+	// The open page is named in the shell so that the last-activity panel can
+	// leave it out and the live-push path knows what to refetch, neither of
+	// which has to guess from the URL.
+	view.Shell.CurrentPageID = row.ID
+	view.Shell.CurrentPageURL = card.Href()
 	for _, p := range doc.Problems {
 		view.Problems = append(view.Problems, p.Code+": "+p.Message)
 	}

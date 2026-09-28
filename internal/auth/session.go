@@ -228,8 +228,39 @@ func (s *Service) Destroy(ctx context.Context, rawToken string) error {
 		return nil
 	}
 	id := HashToken(rawToken)
-	if err := store.DeleteSession(ctx, s.db.Writer(), id); err != nil {
+	// The delete and the bump are one transaction, and they have to be. A
+	// generation bump that committed without the delete would be a harmless
+	// false alarm, but a delete that committed without the bump is a signed-out
+	// reader still receiving content: a live-push stream captures its principal
+	// at connect time and re-renders under it, so the stream outlives the cookie
+	// that started it and keeps answering for an identity the server would now
+	// refuse to authenticate. There is no second check on that path, which is
+	// the whole reason §4.5's rule is "any authorization change terminates the
+	// stream" rather than "the next fetch will notice".
+	//
+	// The counter is global, so one sign-out closes every open stream in the
+	// campaign and each reconnects and refetches once. For a table of six that is
+	// invisible, and the alternative — a per-user generation — is a schema change
+	// bought with nothing: the thing being protected is a LAN, and the cost of
+	// the blunt instrument is one refetch.
+	tx, err := s.db.Writer().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("auth: begin the sign-out: %w", err)
+	}
+	// Written the long way round rather than as a bare `defer tx.Rollback()`,
+	// which is the style most of this package uses. Both are correct; this one
+	// says what it means — the rollback error is discarded on purpose, because a
+	// rollback that fails is reported by the connection closing and there is
+	// nothing a sign-out could do about it.
+	defer func() { _ = tx.Rollback() }()
+	if err := store.DeleteSession(ctx, tx, id); err != nil {
 		return err
+	}
+	if _, err := store.BumpAuthzGeneration(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("auth: commit the sign-out: %w", err)
 	}
 	s.forgetCSRF(id)
 	return nil
