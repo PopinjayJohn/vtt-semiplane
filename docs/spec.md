@@ -518,6 +518,21 @@ permission. The routes it mounted are all rows in
 [`../internal/httpapi/routes.go`](../internal/httpapi/routes.go) — read the
 table rather than this list, and `Server.Table` if you want it flattened.
 
+Stage 5 is **P7**: the secret lifecycle, from the service to the URL. It mounted
+§8.3's two writes, §8.3's per-page export and §8.6's audit view, and it added
+the leak suite that is derived from the route table. The three surfaces are
+[`../internal/httpapi/secretsroute.go`](../internal/httpapi/secretsroute.go),
+[`../internal/httpapi/export.go`](../internal/httpapi/export.go) and
+[`../internal/httpapi/auditsecrets.go`](../internal/httpapi/auditsecrets.go) —
+one per idea, and the first of them decides nothing: the permission, the write,
+the audit row, the generation bump and the reindex are all
+`secrets.Service.SetVisibility`, and a handler that re-decided any of them would
+be a second implementation of a rule the service already owns. The export's
+redaction is the raw view's, function for function, for the same reason; what it
+adds is the header set and a filename that cannot split a response, and what it
+deliberately refuses is a campaign-wide form. Read the two files' own preambles
+rather than this paragraph for the arguments.
+
 Delivered and enforced today:
 
 | Area | Where |
@@ -547,11 +562,11 @@ Delivered and enforced today:
 | The redacted save, the revision read paths, the audit-trail entry point | [`../internal/secrets/editor.go`](../internal/secrets/editor.go), [`../internal/secrets/revision.go`](../internal/secrets/revision.go) |
 | The page-scoped write surfaces and the §5.6 rename/updater | [`../internal/httpapi/pageedit.go`](../internal/httpapi/pageedit.go), [`../internal/httpapi/rename.go`](../internal/httpapi/rename.go), [`../internal/httpapi/pagehistory.go`](../internal/httpapi/pagehistory.go) |
 | The raw view, the page-scoped attachment serve path, the broken-links panel | [`../internal/httpapi/pageraw.go`](../internal/httpapi/pageraw.go), [`../internal/httpapi/pageattachment.go`](../internal/httpapi/pageattachment.go), [`../internal/httpapi/broken.go`](../internal/httpapi/broken.go) |
+| The reveal and revoke writes, the per-page export, the `secret_events` audit view | [`../internal/httpapi/secretsroute.go`](../internal/httpapi/secretsroute.go), [`../internal/httpapi/export.go`](../internal/httpapi/export.go), [`../internal/httpapi/auditsecrets.go`](../internal/httpapi/auditsecrets.go), [`../internal/web/secrets.templ`](../internal/web/secrets.templ) |
+| The leak walk derived from the route table, and the instrument's own proof | [`../internal/httpapi/leaksuite_test.go`](../internal/httpapi/leaksuite_test.go), [`../internal/httpapi/leaktripwire_test.go`](../internal/httpapi/leaktripwire_test.go) |
 
 **Not built. Treat every row as a proposal, not as behaviour.** The plan's
-remaining phases are P7's remaining surfaces (the reveal/revoke *controls* and
-the admin audit view — the write path and the audit *read* are built), P10 (the
-VTT) and P12.
+remaining phases are P10 (the VTT) and P12.
 
 Concretely absent from the tree, so that nobody goes looking:
 
@@ -580,12 +595,14 @@ Concretely absent from the tree, so that nobody goes looking:
 - **No sample campaign.** `internal/sample` is a `doc.go`; the embedded
   campaign and its first-boot extraction are not written. The leak suite runs
   against a harness-seeded vault instead.
-- **No create, delete, reveal, revoke, export or `/admin/users` route.** The
-  router mounts only what the route table lists. `internal/vault`'s `Delete` and
-  `Move` verbs and `internal/secrets`' reveal and revoke exist and are tested
-  directly, and `RenamePage` is the only one of them a route reaches — through
-  the §5.6 rename row, which also answers the question a delete route would
-  have to answer about `vault.Ignored` for itself.
+- **No create, delete or `/admin/users` route.** The router mounts only what the
+  route table lists. `internal/vault`'s `Delete` and `Move` verbs exist and are
+  tested directly, and `RenamePage` is the only one of them a route reaches —
+  through the §5.6 rename row, which also answers the question a delete route
+  would have to answer about `vault.Ignored` for itself. A whole-vault export is
+  in neither list on purpose: [`export.go`](../internal/httpapi/export.go) argues
+  that the vault-wide form has no per-page authorization question to ask, so it
+  would be a copy of the plaintext ADR-0004 already accepts is on the disk.
 - **No DataStar `@get` action is used.** The bundle is vendored and served, and
   the server still answers a fragment for `Datastar-Request: true`, but the
   palette's live search is a plain `fetch` in `app.js` — the reason is in
@@ -635,6 +652,37 @@ would be refused, which is the same rule §5 applies to the route itself.
   to stop hand-inserting rows the indexer now writes. A schema change is not
   confined to the package that owns the table: the first thing to look for is a
   test that was writing a row by hand because nothing else did.
+
+### What stage 5 changed outside its own files
+
+- **The attachment URL a rendered page emits.** It was a relative `src`, so
+  every attachment in the app was a broken image and the only test that touched
+  it asked the serve route directly rather than following the link. The rewrite
+  could not live in `md.VaultResolver` — the reference is not always a wikilink,
+  and the renderer is one shared object built at boot — so it is
+  `md.scopeAttachments`, a walk over the AST in
+  [`../internal/md/render.go`](../internal/md/render.go).
+  `TestThePagePointsAtTheAttachmentItServes` in
+  [`../internal/httpapi/attachmenturl_test.go`](../internal/httpapi/attachmenturl_test.go)
+  is the gate, and the same file records the one thing it deliberately does
+  **not** assert.
+- **`selector.bind` accepts a tail longer than the template.** The greedy
+  `{name...}` segment exists so a subdirectory attachment can be served, and
+  the bind required the opposite, so every subdirectory attachment was refused
+  for every principal including an administrator.
+  [`../internal/httpapi/catchall_test.go`](../internal/httpapi/catchall_test.go)
+  drives the names through the real router and pins the refusals the loosening
+  must not undo.
+- **A page row for a file that is not a page.** The indexer writes one for every
+  file in the vault, a PNG included, and that has a security consequence the
+  plan does not have. It is unfixed, and the reason it is recorded rather than
+  quietly accepted is in [Divergences](#divergences).
+- **The test harness can capture its own logs, and `scripts/test.sh` scales its
+  timeout under `-race`.** The first is what made the 500 page and the request
+  log assertable at all — every test used to throw its logs away. The second
+  is in the script's own comment: the race build makes the `httpapi` suite
+  several times slower, and the timeout exists to name a spin rather than to
+  hold a budget, so a stale 180s reports a spin on a suite that is working.
 
 ---
 
@@ -726,13 +774,22 @@ what the plan said, what the code does, and where the code says so for itself.
 11. **There is no runtime tripwire.** Plan §1 and §4.5 describe
     `secretsvc.Tripwire` as an `http.ResponseWriter` wrapper that scans outgoing
     bodies for secret plaintext. Nothing like it exists in non-test code. What
-    stage 1 has instead is a test-level equivalent that is arguably stronger
-    for this stage — `TestNoSecretLeaksThroughAnyPath` in
+    the tree has instead is test-level equivalents, which are arguably stronger
+    for what they can prove — `TestNoSecretLeaksThroughAnyPath` in
     [`../internal/httpapi/tripwire_test.go`](../internal/httpapi/tripwire_test.go)
     walks the whole demo path as every role and asserts no forbidden secret
-    token appears in any body, any header value or any `data-signals` payload.
-    A runtime response-scanner is **not yet implemented**; do not describe one
-    as protection that exists.
+    token appears in any body, any header value or any `data-signals` payload,
+    and stage 5 added a second, wider one derived from the route table itself
+    ([`../internal/httpapi/leaksuite_test.go`](../internal/httpapi/leaksuite_test.go)).
+    Stage 5 also added `TestTripwireFiresOnLeak` in
+    [`../internal/httpapi/leaktripwire_test.go`](../internal/httpapi/leaktripwire_test.go),
+    which is the only thing that can be proved from the test side: that the
+    scanner, wrapped over the ordinary response path, sees every byte the client
+    receives and reports a fixture body when armed to. **That is a test
+    instrument and nothing more.** A runtime response-scanner is **not
+    implemented**; do not describe one as protection that exists, and do not
+    read the instrument as evidence that a leak in production would be caught at
+    runtime.
 12. **Golden fixtures are at `internal/md/testdata/*.md`, flat.** The plan's
     §5.3 says "≥40 … in `testdata/vault/`". The corpus is larger than specified
     and lives next to the package; `golden_test.go` walks that directory, so the
@@ -775,9 +832,12 @@ what the plan said, what the code does, and where the code says so for itself.
     An earlier draft of this document claimed that test did not exist. It does;
     the name was wrong, and the wrong name came from `AGENTS.md` §5, which
     listed a required suite by a name no test had ever had. §5 carried four
-    such names until stage 4 and all four are corrected. It is worth recording
-    as a reminder that a required-suite list naming a test that does not exist
-    is worse than no list, because it reads as a gate.
+    such names until stage 4 and all four are corrected; a sweep of every test
+    name in `AGENTS.md` and in `docs/` at stage 5 found two more, in
+    [`security.md`](security.md)'s table of rules a test enforces, and corrected
+    those too. It is worth recording as a reminder that a required-suite list
+    naming a test that does not exist is worse than no list, because it reads
+    as a gate.
 17. **`secrets.Service.Events` is gone, replaced by `EventsFor`.** The plan's
     §6a and the original code both had an audit-trail read that took a context
     and a secret id and **no principal**, with no permission constant behind it
@@ -788,7 +848,10 @@ what the plan said, what the code does, and where the code says so for itself.
     for it — deliberately not a fold-in of `PermDM`, which would have closed the
     gap by accident and left the constant's name lying about what it grants.
     `EventsFor` checks the policy *before* the lookup so a refused principal
-    cannot enumerate ids. No route is mounted, so nothing is served.
+    cannot enumerate ids. Stage 5 mounted the per-account form,
+    `AllEventsFor`, at `GET /admin/secrets` on that constant, passing the
+    principal rather than an id, so the gate is exercised rather than
+    theoretical.
 18. **`internal/diff` is hand-rolled, and the reason is a measurement.** The
     obvious next step for a reader is to replace it with a diff library, so
     here is the one measurement that is recorded in the tree:
@@ -799,3 +862,39 @@ what the plan said, what the code does, and where the code says so for itself.
     that is **not** written down anywhere in the repository, so treat only the
     space measurement as the recorded reason. `internal/diff/doc.go` and
     `myers.go` are where the algorithm and its three decisions are argued.
+19. **The indexer writes a `pages` row for a file that is not a page, and the
+    plan says it should not. This one is open, unfixed, and security-relevant.**
+    `vault.Walk` does not filter by extension and `Indexer.writeOne` upserts a
+    page for everything it is handed, so a PNG in the vault gets a `pages` row —
+    and a `pages` row has no visibility (see [`../AGENTS.md`](../AGENTS.md) §7,
+    "a page has no visibility"). The consequence: an attachment referenced
+    **only from inside a secret** has a page row, and the campaign-status "Last
+    activity" panel renders its **filename** on a player's page. The file itself
+    is not served — the page-scoped attachment route answers 404, byte-identical
+    to a file that is not there, and the page shows the fence's lock rather than
+    the reference — so this is metadata, not content. The plan's §5 states the
+    opposite model: "Images, PDFs, and audio live beside the pages… are not
+    indexed into FTS but are recorded in `attachments` with their page
+    relationships, and referenced from pages through `links` rows of kind
+    `attachment` — each of which carries the `secret_id` of the span it appears
+    in". **The plan is the better model and the code does not implement it.**
+
+    It was deliberately **not** fixed in stage 5. The fix is a change to what
+    counts as a page, which is the indexer's model rather than P7's deliverable,
+    and doing it properly means a `secret_id` on `pages` — a schema and predicate
+    change on the table every page query in the app reads, which is not a change
+    to make incidentally while mounting three HTTP surfaces. So the current
+    behaviour is **asserted as the observed behaviour** in
+    `TestThePagePointsAtTheAttachmentItServes`
+    ([`../internal/httpapi/attachmenturl_test.go`](../internal/httpapi/attachmenturl_test.go)),
+    with a comment naming this plan line. The assertion is deliberately written
+    so that it fires when the behaviour changes in *either* direction: it fails
+    the moment the indexer stops writing a page row for a file, and its failure
+    message says to delete it and assert the absence instead. **That test is what
+    will fire when this divergence is closed.**
+
+    For scale: the disclosure the plan's U17 accepts for an attachment
+    referenced only from a secret is a lock marker. A filename is a different
+    disclosure, and it is the one thing here that is a small information leak
+    rather than a broken control — so it is recorded as an open finding, not as
+    an accepted design.

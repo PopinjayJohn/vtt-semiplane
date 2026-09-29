@@ -9,9 +9,12 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -19,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +55,19 @@ type fixture struct {
 	Vault *vault.Writer
 	Root  string
 	Log   *obs.Logger
-	Clock *testClock
+	// mainLog and auditLog are the two sinks obs writes to, held in memory. They
+	// are captured rather than discarded because the assertion a test in this
+	// package most needs to be able to make — that a request path leaked nothing
+	// to the log — is impossible against io.Discard, and a discard is exactly the
+	// failure that reads as a pass.
+	//
+	// Two buffers rather than one because obs keeps them apart: Audit is a second
+	// handler with its own allow-list and its own level, so a leak test that
+	// merged them would pass for the wrong reason on one and fail for the wrong
+	// reason on the other.
+	mainLog  *safeBuffer
+	auditLog *safeBuffer
+	Clock    *testClock
 	// Indexer is kept so a test can force a reindex after writing a file the way
 	// the vault watcher would.
 	Indexer *isync.Indexer
@@ -113,7 +130,13 @@ func newFixturePlugins(t *testing.T, files map[string]string, plugins plugin.Reg
 		t.Fatalf("the fixture's configuration is not valid: %v", err)
 	}
 
-	log := obs.NewLogger(io.Discard, obs.Options{Level: slog.LevelError})
+	// Debug, not Error. The level is what makes the capture above worth having: a
+	// sink that only ever records ERROR is a sink a leak assertion over it can
+	// pass vacuously, because a body written by an Info or a Warn is invisible to
+	// the very test that exists to catch it. The audit handler picks its own level
+	// and is always Info.
+	mainLog, auditLog := &safeBuffer{}, &safeBuffer{}
+	log := obs.NewLogger(mainLog, obs.Options{Level: slog.LevelDebug, Audit: auditLog})
 	clock := &testClock{now: startTime}
 	clockFn := clock.obs()
 
@@ -210,18 +233,126 @@ func newFixturePlugins(t *testing.T, files map[string]string, plugins plugin.Reg
 	return &fixture{
 		t: t, dir: dir, cfg: cfg,
 		DB: db, Auth: accounts, Vault: writer, Root: dir,
-		Log: log, Clock: clock, Indexer: ix, Secrets: secretSvc,
+		Log: log, mainLog: mainLog, auditLog: auditLog, Clock: clock,
+		Indexer: ix, Secrets: secretSvc,
 		Server: srv, HTTP: ts,
 	}
 }
 
+// logs is everything both sinks have been given, for the leak suite.
+//
+// Each buffer is copied under its own lock, so a test may read the stream while
+// the server is still logging. That ordering is real — a handler that writes a
+// line after the response body is written is a normal thing for a request log to
+// do — and a harness that raced to assert would report that line as present when
+// it was not or absent when it was.
+//
+// The two sinks are concatenated rather than merged, for the reason obs keeps
+// them apart: a finding that names a leak into the request log and a finding
+// that names one into the audit trail are different findings, and a single
+// string cannot say which.
+func (fx *fixture) logs() string {
+	return fx.mainLog.String() + fx.auditLog.String()
+}
+
+// discardLogs turns both sinks into io.Discard from here on.
+//
+// Capture is the default because a leak suite that had to opt in would be a leak
+// suite somebody forgets to opt in to, and a fixture that quietly discards is
+// indistinguishable from a fixture that is clean. A test that wants the old
+// behaviour asks for it in one place here rather than by building its own
+// logger, which is the way a harness ends up with two of them.
+func (fx *fixture) discardLogs() {
+	fx.mainLog.discard()
+	fx.auditLog.discard()
+}
+
+// safeBuffer is a bytes.Buffer that a request handler may write to from any
+// goroutine while a test reads it.
+//
+// The push tests drive several connections at once against one fixture, and
+// obs.Logger is safe for concurrent use only as far as its handler is; a plain
+// bytes.Buffer is not.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	// dropping makes Write a no-op. The logger holds the io.Writer it was given
+	// at construction, so the mode has to live behind Write rather than in the
+	// field the writer would have been read from.
+	dropping bool
+}
+
+// Write implements io.Writer.
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.dropping {
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+// String returns a copy of what has been written so far.
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// discard empties the buffer and refuses everything written after it.
+func (b *safeBuffer) discard() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dropping = true
+	b.buf.Reset()
+}
+
 // campaignFiles is the campaign every fixture is seeded with.
 //
-// The four secret fences are what the leak tripwire walks: one readable only by
-// DMs and its author, one readable by nobody but a DM, one readable by the page
-// owner, and one revealed to the table. Each carries a token that appears
+// The five secret fences on the first three pages are what the leak tripwire
+// walks: one readable by a DM and by the page's owner, one readable by nobody
+// but a DM, one readable by its own author, one revealed to the table, and one
+// DM's private secret on a second page. Each carries a token that appears
 // nowhere else in the campaign, so finding one in a response cannot be an
 // accident of vocabulary.
+//
+// Those five are frozen. Their ids, visibilities, authors, titles and body text
+// are spelled out as literals in matrix_test.go, nav_test.go, tripwire_test.go,
+// demo_test.go, pageroutes_test.go and events_test.go, and every one of those is
+// a literal rather than a lookup — deliberately, because a tripwire that reads
+// its expectations out of the fixture cannot catch the fixture being wrong. So a
+// new case gets a new fence and a new token; it does not get a reworded one.
+//
+// The pages after those carry one page per page-type id the host knows about, so
+// that "the walk covered every page type" is a claim about this vault rather
+// than a claim about one renderer. campaignPageTypes below is the same fact as
+// data.
+//
+// Two constraints on the new paths are load-bearing rather than tidy.
+//
+// Every one of them sorts after Tavern.md, and none is a file the vault walk
+// would reach earlier. Page ids come from the walk's path order, and
+// matrix_test.go names Tavern.md as page id 3; a file sorting before it moves
+// the page out from under that row. Lowercase names sort after uppercase ones,
+// which is the whole reason none of these is called Index or Rule.
+//
+// None of the new pages links to Index, Ruin or Tavern. The Tavern rename's
+// link updater is asserted to plan exactly the two pages that already refer to
+// it, and a third would move the count without moving anything under test.
+//
+// One row in matrix_test.go does not survive this extension, and it is worth
+// writing down here because the cause is a property of the campaign rather than
+// of the row. That test asks for /api/pages/3/rename-preview and
+// /api/pages/3/update-links *after* its own /api/pages/3/rename row has run, and
+// a rename deletes the departed page row and inserts the new one, so the page
+// comes back under a fresh id — max(rowid)+1 over what is left. With three pages
+// that is 3 again, because deleting Tavern.md left Index.md and Ruin.md as ids 1
+// and 2. With eleven it is 12, and id 3 is a hole, so those two rows get the
+// 404 they were never asking about. No arrangement of extra pages avoids it: the
+// id is max(rowid)+1 whatever order the vault is walked in, so the row can only
+// hold for a campaign of exactly three pages. The fix belongs in the test —
+// resolve the id from the path (fx.pageIDByPath("Tavern.md")) instead of pinning
+// a number — and is not made here, because this file does not own it.
 var campaignFiles = map[string]string{
 	"Index.md": "---\ntitle: Index\ntype: note\n---\n\n# Index\n\n" +
 		"The [[Tavern]] is where the party met. See also [[Ruin]] and the\n" +
@@ -235,6 +366,135 @@ var campaignFiles = map[string]string{
 	"Ruin.md": "---\ntitle: The Salt Ruin\ntags: [area/wild]\n---\n\n" +
 		"# The Salt Ruin\n\nReached from [[Index]]. The [[Tavern|the lantern]] is the last dry stop.\n\n" +
 		fence("e5e5e5e5e5e5", "dm", "dungeonmaster", "The trap", "RUIN-BODY-TOKEN-2c8f61"),
+
+	// character, which internal/systems/dnd5e registers with CapCharacterSheet.
+	// It carries both halves of §8.8 on one page, because that is the shape the
+	// rule has: one file referenced from the public text and another referenced
+	// only from inside a dm fence are two different answers, and on two separate
+	// pages a per-page answer would satisfy both.
+	"characters/Thia.md": "---\ntitle: Thia\ntype: character\nname: Thia\nclass: Rogue\nlevel: 3\n---\n\n" +
+		"# Thia\n\nWears the grey coat and owes money in three towns.\n\n" +
+		"Orrin keeps this behind the bar: ![Orrin behind the bar](" + publicAttachment + ")\n\n" +
+		fenceBody("f6f6f6f6f6f6", "dm", dmName, "Orrin's other name",
+			"![Orrin's real face]("+secretAttachment+")\n\nCHARACTER-BODY-TOKEN-4b81ad"),
+
+	// rule, the other id internal/systems/dnd5e registers, with CapRules. Its
+	// secret is private and its page is owned by nobody, which is the case the
+	// Tavern's private fences cannot make: Thia owns the Tavern, so a query that
+	// answered "private, therefore the owners of this page" answers both of the
+	// Tavern's correctly and this one wrongly.
+	"rules/Halting.md": "---\ntitle: Halting\ntype: rule\nsource: house rule\n---\n\n" +
+		"# Halting\n\nA rest ends early when something moves.\n\n" +
+		fenceBody("a7a7a7a7a7a7", "private", dmName, "The real cost", "RULE-BODY-TOKEN-6a3f57"),
+
+	// houserule, which internal/systems/houserules lists as a frontmatter
+	// convention and deliberately does not register, because a feature plugin may
+	// not register a page type. The core viewer is therefore the right renderer
+	// here by design, which is what makes the fence worth having: it is
+	// table-visible, so the walk has to see the core path deliver a secret to
+	// every account and refuse it to an anonymous reader on a type with no plugin
+	// anywhere behind it.
+	"houserules/Extended-rest.md": "---\ntitle: Extended rest\ntype: houserule\n---\n\n" +
+		"# Extended rest\n\nEveryone gets two more, once per session.\n\n" +
+		fenceBody("b8b8b8b8b8b8", "table", dmName, "The short version", "HOUSERULE-BODY-TOKEN-1e7d92"),
+
+	// map, which the host reserves for CapMaps and no shipped plugin claims, so
+	// it renders through the core viewer like any unregistered type. The secret is
+	// private and authored by thia on a page thia does not own: the author arm of
+	// the policy with the ownership arm taken away, which no existing fence
+	// reaches.
+	"maps/Salt-coast.md": "---\ntitle: The salt coast\ntype: map\n---\n\n" +
+		"# The salt coast\n\nReached on foot from the ruin. Surveyed badly.\n\n" +
+		fenceBody("c9c9c9c9c9c9", "private", playerName, "Thia's own survey", "MAP-BODY-TOKEN-3f2a86"),
+
+	// encounter, reserved for CapEncounters and likewise unclaimed. Its fence is
+	// dm and is authored by bram, a player who owns nothing: ownership and
+	// authorship grant the right to write a secret and never the right to
+	// broadcast one, so the author of a dm fence is not among its readers.
+	"encounters/Bridge-ambush.md": "---\ntitle: The bridge ambush\ntype: encounter\n---\n\n" +
+		"# The bridge ambush\n\nFour of them, on the far bank.\n\n" +
+		fenceBody("d1d1d1d1d1d1", "dm", otherName, "Who paid for it", "ENCOUNTER-BODY-TOKEN-5c40f9"),
+
+	// token, the last reserved id, and the one new page with nothing hidden on
+	// it. It is here so that a walk of the reserved types includes a page where
+	// the right answer is that there is nothing to redact: a placeholder for a
+	// secret nobody was refused, or a lock on a page that carries no fence, shows
+	// on exactly this page and on no other.
+	"tokens/Orrin.md": "---\ntitle: Orrin's token\ntype: token\n---\n\n" +
+		"# Orrin's token\n\nA circle with a bar through it, for the map view.\n",
+
+	// The two attachment files, at the vault root.
+	//
+	// The names carry no directory on purpose. selector.bind in pagedispatch.go
+	// requires the captured tail to be exactly as long as the template, so the
+	// {name...} in `/p/*/attachment/{name...}` binds exactly one segment however it
+	// is written and a name under assets/ is refused for every principal — which
+	// contradicts the reason that comment gives for the greedy form existing at all
+	// (pagedispatch.go:154). A root-level name exercises §8.8's per-reference rule
+	// end to end against the code as it is today, and the nested case is a router
+	// finding rather than a fixture one.
+	//
+	// The bytes are not a PNG and nothing decodes them; what matters is that the
+	// length is knowable and that a change to one is a change to that one.
+	publicAttachment: "\x89PNG\r\n\x1a\nnot-really-a-png",
+	secretAttachment: "\x89PNG\r\n\x1a\nnot-really-a-different-png",
+}
+
+// The two attachments the campaign carries, by the name the serve route matches.
+//
+// They are named rather than spelled at the call sites because the walk has to
+// name both of them, and a walk that typed the path itself would be a second
+// copy of the string that can quietly disagree with the reference the index
+// recorded — which is the same class of bug the route's own equality check
+// exists to make impossible. See campaignFiles for why neither carries a
+// directory.
+const (
+	// publicAttachment is referenced from a page's public text, so it is served
+	// to every principal that may read public content at all.
+	publicAttachment = "orrin-at-the-bar.png"
+	// secretAttachment is referenced only from inside a dm fence, so it is served
+	// to a DM or an administrator and to nobody else. It is on the same page as
+	// publicAttachment on purpose: one page, two answers, one rule.
+	secretAttachment = "orrin-portrait.png"
+)
+
+// campaignPageTypes is every page in the campaign and the type the index gives
+// it, by vault path.
+//
+// It is here so that a coverage claim is checkable rather than asserted. "The
+// walk covered every page type" is only true if the set of types the vault
+// carries is the set of types the host knows about, and this is the half of that
+// comparison a reader can check without running anything; the other half is
+// plugin.ReservedPageTypes, and the check is
+// TestTheCampaignFixtureIsInternallyConsistent.
+//
+// Tavern.md and Ruin.md carry no `type:` and are therefore note. They are
+// listed under it rather than omitted, because a sweep that only read frontmatter
+// would call two pages untyped and report the most common type in the vault as
+// the one it never covered.
+var campaignPageTypes = map[string]string{
+	"Index.md":                    "note",
+	"Tavern.md":                   "note",
+	"Ruin.md":                     "note",
+	"characters/Thia.md":          "character",
+	"rules/Halting.md":            "rule",
+	"houserules/Extended-rest.md": "houserule",
+	"maps/Salt-coast.md":          "map",
+	"encounters/Bridge-ambush.md": "encounter",
+	"tokens/Orrin.md":             "token",
+}
+
+// conventionPageTypes are the `type:` values that are conventions rather than
+// registrations, with the constant that owns each one.
+//
+// A reservation is a name the host holds *for* a plugin, so it is not a name a
+// page in this vault can be expected to carry for a viewer to exist. The two
+// below are the other half of the vocabulary: the default, and a feature
+// plugin's frontmatter convention that deliberately registers nothing because a
+// feature may not register a page type.
+var conventionPageTypes = map[string]string{
+	"note":      "md.DefaultPageType",
+	"houserule": "houserules.PageTypeHouseRule",
 }
 
 // searchWord is a word that appears in the body of every secret in the fixture
@@ -245,10 +505,15 @@ var campaignFiles = map[string]string{
 // secret's own token: the search form echoes the term back, so a term that is
 // itself a secret body would be found in the response for that reason alone and
 // the assertion would prove nothing. With a shared word, one term distinguishes
-// all five secrets and none of them is the term.
+// all five original secrets and none of them is the term.
+//
+// Exactly five fences carry it, which is why fenceBody exists: a sixth fence
+// joining the set would silently change what "one term finds every secret" means
+// for every test that says it.
 const searchWord = "obsidianquill"
 
-// fence is one secret fence in the on-disk syntax.
+// fence is one secret fence in the on-disk syntax, carrying the shared search
+// word.
 //
 // Two details are load-bearing and both cost a leak if they are wrong. The title
 // is quoted, because an unquoted value ends at the first space and the leftover
@@ -258,30 +523,125 @@ const searchWord = "obsidianquill"
 // author that does not resolve leaves the fence with no author, and every
 // authorization question about it is then answered wrongly rather than refused.
 func fence(id, visibility, author, title, body string) string {
+	return fenceBody(id, visibility, author, title, body+" "+searchWord)
+}
+
+// fenceBody is fence with its body written out whole, for a secret that must not
+// carry the shared search word. See searchWord for why a new fence is one of
+// these.
+func fenceBody(id, visibility, author, title, body string) string {
 	return "```secret id=" + id +
 		" visibility=" + visibility +
 		" author=" + author +
 		" created=2026-01-01T00:00:00Z" +
 		" title=" + strconv.Quote(title) +
-		"\n" + body + " " + searchWord + "\n```\n\n"
+		"\n" + body + "\n```\n\n"
 }
+
+// The fixture's body tokens.
+//
+// **This is the canonical definition of every one of these literals, and the
+// names here are the ones a later cleanup should adopt.** Six files in this
+// package spell the same strings out again as inline literals — events_test.go,
+// demo_test.go, nav_test.go, matrix_test.go, pageroutes_test.go and
+// web/shell_test.go outside it — and the duplication is deliberate in exactly one
+// of them: a tripwire that reads its expectations out of the fixture cannot catch
+// the fixture being wrong. What should not survive is six files that each hold
+// their own copy of the *string*; they should hold their own copy of the *rule*
+// and reach the string from here.
+//
+// Each token appears in exactly one fence in exactly one file, so finding one in
+// a response names the secret that leaked rather than only the page it leaked on.
+const (
+	// privateBodyToken is the DM's private secret on the Tavern, a page thia
+	// owns: the ownership arm on a fence whose author is not the reader.
+	privateBodyToken = "PRIVATE-BODY-TOKEN-9f3a2c"
+	// dmBodyToken is dm on the Tavern: DMs and admins, and not the page owner.
+	dmBodyToken = "DM-BODY-TOKEN-7b1e4d"
+	// ownerBodyToken is private, authored by thia, on a page thia owns: twice
+	// over, and still only hers.
+	ownerBodyToken = "OWNER-BODY-TOKEN-2a6e10"
+	// ruinBodyToken is dm on the Ruin, which no player owns.
+	ruinBodyToken = "RUIN-BODY-TOKEN-2c8f61"
+	// tableToken is the one body a player may read: a table-visible secret. It is
+	// in the list below because a *disabled* or anonymous principal must not see
+	// it either, and because the negative assertion for it is that no principal
+	// outside the DM set reads it.
+	tableToken = "TABLE-BODY-TOKEN-5d0a8f"
+
+	// characterBodyToken is dm on a `type: character` page, and the same fence
+	// also references the secret-only attachment. One case, two rules.
+	characterBodyToken = "CHARACTER-BODY-TOKEN-4b81ad"
+	// ruleBodyToken is private on an unowned `type: rule` page, so the reader set
+	// is DMs and the author with no page owner added to it.
+	ruleBodyToken = "RULE-BODY-TOKEN-6a3f57"
+	// houseRuleBodyToken is table-visible on `type: houserule`, a type the
+	// houserules plugin lists as a convention and never registers. Every account
+	// may read it; no anonymous reader may.
+	houseRuleBodyToken = "HOUSERULE-BODY-TOKEN-1e7d92"
+	// mapBodyToken is private and authored by a player on a page she does not
+	// own: the author arm with the ownership arm removed.
+	mapBodyToken = "MAP-BODY-TOKEN-3f2a86"
+	// encounterBodyToken is dm and authored by a player. Authorship buys the right
+	// to write the fence, never the right to read it back.
+	encounterBodyToken = "ENCOUNTER-BODY-TOKEN-5c40f9"
+)
 
 // bodyTokens are the strings that must never appear in a response to a
 // principal that may not read the secret holding them. Each appears in exactly
-// one fence in exactly one file.
+// one fence in exactly one file; TestTheCampaignFixtureIsInternallyConsistent is
+// the gate that keeps that true, and it fails naming the token that drifted.
 var bodyTokens = []string{
-	"PRIVATE-BODY-TOKEN-9f3a2c",
-	"DM-BODY-TOKEN-7b1e4d",
-	"OWNER-BODY-TOKEN-2a6e10",
-	"RUIN-BODY-TOKEN-2c8f61",
-	"TABLE-BODY-TOKEN-5d0a8f",
+	privateBodyToken,
+	dmBodyToken,
+	ownerBodyToken,
+	ruinBodyToken,
+	tableToken,
+	characterBodyToken,
+	ruleBodyToken,
+	houseRuleBodyToken,
+	mapBodyToken,
+	encounterBodyToken,
 }
 
-// tableToken is the one body a player may read: a table-visible secret. It is
-// in the list above because a *disabled* or anonymous principal must not see it
-// either, and because the negative assertion for it is that no other principal
-// outside the DM set reads it.
-const tableToken = "TABLE-BODY-TOKEN-5d0a8f"
+// readerRole is one of the principals the harness's own accounts are, under the
+// names the leak suites use for them.
+type readerRole string
+
+const (
+	roleAdmin     readerRole = "admin"
+	roleDM        readerRole = "dm"
+	rolePageOwner readerRole = "page owner"
+	rolePlayer    readerRole = "player"
+	roleAnonymous readerRole = "anonymous"
+)
+
+// bodyTokenReaders is who may read each body token, by fixture role.
+//
+// It is the fixture's own statement of what each fence is *for*, kept beside the
+// tokens so that a new fence declares its case as data and not only as prose. It
+// is deliberately not an implementation to call: tripwire_test.go, nav_test.go
+// and events_test.go each answer from their own model of the rule, because a
+// leak test that asks the code it is testing whether a leak is a leak has stopped
+// being a leak test. A disagreement between one of those and this table is a
+// finding about one of the two, which is the reason all four exist.
+//
+// The anonymous row is the one that is easiest to get wrong and the one §2.4 is
+// about: authz.SecretVisibleSQL's table clause names no session, so an anonymous
+// principal asking for a table secret is closed by store.publicOnlySQL, by the
+// per-query principal check and by search.Query's guard — not by the predicate.
+var bodyTokenReaders = map[string]map[readerRole]bool{
+	privateBodyToken:   {roleAdmin: true, roleDM: true, rolePageOwner: true},
+	dmBodyToken:        {roleAdmin: true, roleDM: true},
+	ownerBodyToken:     {roleAdmin: true, roleDM: true, rolePageOwner: true},
+	ruinBodyToken:      {roleAdmin: true, roleDM: true},
+	tableToken:         {roleAdmin: true, roleDM: true, rolePageOwner: true, rolePlayer: true},
+	characterBodyToken: {roleAdmin: true, roleDM: true},
+	ruleBodyToken:      {roleAdmin: true, roleDM: true},
+	houseRuleBodyToken: {roleAdmin: true, roleDM: true, rolePageOwner: true, rolePlayer: true},
+	mapBodyToken:       {roleAdmin: true, roleDM: true, rolePageOwner: true},
+	encounterBodyToken: {roleAdmin: true, roleDM: true},
+}
 
 // Accounts created by setupFixtureAccounts. The usernames are fixed so that a
 // failing matrix row names a known role.
@@ -970,4 +1330,168 @@ func (c *testClock) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
+}
+
+// TestTheCampaignFixtureIsInternallyConsistent is the gate on the fixture the
+// leak suites are armed from.
+//
+// Every leak test in this package is a claim about the same vault: that these
+// tokens, on these pages, of these types, reach exactly the principals this table
+// says. A claim of that shape fails silently when the fixture drifts — a token
+// typed into the wrong fence, a page type the walk will never reach, a reference
+// that moved out of its secret — and the silence is what makes it dangerous,
+// because the walk still passes over the pages it was written against.
+//
+// So the four facts a walk depends on are checked here against the sources of
+// truth rather than against themselves: the tokens against the files, the page
+// types against plugin.ReservedPageTypes, the page table against the vault, and
+// the two attachments against where they are referenced.
+func TestTheCampaignFixtureIsInternallyConsistent(t *testing.T) {
+	t.Parallel()
+
+	paths := make([]string, 0, len(campaignFiles))
+	for p := range campaignFiles {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	t.Run("every body token is written in exactly one fence", func(t *testing.T) {
+		t.Parallel()
+		for _, token := range bodyTokens {
+			// Not named where: TestEveryQueryUsesBindParameters flags any line
+			// carrying Sprintf and a SQL verb, and a local that reads as a
+			// WHERE clause fails a gate it has nothing to do with.
+			var sites []string
+			for _, p := range paths {
+				if n := strings.Count(campaignFiles[p], token); n > 0 {
+					sites = append(sites, fmt.Sprintf("%s x%d", p, n))
+				}
+			}
+			if len(sites) != 1 {
+				t.Errorf("the token %s is written %d times across the campaign (%s), want once: a body token that appears twice is a finding that cannot name the secret that leaked",
+					token, len(sites), strings.Join(sites, ", "))
+			}
+		}
+	})
+
+	t.Run("every body token declares who may read it", func(t *testing.T) {
+		t.Parallel()
+		for _, token := range bodyTokens {
+			readers, ok := bodyTokenReaders[token]
+			if !ok {
+				t.Errorf("the token %s has no entry in bodyTokenReaders, so a leak suite has no stated expectation to assert against", token)
+				continue
+			}
+			if len(readers) == 0 {
+				t.Errorf("the token %s is written to no principal at all, which is a fence nobody can read rather than a case", token)
+			}
+			// A table-visible secret that an anonymous reader may have is the one
+			// row §2.4 is about, and it is the row a copy-paste into this table
+			// gets wrong. It is checked here rather than in each leak suite so
+			// that the correction is made once.
+			if readers[roleAnonymous] {
+				t.Errorf("the token %s is granted to the anonymous role, and no secret body is served to a principal with no session", token)
+			}
+		}
+		for token := range bodyTokenReaders {
+			if !slices.Contains(bodyTokens, token) {
+				t.Errorf("bodyTokenReaders has an entry for %s, which is not in bodyTokens, so nothing walks it", token)
+			}
+		}
+	})
+
+	t.Run("the campaign carries every page type the host knows", func(t *testing.T) {
+		t.Parallel()
+		present := map[string]bool{}
+		for _, typ := range campaignPageTypes {
+			present[typ] = true
+		}
+		// The reserved half. A reservation is a name the host holds for a plugin
+		// that may never ship, so a page of that type has no viewer behind it —
+		// which is exactly why the campaign needs one: redaction that lives in a
+		// plugin's viewer rather than in the core path passes on every other page
+		// and fails on these.
+		for _, r := range plugin.ReservedPageTypes() {
+			if !present[r.ID] {
+				t.Errorf("the campaign has no page of the reserved type %q, so a walk claiming to cover every page type would not: add one to campaignFiles and to campaignPageTypes", r.ID)
+			}
+		}
+		// The convention half, and the refusal of a third category. A type that is
+		// neither reserved nor a convention is one nothing in the tree accounts
+		// for, and it renders as `note` whatever the author wrote.
+		for id := range conventionPageTypes {
+			if !present[id] {
+				t.Errorf("the campaign has no page of the convention type %q", id)
+			}
+		}
+		// The table, not the vault: a page the table has not listed is reported by
+		// the subtest below, and reading its type from a map it is not in would
+		// report the same gap a second time as a type of "".
+		for path, typ := range campaignPageTypes {
+			_, reserved := plugin.ReservedPageTypeFor(typ)
+			_, convention := conventionPageTypes[typ]
+			if !reserved && !convention {
+				t.Errorf("%s is typed %q, which is neither a reserved page type nor one of the conventions %v: nothing renders it as anything but a note",
+					path, typ, slices.Sorted(maps.Keys(conventionPageTypes)))
+			}
+		}
+	})
+
+	t.Run("the page type table and the vault name the same pages", func(t *testing.T) {
+		t.Parallel()
+		for path := range campaignPageTypes {
+			if _, ok := campaignFiles[path]; !ok {
+				t.Errorf("campaignPageTypes lists %s, which the vault does not have", path)
+			}
+		}
+		for _, p := range paths {
+			if !strings.HasSuffix(p, ".md") {
+				continue
+			}
+			if _, ok := campaignPageTypes[p]; !ok {
+				t.Errorf("the vault has a page at %s that campaignPageTypes does not list, so a walk built from that table would skip it", p)
+			}
+		}
+	})
+
+	t.Run("the two attachments are referenced, one outside a fence and one inside", func(t *testing.T) {
+		t.Parallel()
+		const fenceOpen = "```secret "
+		for _, tc := range []struct{ name, file string }{
+			{publicAttachment, publicAttachment},
+			{secretAttachment, secretAttachment},
+		} {
+			if _, ok := campaignFiles[tc.name]; !ok {
+				t.Errorf("the attachment %s is named but the vault has no such file, so the indexer records no row and the serve route answers 404 for every role", tc.name)
+			}
+		}
+		referencing := []string{}
+		for _, p := range paths {
+			if !strings.HasSuffix(p, ".md") {
+				continue
+			}
+			if strings.Contains(campaignFiles[p], publicAttachment) {
+				referencing = append(referencing, p)
+			}
+		}
+		if len(referencing) != 1 {
+			t.Fatalf("%s is referenced from %d pages (%s), want exactly 1: the two attachment cases are one public reference and one secret-only reference, and a second public one would give the walk nothing to distinguish",
+				publicAttachment, len(referencing), strings.Join(referencing, ", "))
+		}
+		page := campaignFiles[referencing[0]]
+		publicAt := strings.Index(page, publicAttachment)
+		secretAt := strings.Index(page, secretAttachment)
+		if secretAt < 0 {
+			t.Fatalf("%s is referenced from %s but %s is not, and the two cases only differ if both are on the same page", publicAttachment, referencing[0], secretAttachment)
+		}
+		open := strings.Index(page, fenceOpen)
+		switch {
+		case open < 0:
+			t.Fatalf("%s carries no secret fence, so there is no secret-only reference on it", referencing[0])
+		case publicAt > open:
+			t.Errorf("%s references the public attachment from inside the fence, which makes it a secret-only reference and leaves the public case with nothing to test", referencing[0])
+		case secretAt < open:
+			t.Errorf("%s references the secret-only attachment from the public text, which makes it public and leaves the secret case with nothing to test", referencing[0])
+		}
+	})
 }

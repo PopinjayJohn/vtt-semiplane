@@ -234,8 +234,16 @@ func (sel selector) match(value string) (string, map[string]string, bool) {
 }
 
 // bind checks the tail against the template and returns the page path.
+//
+// The greedy segment absorbs every remaining tail segment, so a name may span a
+// directory. The other selectors take one value per segment, which is the whole
+// of the difference between binding a name and not binding one.
 func (sel selector) bind(path, tail []string) (string, map[string]string, bool) {
-	if len(tail) != len(sel.segments) {
+	if sel.greedy < 0 {
+		if len(tail) != len(sel.segments) {
+			return "", nil, false
+		}
+	} else if len(tail) < len(sel.segments) {
 		return "", nil, false
 	}
 	var named map[string]string
@@ -246,13 +254,20 @@ func (sel selector) bind(path, tail []string) (string, map[string]string, bool) 
 			}
 			continue
 		}
-		if tail[i] == "" {
+		value := tail[i]
+		if i == sel.greedy {
+			if slices.Contains(tail[i:], "") {
+				return "", nil, false
+			}
+			value = strings.Join(tail[i:], "/")
+		}
+		if value == "" {
 			return "", nil, false
 		}
 		if named == nil {
 			named = make(map[string]string, 1)
 		}
-		named[sel.params[i]] = tail[i]
+		named[sel.params[i]] = value
 	}
 	return strings.Join(path, "/"), named, true
 }

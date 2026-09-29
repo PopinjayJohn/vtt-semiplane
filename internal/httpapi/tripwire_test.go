@@ -80,13 +80,48 @@ func TestNoSecretLeaksThroughAnyPath(t *testing.T) {
 			}
 			for _, step := range demoSteps(fx) {
 				t.Run(step.name, func(t *testing.T) {
-					resp := s.do(&call{method: step.method, path: step.path})
+					// The fragment really is asked for. It used not to be: the step
+					// carried a fragment field and the walk ignored it, so "page as a
+					// fragment" was a byte-identical duplicate of "page as a
+					// document" and the only thing it proved was that the same
+					// request twice is the same request twice.
+					var c *call
+					if step.fragment {
+						c = s.fragment(step.path)
+					} else {
+						c = s.get(step.path)
+					}
+					resp := s.do(c)
 					defer drain(resp)
 					// The body is read through the harness so the session's CSRF
 					// token refreshes the way a browser's would.
 					body := s.read(resp)
 					assertNoLeaks(t, body, resp.Header, mayRead, p, step.name)
 				})
+			}
+			// And the two shapes are proven to be two shapes, so the field cannot go
+			// dead again without this failing: a walk that stopped sending the
+			// header would return identical bytes for a document and a fragment, and
+			// a leak that only the fragment branch can produce would have gone
+			// unnoticed while every assertion above still passed.
+			//
+			// Only where the document actually rendered. A principal that is
+			// redirected to the login form gets that redirect for both shapes —
+			// there is no fragment of a page that was never rendered — so the
+			// comparison would be asserting that two identical refusals differ.
+			for _, step := range demoSteps(fx) {
+				if !step.fragment {
+					continue
+				}
+				document := s.do(s.get(step.path))
+				documentBody := s.read(document)
+				fragment := s.text(s.fragment(step.path))
+				if document.StatusCode != http.StatusOK {
+					continue
+				}
+				if documentBody == fragment {
+					t.Errorf("%s: the fragment and the document of %s are byte-identical, so the fragment was not asked for as a fragment and its code path was never walked", p.name, step.path)
+				}
 			}
 		})
 	}
@@ -109,6 +144,11 @@ type step struct {
 	path   string
 	// fragment asks for the content region on its own, which is a different code
 	// path on the server and can therefore leak differently.
+	//
+	// It is read by the walk below and pinned by the assertion that follows it,
+	// because a flag nothing reads is a step that looks covered and is not: the
+	// "page as a fragment" step sat here for four stages being a byte-identical
+	// duplicate of the one above it, and nothing said so.
 	fragment bool
 }
 

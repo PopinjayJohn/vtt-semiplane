@@ -352,6 +352,58 @@ func (s *Service) CountPage(ctx context.Context, actor authz.Principal, pageID i
 	return store.CountVisibleSecrets(ctx, s.db.Reader(), actor, pageID)
 }
 
+// AuditEventLimit is how many rows AllEventsFor returns.
+//
+// It is the same bound httpapi.ShownLimit puts on the broken-links panel, for the
+// same reason: a list surface that grows with the campaign is a response a single
+// GET can make arbitrarily large, and an audit page is a diagnostic rather than a
+// dataset. It is a *read* bound and not a retention policy — secret_events has
+// none, deliberately, because the plan's retention numbers (§8.10's 50 and 5) are
+// for revisions and a revoke has to stay visible in the trail after the fact. The
+// newest rows are the ones an audit is read for, and the query orders them that
+// way, so the cap drops the oldest.
+const AuditEventLimit = 200
+
+// AllEventsFor returns one account's secret audit trail to a principal the policy
+// admits, newest first.
+//
+// It exists because store.ListSecretEventsByActor took an account id and no
+// principal at all, so anything that wanted to show a trail had to hand it an id
+// and inherit no gate — which is the live gap AGENTS.md §2.6a records, closed for
+// one more surface with one more wrapper.
+//
+// **The policy is asked before the query, and the order is the security property
+// rather than a style choice.** A principal that may not read the trail gets the
+// same answer, in the same time, for every request, and cannot use the difference
+// between a refusal and a fast empty list as an inventory of what has happened to
+// the campaign's secrets. A lookup first would answer "no events" for an account
+// that has none and "forbidden" for one that has some, which is the oracle.
+//
+// The scope is one account across every secret rather than the whole table, and
+// that is the only thing the store can be asked for: ListSecretEventsByActor is
+// anchored on actor_id, and the package's other query, ListSecretEventsBySecret,
+// needs an id the *caller* would have to supply — which is exactly the enumeration
+// §2.6a forbids. A campaign-wide trail needs one more store query, a new query
+// belongs in store by the dependency order, and until that query exists this is the
+// smaller of the two disclosures: a DM sees what they did, and nobody sees what
+// another account did.
+func (s *Service) AllEventsFor(ctx context.Context, actor authz.Principal) ([]store.SecretEvent, error) {
+	if err := s.policy.Check(actor, authz.PermAuditSecrets, authz.Resource{}); err != nil {
+		return nil, err
+	}
+	events, err := store.ListSecretEventsByActor(ctx, s.db.Reader(), actor.UserID)
+	if err != nil {
+		return nil, err
+	}
+	// The cap is applied here and not in the query because the query has no LIMIT.
+	// A single GET that renders an account's entire history is the same lever
+	// ShownLimit closes on the broken-links panel, and the fix is the same one.
+	if len(events) > AuditEventLimit {
+		events = events[:AuditEventLimit]
+	}
+	return events, nil
+}
+
 // EventsFor returns a secret's audit trail for a principal who may see it, newest
 // first.
 //

@@ -126,7 +126,7 @@ func (r *Renderer) Resolver() wikilink.Resolver { return r.resolver }
 // every construct this package does not implement with an escaped passthrough,
 // so the only HTML in the output is HTML this package wrote.
 func (r *Renderer) Render(src []byte) ([]byte, error) {
-	return r.render(r.md.Parser().Parse(text.NewReader(src)), src)
+	return r.render(r.md.Parser().Parse(text.NewReader(src)), src, "")
 }
 
 // RenderDoc converts a document's public body to HTML. A secret span is never
@@ -137,7 +137,7 @@ func (r *Renderer) RenderDoc(d *Doc) ([]byte, error) {
 	if IsCanvas(d.Path) {
 		return passthroughBytes(body, "canvas"), nil
 	}
-	return r.render(r.md.Parser().Parse(text.NewReader(body)), body)
+	return r.render(r.md.Parser().Parse(text.NewReader(body)), body, d.Path)
 }
 
 // Parse builds the AST for a body without the passthrough rewrite, for callers
@@ -155,13 +155,78 @@ func (r *Renderer) ParseDoc(d *Doc) ast.Node {
 	return r.Parse(d.Body)
 }
 
-func (r *Renderer) render(doc ast.Node, src []byte) ([]byte, error) {
+// render converts an AST to HTML. page is the vault-relative path the document
+// is served at, or "" when the caller has no page to scope to — a fragment
+// render, or a parse that is not going to be served as a page.
+func (r *Renderer) render(doc ast.Node, src []byte, page string) ([]byte, error) {
 	sanitize(doc, src)
+	if page != "" {
+		scopeAttachments(doc, page)
+	}
 	var buf bytes.Buffer
 	if err := r.md.Renderer().Render(&buf, src, doc); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// attachmentURLPrefix is the one address a file is served on. There is
+// deliberately no vault-wide attachment route (AGENTS.md §6): a file referenced
+// only from inside a secret must not be reachable by a principal who may not
+// read that secret, and a global route would be reachable by name rather than
+// by decision.
+const attachmentURLPrefix = "/attachment/"
+
+// scopeAttachments rewrites every reference to a file in the document so it
+// names the page-scoped attachment route rather than a path relative to /p/.
+//
+// It is a walk and not a resolver change for three reasons, each of which is a
+// constraint rather than a preference:
+//
+//   - The wikilink resolver is chosen once, in New, and Renderer is shared by
+//     every request. A resolver that knew the page would have to read it from
+//     mutable state on a shared object, which is a data race.
+//   - The reference is not always a wikilink. `![alt](map.png)` is an
+//     ast.Image and `[[map.png]]` is a wikilink.Node; only the second passes
+//     through the resolver at all, so fixing the resolver would leave the
+//     markdown-native form broken.
+//   - The rewrite happens before the resolver runs, and a target that already
+//     names a file still reads as a file to the resolver, so it is passed
+//     through unchanged rather than gaining a second /p/.
+//
+// The name is left raw. goldmark escapes the attribute it writes, and encoding
+// here would encode twice.
+func scopeAttachments(doc ast.Node, page string) {
+	prefix := []byte(pageURLPrefix + page + attachmentURLPrefix)
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch v := n.(type) {
+		case *wikilink.Node:
+			v.Target = scopeAttachment(prefix, v.Target)
+		case *ast.Image:
+			v.Destination = scopeAttachment(prefix, v.Destination)
+		case *ast.Link:
+			v.Destination = scopeAttachment(prefix, v.Destination)
+		}
+		return ast.WalkContinue, nil
+	})
+}
+
+// scopeAttachment returns name addressed at the page, or unchanged when it does
+// not name a file this page may serve.
+//
+// A name that is already rooted is left alone: an author who wrote an absolute
+// path has answered the question themselves, and second-guessing it would
+// rewrite a link that was never ours.
+func scopeAttachment(prefix, name []byte) []byte {
+	if len(name) == 0 || name[0] == '/' || !hasExtension(name) {
+		return name
+	}
+	out := make([]byte, 0, len(prefix)+len(name))
+	out = append(out, prefix...)
+	return append(out, name...)
 }
 
 // VaultResolver turns a wikilink into the app's canonical URL: a

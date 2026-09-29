@@ -81,6 +81,13 @@ for arg in "$@"; do
 		;;
 	-race)
 		RACE="-race"
+		# A race build instruments every memory access, and the httpapi suite
+		# boots a whole application per fixture with an argon2id derivation in
+		# each. That is a few times slower than the same suite uninstrumented, so
+		# the uninstrumented timeout reports a spinning test on a suite that is
+		# simply working. The timeout exists to name a spin, not to hold a
+		# budget, so it is scaled rather than raised for everyone.
+		[[ -n "${SEMIPLANE_TEST_TIMEOUT:-}" ]] || TIMEOUT="600s"
 		;;
 	-*)
 		EXTRA+=("$arg")

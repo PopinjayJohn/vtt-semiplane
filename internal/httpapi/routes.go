@@ -125,6 +125,24 @@ func (s *Server) Routes() []Route {
 		// every file under assets/.
 		{Method: http.MethodGet, Pattern: "/p/*/attachment/{name...}", Perm: authz.PermReadPage, Handle: s.attachment},
 
+		// Reveal and revoke, §8.3. The Perm column is PermDM rather than
+		// PermSession for a reason the editor's rows do not share: ownership buys
+		// the right to author a secret, never the right to broadcast it, so
+		// asking the page-scoped question here would be asking the wrong one. A
+		// page owner reaches the page and the editor and not this.
+		//
+		// The service asks the same policy again before it looks anything up, so
+		// the gate here is the coarse outer one and the refusal that matters is
+		// the one that cannot enumerate a secret id.
+		{Method: http.MethodPost, Pattern: "/p/*/secrets/{secretID}/reveal", Perm: authz.PermDM, Handle: s.revealSecret},
+		{Method: http.MethodPost, Pattern: "/p/*/secrets/{secretID}/revoke", Perm: authz.PermDM, Handle: s.revokeSecret},
+
+		// The export is a page-scoped read, redacted to what the reader may read,
+		// for the reason the raw view is: it is the same file, and a second
+		// spelling of it that did not redact would be a way around the redaction
+		// the raw view already does.
+		{Method: http.MethodGet, Pattern: "/p/*/export", Perm: authz.PermReadPage, Handle: s.exportPage},
+
 		// The broken-links panel. PermReadPage rather than PermAnonRead, so an
 		// unauthenticated reader with anonymous read off is sent to the login
 		// form: a panel that lists where the campaign refers to itself is
@@ -172,6 +190,13 @@ func (s *Server) Routes() []Route {
 		// capabilities, which is a description of what this binary will do for
 		// whom.
 		{Method: http.MethodGet, Pattern: "/admin/plugins", Perm: authz.PermAdmin, Handle: s.adminPluginsPage},
+
+		// The secret audit trail, on PermAuditSecrets rather than PermAdmin and
+		// deliberately not on PermDM: the constant's name is the only thing
+		// standing between a future surface and a permission row that answers a
+		// different question, and folding it into PermDM would have closed the
+		// gap AGENTS.md §2.6a records by accident and left the name lying.
+		{Method: http.MethodGet, Pattern: "/admin/secrets", Perm: authz.PermAuditSecrets, Handle: s.adminSecretsPage},
 		{Method: http.MethodGet, Pattern: "/files", Perm: authz.PermAnonRead, Handle: s.filesPage},
 
 		// The one call a page view needs for its whole context column: the table

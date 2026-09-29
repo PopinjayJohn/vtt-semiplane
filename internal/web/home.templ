@@ -80,6 +80,10 @@ templ Page(v httpapi.PageView) {
 					} else {
 						@SecretRevealed(secret)
 					}
+					// Absent entirely for a principal the gate refuses — see
+					// SecretControls for why "nothing" is the right answer and
+					// a disabled button is not.
+					@SecretControls(secret, v.CSRF)
 				}
 			</section>
 		}

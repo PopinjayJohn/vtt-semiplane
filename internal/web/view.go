@@ -162,6 +162,8 @@ func regionOf(v httpapi.View) (templ.Component, error) {
 		return Commands(t), nil
 	case httpapi.AdminPluginsView:
 		return AdminPlugins(t), nil
+	case httpapi.AdminSecretsView:
+		return AdminSecrets(t), nil
 	case httpapi.LoginView:
 		return Login(t), nil
 	case httpapi.SetupView:

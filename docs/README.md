@@ -54,7 +54,7 @@ Every package in the module is green, from `cmd/semiplane` to `internal/web`: th
 and its migrations, the Markdown pipeline, vault I/O with an atomic writer and a
 single-instance lock, the indexer and the invalidation bus, Argon2id accounts
 with sessions and invites, the authorization policy, the router, the templ
-view layer, and the four stages built on top of them.
+view layer, and the five stages built on top of them.
 
 **Stage 1** is the data layer through to a readable page: the store and its
 migrations, the Markdown pipeline, vault I/O, the indexer and bus, accounts and
@@ -90,6 +90,20 @@ added `internal/diff` (hand-rolled, no dependency, argued in its own
 attachment rows and the link byte offsets real, and the audit permission that
 [`../AGENTS.md`](../AGENTS.md) §2.6a had recorded as missing.
 
+**Stage 5** is the secret lifecycle, and what it made legible is the *shape* of
+the authorization rule rather than the rule: reveal and revoke are reachable over
+HTTP as the same service call they always were, and the per-page export and the
+`secret_events` audit view are mounted on permissions the policy already had. The
+evidence is the part that changed most. The leak walk in
+[`../internal/httpapi/leaksuite_test.go`](../internal/httpapi/leaksuite_test.go)
+derives its requests from the route table instead of a written-out list, so a
+surface added tomorrow is covered by *failing* rather than by being forgotten,
+and it walks every principal the design admits — including the anonymous reader
+with anonymous read on, which is the one case a redirect-to-login row can never
+reach. Two bugs it did **not** catch are recorded in
+[`../AGENTS.md`](../AGENTS.md) §11 anyway, because both were the same mistake in
+two guises: a test that asked a question beside the one it meant to ask.
+
 Two of the three surfaces stage 3 left unwired are now wired, and one is
 deliberately still `nil`:
 
@@ -106,11 +120,15 @@ deliberately still `nil`:
   and extracting it under time pressure is the most likely way to put a secret
   where a plugin can see it.
 
-Still **not** built: the sample campaign extraction and the release pipeline.
-`spec.md` says so per section. The editor, which was the reason the shell had
+Still **not** built: the sample campaign extraction, the release pipeline, and
+the create, delete and `/admin/users` routes. `spec.md` says so per section and
+names the plan phases that remain. The editor, which was the reason the shell had
 no edit affordance, now exists: `PageView.EditHref` is filled from
 `mayWritePage`, `home.templ` renders the link when it is set, and `app.js`
-implements the `e` key against it.
+implements the `e` key against it. **A whole-vault export is not on that list and
+is not going to be on it:** [`../internal/httpapi/export.go`](../internal/httpapi/export.go)
+argues that the vault-wide form has no authorization question to ask, so it
+would be a copy of the plaintext on disk rather than a feature.
 
 ## Adding a document
 

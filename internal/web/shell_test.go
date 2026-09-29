@@ -74,8 +74,19 @@ func allViews() []httpapi.View {
 			// other would be wrong here rather than invisible.
 			BacklinkCount: 3,
 			Secrets: []httpapi.SecretView{
+				// No actions: this is the shape a principal who may neither read nor
+				// broadcast gets, and a control that renders anyway is a control
+				// that lies about what the route will do.
 				{ID: "a1a1a1a1a1a1", Ordinal: 0, Hidden: true, Label: "hidden"},
-				{ID: "b2b2b2b2b2b2", Ordinal: 1, Body: fixtureSecret, Visibility: "table"},
+				// Both actions, on a fence already shared with the table: the view
+				// must show the revoke and not the reveal, because the reveal would
+				// write a file that already says what it says.
+				{
+					ID: "b2b2b2b2b2b2", Ordinal: 1, Body: fixtureSecret, Visibility: "table",
+					Revealed:     true,
+					RevealAction: "/p/Tavern.md/secrets/b2b2b2b2b2b2/reveal",
+					RevokeAction: "/p/Tavern.md/secrets/b2b2b2b2b2b2/revoke",
+				},
 			},
 			Related: []httpapi.PageCard{{ID: 13, Path: "Area/Salt_Ruin.md", Title: "The Salt Ruin"}},
 			Status:  campaignStatus(),
@@ -148,6 +159,18 @@ func allViews() []httpapi.View {
 				},
 			},
 			Warnings: []string{"maptool contributed a panel for the slot right-far-side, which core does not render"},
+		},
+		// The secret audit trail, with a row per shape it has to print: a change
+		// with both ends of the visibility, one with only a destination (a
+		// create), and one whose account no longer exists.
+		httpapi.AdminSecretsView{
+			Shell:      shell,
+			ShownLimit: 200,
+			Events: []httpapi.SecretEventRow{
+				{Action: "reveal", Actor: "The Dungeon Master", SecretID: "a1a1a1a1a1a1", FromVis: "private", ToVis: "table", At: aDay},
+				{Action: "create", Actor: "The Dungeon Master", SecretID: "b2b2b2b2b2b2", ToVis: "dm", At: aDay.Add(-time.Hour)},
+				{Action: "revoke", Actor: "an account that no longer exists", SecretID: "c3c3c3c3c3c3", FromVis: "table", At: aDay.Add(-2 * time.Hour)},
+			},
 		},
 		httpapi.LoginView{Shell: shell, Problem: "That username and passphrase do not match an account."},
 		httpapi.SetupView{Shell: shell, Problem: "that is too short", Field: "username"},

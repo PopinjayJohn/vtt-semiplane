@@ -62,6 +62,8 @@ func typeName(v httpapi.View) string {
 		return "Commands"
 	case httpapi.AdminPluginsView:
 		return "AdminPlugins"
+	case httpapi.AdminSecretsView:
+		return "AdminSecrets"
 	case httpapi.LoginView:
 		return "Login"
 	case httpapi.SetupView:

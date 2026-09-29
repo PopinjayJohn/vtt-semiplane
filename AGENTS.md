@@ -90,14 +90,20 @@ These are not style preferences. Each has a test or a grep that fails the build.
    boundary is ever tightened, the fix is one matrix row and one route's `Perm`.
    *See the `secret_events` audit* **had** no permission constant at all, and
    `secrets.Service.Events(ctx, secretID)` took no principal, so a route added
-   for it would have inherited no gate. **That gap is closed**: the constant is
-   `authz.PermAuditSecrets` with its own row in `authz.Policy` (DM or admin —
-   the events are metadata, but they do disclose that a secret exists and who
-   has touched it), and the method is `secrets.Service.EventsFor(ctx, actor,
-   secretID)`, which asks the policy **before** the lookup so a refused
-   principal cannot enumerate ids. No route is mounted, so nothing is served;
-   whoever adds the audit view mounts it on that constant and passes the
-   principal, not just the id.
+   for it would have inherited no gate. **That gap is closed, and the surface is
+   mounted**: the constant is `authz.PermAuditSecrets` with its own row in
+   `authz.Policy` (DM or admin — the events are metadata, but they do disclose
+   that a secret exists and who has touched it), `secrets.Service.EventsFor(ctx,
+   actor, secretID)` asks the policy **before** the lookup so a refused
+   principal cannot enumerate ids, and `GET /admin/secrets`
+   ([`internal/httpapi/auditsecrets.go`](internal/httpapi/auditsecrets.go))
+   mounts the per-account form, `secrets.Service.AllEventsFor`, passing the
+   principal rather than an id. The constant is deliberately its own and not a
+   fold-in of `PermDM`: folding it in would have closed the gap by accident and
+   left the name lying about what it grants. What the page cannot leak is kept
+   by not selecting the columns — `httpapi.SecretEventRow` projects a store row
+   that holds no title, no author and no length, so there is nothing in the
+   view model for a template to render.
 7. **Any new route must be added to the route table in
    `internal/httpapi/routes.go` and to `TestAuthorizationMatrix`.** The `Perm`
    middleware is the only place a role is compared; a grep test fails the build
@@ -242,6 +248,24 @@ the ones that must exist before a phase is called done:
   `TestProblemErrorCarriesTheIdNotTheContent`,
   `TestTheRawViewLocksWhatTheReaderMayNotRead`,
   `TestCampaignStatusIsFieldLevelAuthorized`.
+- The leak walk over the **whole route table** is
+  [`internal/httpapi/leaksuite_test.go`](internal/httpapi/leaksuite_test.go),
+  and it is derived from `Routes()` rather than written out as a list of URLs:
+  a table row no step names is a failure, and so is an exclusion that is not
+  argued in the file. `leaktripwire_test.go` is the scanner's own proof that it
+  has teeth — **a test instrument, and nothing more**; there is no runtime
+  response scanner in the server and there never was. §6 says what the walk is
+  for and what the demo-path tripwire still adds.
+- The secret lifecycle at the service and store layers:
+  [`internal/secrets/stage5_test.go`](internal/secrets/stage5_test.go) (the
+  reveal/revoke cycle and everything a hidden body can derive — a heading, a
+  live link, a dangling one, tags; the index purge; who may reveal; the fence
+  syntax edge cases) and
+  [`internal/store/stage5_test.go`](internal/store/stage5_test.go) (the audit
+  row and the `authz_generation` bump as one unit of work, and the backlink and
+  related-page counts a visibility change moves). These are the claims §2 and
+  §6 make that no HTTP-level test can establish, because they are about what
+  is *absent* from an index.
 - Live push: `TestPushNeverLeaksSecret`,
   `TestPushAndFetchProduceIdenticalFragments`, `TestPushTerminatesOnRoleChange`,
   `TestPushDropsSlowConsumer`, `TestPushCoalescesBurst`,
@@ -270,8 +294,10 @@ its secret tests live in that phase, where the code is. **A test that passes
 because the fixture did not set up what it asserts is the same failure wearing a
 different hat**, and it is the more dangerous one: see §11. **And a list that
 names a test that does not exist reads as a gate and enforces nothing** — this
-one carried four such names until stage 4, so check a name against
-`rg "func <Name>\("` before relying on it.
+one carried four such names until stage 4, and a sweep of every test name in
+this file and in `docs/` at stage 5 found two more, both in
+[`docs/security.md`](docs/security.md)'s table of rules a test enforces. So
+check a name against `rg "func <Name>\("` before relying on it.
 
 ## 6. Secret handling
 
@@ -290,8 +316,12 @@ Checklist, restated so it can be read without the plan:
   Everything else in the file is untouched. `TestVaultRoundTripPreservesSecretBytes`.
 - `visibility=table` is the only value that may enter `secret_fts`. The DB
   mirrors the file; the file is authoritative.
-- Only a DM or an admin may reveal or revoke. A page owner may create and edit
-  their own secrets; ownership grants authoring rights, not broadcast rights.
+- Only a DM or an admin may reveal or revoke — over HTTP, that is the `PermDM`
+  column on the two rows in [`internal/httpapi/routes.go`](internal/httpapi/routes.go),
+  and the button on the page is filled by asking the policy the same question
+  (`httpapi.mayChangeSecretVisibility`) so the control and the gate are one
+  answer. A page owner may create and edit their own secrets; ownership grants
+  authoring rights, not broadcast rights.
 - Redacted editing: an unreadable secret becomes the sentinel
   `‹s:<id>:<bodyLen>:<bodySHA256first8>›`. On save, each sentinel is recomputed
   from the current on-disk body; a match is spliced back byte for byte, a
@@ -319,14 +349,35 @@ Checklist, restated so it can be read without the plan:
 - The `obs` handler refuses `content`, `body`, `snippet` and `raw` attributes
   and truncates anything over 256 bytes. The audit log is a separate
   allow-list handler.
-- `TestNoSecretLeaksThroughAnyPath` runs on every CI run, over every page type
-  in the sample campaign, as every role, asserting the response body, the
-  headers and the `data-signals` payload contain no fixture secret the
-  principal may not read. Never mark it skipped, and check the name against
-  `rg "func <Name>\("` before relying on it — this line carried the name
-  `TestSecretFixturesNeverLeak` for several stages, which no test has ever
-  been called, and a list that names a test that does not exist reads as a
-  gate and enforces nothing.
+- **The leak walk is derived from the route table, not written out as a list of
+  URLs.** `TestSecretFixturesNeverLeak` in
+  [`internal/httpapi/leaksuite_test.go`](internal/httpapi/leaksuite_test.go)
+  walks every page in the campaign — one per registered and per conventional
+  page type — as seven principals, over every row of `Routes()`, and a row no
+  step names is a failure rather than a gap. It is the test this line used to
+  *claim* existed: `TestSecretFixturesNeverLeak` was carried here for several
+  stages with no test ever answering to it. It exists now, and the honest
+  reading of this bullet is the shape, not the name: `TestNoSecretLeaksThroughAnyPath`
+  in `tripwire_test.go` still walks the demo path and the new suite walks the
+  table, so neither replaces the other, and **neither may ever be skipped**. Both
+  assert the response body, **every response header** and **every `data-signals`
+  payload**, and the suite's per-role positive control asserts that a body the
+  principal *is* entitled to really arrived — a leak suite that finds nothing
+  because it looked at nothing is indistinguishable from a clean one. One
+  principal the demo path cannot reach is walked only by the new suite: the
+  anonymous reader with `--allow-anonymous-read` **on**, against the `table`
+  visibility, which is the one case §2.4 is about and the one a redirect-to-login
+  row never tested.
+  `TestSecretBodyNeverInErrorsOrLogs` covers the two places a body escapes
+  without being rendered to anybody — the 500 page and the request and audit
+  logs — and each case provokes a failure the application can genuinely hit and
+  asserts the log stream grew, so a clean capture cannot pass it.
+  **The name-checking advice stays.** One name is still carried in this
+  repository with no test ever answering to it: `TestNoRoleComparisonOutsidePerm`,
+  named in [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md) §4 as the gate
+  that refuses a `Role ==` outside the `Perm` middleware. Nothing enforces it —
+  the rule holds because the handler packages do not do it, not because a test
+  says they may not.
 
 ## 7. Plugin development
 
@@ -642,6 +693,49 @@ job, `git status --porcelain` must be empty.
   handled by `internal/httpapi/pagedispatch.go`. Do not register a second chi
   pattern for a page surface: `chi` silently overwrites a handler registered
   twice for the same method and pattern.
+- **A gate that measures a proxy for the thing is not a gate.**
+  `TestTheCatchAllAndItsSuffixesAreUnambiguous` measured the three *routing
+  spellings* of a page-scoped suffix, and it could not see that
+  `selector.bind` in [`internal/httpapi/pagedispatch.go`](internal/httpapi/pagedispatch.go)
+  required `len(tail) == len(sel.segments)`. The file's own comment said the
+  greedy `{name...}` segment exists precisely so a subdirectory attachment can
+  be served — and so every subdirectory attachment was refused, for every
+  principal including an administrator, while the same filename at the vault's
+  root was served. The code disagreed with the comment that explains it, and a
+  test that read only the routing agreed with both. The generalisable form: ask
+  what a gate *does not look at*, and if the answer is "the thing", it is
+  measuring something adjacent to it. Fixed and pinned by
+  [`internal/httpapi/catchall_test.go`](internal/httpapi/catchall_test.go),
+  which drives a multi-segment name through the real router and — the half a
+  careless fix skips — pins every name the loosening must still refuse.
+- **An HTTP-level test that calls the handler proves the handler works, not
+  that anything points at it.** `md.VaultResolver` emitted a *relative* `src`
+  for an attachment embed, so every attachment in the app was a broken image
+  and `TestAttachmentInSecretIsNotServed` passed the whole time: it requested
+  the route directly instead of following the link the page emits.
+  `TestThePagePointsAtTheAttachmentItServes` in
+  [`internal/httpapi/attachmenturl_test.go`](internal/httpapi/attachmenturl_test.go)
+  reads the `src` off the rendered page and follows *that*. Note where the fix
+  could not live, because both are constraints rather than preferences: the
+  reference is not always a wikilink (`![alt](x.png)` is an `ast.Image` and
+  never reaches the resolver at all), and `md.Renderer` is built once at boot
+  and shared, so a page-aware resolver would need mutable state on a shared
+  object — a data race. It is `md.scopeAttachments`, a walk over the AST.
+- **A test local named `where` fails `TestEveryQueryUsesBindParameters`.** The
+  grep flags any line containing `Sprintf` *and* a SQL verb word, and `where` is
+  one of the words in that pattern — so `where := fmt.Sprintf(...)` trips a
+  gate it has nothing to do with. It scans test files too; only
+  `architecture_test.go` is exempt. Name it `sites`, or `at`.
+- **`EditView.BaseHash` is already `vault.Hash`'s output, not hex of it.** A
+  form field wants `hex.EncodeToString(view.BaseHash)`; `vault.HashHex(BaseHash)`
+  is the hash of the hash, and every save built that way comes back 409 — which
+  in a walk that only asserts what is *absent* from a response is a green suite
+  over a write that never happened.
+- **`scripts/test.sh` scales its `-timeout` to 600s under `-race`.** The race
+  build makes the `httpapi` suite — a whole application boot plus an argon2id
+  derivation per fixture — several times slower, so the uninstrumented 180s
+  reports a spin on a suite that is merely working. The timeout exists to *name*
+  a spin, not to hold a budget; `SEMIPLANE_TEST_TIMEOUT` still overrides it.
 - **A boundary with no row behind it is a rule nobody wrote down.**
   `secret_events` had no permission constant at all, and
   `secrets.Service.Events(ctx, id)` took no principal, so a route mounted for
@@ -650,9 +744,10 @@ job, `git status --porcelain` must be empty.
   row, and `EventsFor` checks the policy *before* the lookup so a refused
   principal cannot enumerate ids — and the constant is deliberately not
   `PermDM`, because folding it in would have closed the gap by accident and left
-  the constant's name lying about what it grants. When you add a surface, ask
-  which policy row answers it; if none does, adding the row is part of the
-  change, not a follow-up.
+  the constant's name lying about what it grants. `GET /admin/secrets` mounts
+  the per-account form and passes the principal, so the gate is exercised
+  rather than theoretical. When you add a surface, ask which policy row answers
+  it; if none does, adding the row is part of the change, not a follow-up.
 - **An exported class with no rule behind it renders unstyled and errors
   nowhere.** Three components carried `class="card"` for a long time with
   nothing in `web/src/input.css` matching it, so they rendered as unframed

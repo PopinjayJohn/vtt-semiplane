@@ -32,6 +32,22 @@ one package" for the package it had been given. The fix is one line in
 `scripts/test.sh`; the reason it is written down is that a correctly typed
 invocation reported a *usage* error about an argument that was there, which reads
 as the caller's mistake and is not. The fix is in `scripts/test.sh`.
+
+## A test can fail a security gate by naming a variable
+
+`TestEveryQueryUsesBindParameters` fails any line containing `Sprintf` **and** a
+SQL verb word — and `where` is one of the words in that pattern. So a test local
+called `where`, on a line that also formats a string, trips a gate about
+interpolating a value into a query, in a file that has no query. It scans test
+files too; only `architecture_test.go` is exempt.
+
+The failure names a line in a test about nothing, and the honest reaction —
+"that is a false positive" — is the trap. Name it `sites`, or `at`. The
+generalisable form is the one `AGENTS.md` §11 keeps arriving at from several
+directions: **a gate that can fire for a reason unrelated to what it is guarding
+is a gate whose failures have to be argued rather than read**, and a reader who
+argues one away is one reader closer to arguing away a real one.
+
 ## A spinner is a memory leak that never reports itself
 
 Two infinite loops shipped in the Markdown pipeline, and both had the same

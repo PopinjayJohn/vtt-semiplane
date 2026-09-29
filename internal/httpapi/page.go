@@ -258,16 +258,30 @@ func (s *Server) pageSecrets(ctx context.Context, who authz.Principal, row store
 	if err != nil {
 		return nil, err
 	}
-	owner := false
-	if who.UserID != 0 {
-		owner, err = store.IsPageOwner(ctx, s.db.Reader(), row.ID, who.UserID)
-		if err != nil {
-			return nil, err
-		}
+	owner, err := s.pageOwned(ctx, who, row.ID)
+	if err != nil {
+		return nil, err
 	}
+	// Asked once for the page rather than per fence, and through the policy rather
+	// than through a role comparison: the route's Perm column is PermDM, so this
+	// is the same question the gate asks and the button cannot disagree with it.
+	// A grep test fails the build on a Role == in a handler, and the deeper
+	// reason is that a control whose visibility is a second, hand-written copy of
+	// its gate is a control that can be wrong.
+	mayChange := s.mayChangeSecretVisibility(who)
+	base := cardOf(row).Href()
 	out := make([]SecretView, 0, len(rows))
 	for _, sec := range rows {
 		hidden := SecretView{ID: sec.ID, Ordinal: sec.Ordinal, Hidden: true, Label: lockLabel(sec.ID)}
+		// Both actions are on the hidden shape too, and that is deliberate: a DM
+		// reads every secret on the page, so for that principal no fence is hidden
+		// and the branch below is the only one that runs — but a principal who may
+		// neither see nor broadcast must not find a page where the control's
+		// presence depended on which branch produced the row.
+		if mayChange {
+			hidden.RevealAction = base + "/secrets/" + sec.ID + "/reveal"
+			hidden.RevokeAction = base + "/secrets/" + sec.ID + "/revoke"
+		}
 		if !authz.CanReadSecret(who, owner, sec.AuthorID, authz.Visibility(sec.Visibility)) {
 			out = append(out, hidden)
 			continue
@@ -284,10 +298,13 @@ func (s *Server) pageSecrets(ctx context.Context, who authz.Principal, row store
 			return nil, err
 		}
 		out = append(out, SecretView{
-			ID:         loaded.ID,
-			Ordinal:    loaded.Ordinal,
-			Body:       loaded.Body,
-			Visibility: string(loaded.Visibility),
+			ID:           loaded.ID,
+			Ordinal:      loaded.Ordinal,
+			Body:         loaded.Body,
+			Visibility:   string(loaded.Visibility),
+			Revealed:     loaded.IsOpen(),
+			RevealAction: hidden.RevealAction,
+			RevokeAction: hidden.RevokeAction,
 		})
 	}
 	return out, nil

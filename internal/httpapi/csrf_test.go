@@ -234,6 +234,24 @@ func concretePath(fx *fixture, rt httpapi.Route) string {
 		return "/p/Index.md/revert/" + fixtureNewestRevisionID(fx)
 	case "/p/*/attachment/{name...}":
 		return "/p/Index.md/attachment/tavern-map.png"
+	case "/p/*/secrets/{secretID}/reveal":
+		// A fence, and the one fence in this fixture that a fence-by-fence
+		// argument would not find: encounters/Bridge-ambush.md's d1d1… is authored
+		// by bram, and `onePlayer` is the state that creates bram. Every other
+		// fence names an account this test's two states never make, and the
+		// indexer refuses to write a secrets row for a fence whose author does
+		// not resolve — secrets.author_id is a foreign key, and a row invented
+		// against a fabricated author would be a row the policy answers about
+		// wrongly. So on the Tavern's fences the control run would answer 404,
+		// a 404 is not an accepted status, and the row would skip in both states
+		// and fail the coverage assertion at the bottom — which is the test doing
+		// its job, correctly.
+		return "/p/encounters/Bridge-ambush.md/secrets/d1d1d1d1d1d1/reveal"
+	case "/p/*/secrets/{secretID}/revoke":
+		// The same fence, for the same reason. A revoke of a `dm` secret is a
+		// real write either way, so this row needs no fence in a particular state
+		// and can share the reveal's.
+		return "/p/encounters/Bridge-ambush.md/secrets/d1d1d1d1d1d1/revoke"
 	case "/api/pages/{id}/rename":
 		// Page 3 is Tavern.md, which the fixture makes thia a page owner of, so
 		// the control run is a rename by someone entitled to make it. needsAWriter

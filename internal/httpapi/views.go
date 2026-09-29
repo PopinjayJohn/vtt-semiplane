@@ -251,8 +251,32 @@ type SecretView struct {
 	// Visibility is the fence's visibility, reported only for a secret this
 	// viewer may read.
 	Visibility string
+	// Revealed reports that this fence is currently visible to every
+	// authenticated user.
+	//
+	// It is a bool rather than a template comparing Visibility against a literal
+	// because the template must not know what the three visibilities are spelled:
+	// a component that re-answers "is this one shared?" is a second source for a
+	// rule authz owns, and a rename of the constant would leave the control
+	// pointing the wrong way. It is false on a hidden secret, which is correct —
+	// a fence this viewer may not read is not one they are offered anything for.
+	Revealed bool
 	// Label is the generic text shown in place of a hidden secret.
 	Label string
+	// RevealAction is where a form revealing this secret posts, or "" when this
+	// viewer may not use it.
+	//
+	// It is empty rather than a URL nobody may follow, for the reason EditHref is
+	// and not a disabled button: a control whose activation answers 403 is a
+	// broken control wearing a permission's clothes, and AGENTS.md §7 is explicit
+	// that the absence of a capability has to degrade to a working app rather than
+	// to a control that lies. The handler fills it by asking the policy the same
+	// question the route asks, so the button and the gate are one answer rather
+	// than two that can drift.
+	RevealAction string
+	// RevokeAction is RevokeAction's other direction: where the form that hides
+	// this secret again posts, or "" when this viewer may not use it.
+	RevokeAction string
 }
 
 // HomeView is the dashboard: the most recently indexed pages and the tag list.
@@ -606,6 +630,49 @@ type AdminPluginsView struct {
 	Compat int
 }
 
+// SecretEventRow is one row of the secret audit trail.
+//
+// It is a projection of a store.SecretEvent with three deliberate omissions, and
+// each is the reason the page cannot leak by accident. There is no Title, because
+// a fence's title is written by the DM and describes the secret. There is no
+// length or digest, because §8.8 is about a response's size. And there is no
+// Author of the secret — only the Actor, which is the account that performed the
+// action and is not a property of the secret at all. The store's row carries none
+// of the three, so this is a view model that could not render them even if a
+// template asked for them.
+type SecretEventRow struct {
+	// Action is what happened: create, reveal, revoke, edit, delete or
+	// view_denied. It is the action's own string rather than a word chosen here, so
+	// a value this page has never seen shows up under its own name instead of
+	// being reported as nothing.
+	Action string
+	// Actor is the display name of the account responsible, or a fixed phrase when
+	// the account no longer exists. It is a display name and never a username.
+	Actor string
+	// SecretID is the fence the event is about: an opaque handle, and the only
+	// thing here that names a secret.
+	SecretID string
+	// FromVis and ToVis are the visibility before and after, or "" where the
+	// event has none.
+	FromVis string
+	ToVis   string
+	// At is when it happened.
+	At time.Time
+}
+
+// AdminSecretsView is /admin/secrets: the secret audit trail.
+type AdminSecretsView struct {
+	Shell
+	// Events are the rows, newest first, in the order the service returned them.
+	// A view model that re-sorted them would be a second answer to "what order is
+	// the trail in", and this page is read beside the files it describes.
+	Events []SecretEventRow
+	// ShownLimit is the cap the service applied, carried so the template can say
+	// what the cap is rather than inventing a number — the reason
+	// BrokenLinksView.ShownLimit exists.
+	ShownLimit int
+}
+
 // LoginView is the login form, and the form's own error.
 type LoginView struct {
 	Shell
@@ -955,6 +1022,7 @@ func (v TagView) isView()          {}
 func (v ContextView) isView()      {}
 func (v CommandsView) isView()     {}
 func (v AdminPluginsView) isView() {}
+func (v AdminSecretsView) isView() {}
 func (v LoginView) isView()        {}
 func (v SetupView) isView()        {}
 func (v InviteView) isView()       {}
@@ -996,6 +1064,9 @@ func (v CommandsView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the AdminPluginsView.
 func (v AdminPluginsView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the AdminSecretsView.
+func (v AdminSecretsView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the LoginView.
 func (v LoginView) ViewShell() Shell { return v.Shell }

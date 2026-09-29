@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,8 +27,23 @@ type matrixRoute struct {
 	// method and pattern identify the row of the route table.
 	method  string
 	pattern string
-	// path fills the pattern in.
+	// path fills the pattern in. A %page% marker is replaced with the id of the
+	// row's first entry in pages, resolved when the row runs rather than written
+	// down here.
 	path string
+	// pages names the vault paths a row addresses, most-current first. A rename
+	// row changes what a later row in the same walk may call the same page, so
+	// the candidates are a list and resolution takes the one that exists.
+	//
+	// It exists because a page id is not a stable property of a page: a rename
+	// deletes the departed row and reinserts, so the same page answers under a
+	// new id. A table that wrote an id down would pass only while the campaign
+	// had exactly the page count it had when the id was written, and fail with a
+	// 404 that says nothing about authorization.
+	pages []string
+	// absent asks for a page id that no page has, and is how a row states
+	// "a page that is not there" without pinning a number.
+	absent bool
 	// form is the body for a mutation. It carries every field a form of this
 	// shape needs, so a refusal is about authorization and not about a parameter
 	// the handler never read.
@@ -298,18 +314,93 @@ var matrixRoutes = []matrixRoute{
 	{name: "broken links", method: http.MethodGet, pattern: "/broken", path: "/broken",
 		authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
 
+	// The page export. §8.3's per-page form, and the only export there is: a page
+	// has no visibility of its own, so a whole-vault bundle would be a copy of the
+	// plaintext no per-page decision ever touches. The reason is written out in
+	// export.go, and the row below is what keeps the scope honest — the missing
+	// page has to be the same answer as the missing secret on either side of it.
+	{name: "page export", method: http.MethodGet, pattern: "/p/*/export", path: "/p/Tavern.md/export",
+		authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	{name: "export of a page that does not exist", method: http.MethodGet, pattern: "/p/*/export", path: "/p/Nope.md/export",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+
+	// §8.3, the two writes. Every principal below the DM line is refused by the
+	// route's gate before a handler runs, which is why these cells are 403 and not
+	// 404: a 404 here would say "there is no such secret", and a page owner who
+	// owns the page knows there is one. The two rows that answer 404 do it for a
+	// DM and an admin, and they are the existence property — a real id, on a page
+	// it is not on, is answered exactly like an id that was never issued.
+	//
+	// The ids are literal for the reason campaignFiles gives: a tripwire that read
+	// its expectations out of the fixture could not catch the fixture being wrong.
+	// a1a1a1a1a1a1 is the DM's private fence on the Tavern and d4d4d4d4d4d4 the one
+	// already shared with the table, so each row has something to change.
+	{name: "reveal a secret", method: http.MethodPost, pattern: "/p/*/secrets/{secretID}/reveal", path: "/p/Tavern.md/secrets/a1a1a1a1a1a1/reveal",
+		authenticated: ok303, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			// A page owner, and the case §8.3 is explicit about: authoring rights
+			// are not broadcast rights.
+			"player who owns the tavern": no403,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	{name: "revoke a revealed secret", method: http.MethodPost, pattern: "/p/*/secrets/{secretID}/revoke", path: "/p/Tavern.md/secrets/d4d4d4d4d4d4/revoke",
+		authenticated: ok303, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": no403,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	// e5e5e5e5e5e5 is the dm fence on Ruin.md: a secret that exists, is indexed, and
+	// is not on the page the request named. The index holds every fence id on the
+	// campaign, so answering 404 by "is this id in the index" would be 200 here and
+	// would hand this route a secret enumerator; answering 404 by "is this on the
+	// page this reader may read" is 404 either way and is what the row pins.
+	{name: "reveal a secret that is not on this page", method: http.MethodPost, pattern: "/p/*/secrets/{secretID}/reveal", path: "/p/Index.md/secrets/e5e5e5e5e5e5/reveal",
+		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": no403,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+
+	// §8.6's audit. Its own constant and its own policy row, deliberately not
+	// PermAdmin and deliberately not PermDM: AGENTS.md §2.6a records that folding
+	// it into either would have closed the gap by accident and left the constant's
+	// name lying about what it grants. So the answer for a DM is 200, which is the
+	// one cell in this table that is neither a page read nor a write.
+	{name: "secret audit trail", method: http.MethodGet, pattern: "/admin/secrets", path: "/admin/secrets",
+		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303,
+		byRole: map[string]int{
+			"player who owns the tavern": no403,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+
+	// The four rows below run before the rename for a reason that is a property of
+	// this table rather than of their subjects: the rename rows move Tavern.md and
+	// the ids in these paths are literals, deliberately, so a row that named the
+	// renamed page would be testing whichever page happened to answer. Tavern.md
+	// exists for every role at this point in the walk, and every role's answer to
+	// these four is therefore about the permission and not about the page.
 	// Renaming a page and the opt-in bulk link updater (§5.6), on the same
 	// two-layer gate as the editor. The byRole pair is the assertion that makes
 	// that gate honest: a page owner renames her own page and a player who owns
-	// nothing is refused by the same handler. Page 3 is Tavern.md, which the
-	// fixture grants thia ownership of, so the owner row is a real 200 against a
-	// page that really is owned rather than a claim about a page nobody owns.
+	// nothing is refused by the same handler. The rows address Tavern.md, which
+	// the fixture grants thia ownership of, so the owner row is a real 200
+	// against a page that really is owned rather than a claim about a page nobody
+	// owns.
 	//
 	// The 404 rows are the other half: a page that is not there is a 404 for a
 	// principal entitled to look and a 403 for one that is not, and the second
 	// must not be reordered into a 404 by a handler that resolves the page before
 	// it checks the principal.
-	{name: "page rename", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/3/rename",
+	//
+	// The three rows after the rename name the renamed page first and the
+	// original second, because which of the two exists is a function of whether
+	// this role was allowed to rename it.
+	{name: "page rename", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/%page%/rename",
+		pages:         []string{"Tavern.md"},
 		form:          url.Values{"new": {"The Drowned Lantern Inn"}},
 		authenticated: ok200, openToAnonymous: no403, closedToAnonymous: no403,
 		byRole: map[string]int{
@@ -317,21 +408,25 @@ var matrixRoutes = []matrixRoute{
 			"player who owns nothing":    no403,
 			"disabled player":            no403,
 		}},
-	{name: "page rename for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/999999/rename",
+	{name: "page rename for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/%page%/rename",
+		absent:        true,
 		form:          url.Values{"new": {"Whatever"}},
 		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403},
 	// The preview is a read of the same decision and is checked per page rather
 	// than per route, so an owner's preview of a page other people refer to
 	// reports them as unwritable and still lists them.
-	{name: "rename preview", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/3/rename-preview?new=The%20Inn",
+	{name: "rename preview", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/%page%/rename-preview?new=The%20Inn",
+		pages:         []string{"The Drowned Lantern Inn.md", "Tavern.md"},
 		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303,
 		byRole: map[string]int{
 			"player who owns the tavern": ok200,
 			"player who owns nothing":    no403,
 		}},
-	{name: "rename preview for a page that does not exist", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/999999/rename-preview?new=Whatever",
+	{name: "rename preview for a page that does not exist", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/%page%/rename-preview?new=Whatever",
+		absent:        true,
 		authenticated: no404, openToAnonymous: ok303, closedToAnonymous: ok303},
-	{name: "link updater", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/3/update-links",
+	{name: "link updater", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/%page%/update-links",
+		pages:         []string{"The Drowned Lantern Inn.md", "Tavern.md"},
 		form:          url.Values{"new": {"The Inn"}, "confirmed": {"true"}},
 		authenticated: ok200, openToAnonymous: no403, closedToAnonymous: no403,
 		byRole: map[string]int{
@@ -339,13 +434,15 @@ var matrixRoutes = []matrixRoute{
 			"player who owns nothing":    no403,
 			"disabled player":            no403,
 		}},
-	{name: "link updater for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/999999/update-links",
+	{name: "link updater for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/%page%/update-links",
+		absent:        true,
 		form:          url.Values{"new": {"Whatever"}, "confirmed": {"true"}},
 		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403},
 	// An unconfirmed updater touches nothing and answers 400, which is the
 	// property §5.6 relies on when it says the rewrite is "always an explicit,
 	// previewed, diffed, permission-checked action".
-	{name: "link updater without confirmation", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/3/update-links",
+	{name: "link updater without confirmation", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/%page%/update-links",
+		pages:         []string{"The Drowned Lantern Inn.md", "Tavern.md"},
 		form:          url.Values{"new": {"The Inn"}},
 		authenticated: http.StatusBadRequest, openToAnonymous: no403, closedToAnonymous: no403},
 
@@ -465,6 +562,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 					// question than the one they ask.
 					before := raw
 					row := fx.sessionFor(before)
+					rt := resolveMatrixPage(t, fx, rt)
 					got, want := performMatrixRow(t, row, rt, role)
 					if got != want {
 						t.Errorf("%s %s as %s: status %d, want %d", rt.method, rt.path, role.name, got, want)
@@ -513,6 +611,47 @@ func performMatrixRow(t *testing.T, s *session, rt matrixRoute, role roleCase) (
 		return statusOf(s, rt, role), rt.openToAnonymous
 	}
 	return statusOf(s, rt, role), rt.closedToAnonymous
+}
+
+// resolveMatrixPage fills a row's %page% marker, and is why the table can name
+// a page rather than an id.
+//
+// It runs per cell rather than once, because the walk mutates the world between
+// rows: the rename row is what makes "The Drowned Lantern Inn.md" the name a
+// later row has to ask for, and only for a role that was allowed to rename.
+func resolveMatrixPage(t *testing.T, fx *fixture, rt matrixRoute) matrixRoute {
+	t.Helper()
+	if !strings.Contains(rt.path, "%page%") {
+		return rt
+	}
+	var id int64
+	switch {
+	case rt.absent:
+		id = absentPageID(t, fx)
+	case len(rt.pages) > 0:
+		for _, p := range rt.pages {
+			if got, ok := fx.pageIDByPath(p); ok {
+				id = got
+				break
+			}
+		}
+	}
+	if id == 0 {
+		t.Fatalf("%s: no page among %v exists, so the row would ask about nothing", rt.name, rt.pages)
+	}
+	rt.path = strings.ReplaceAll(rt.path, "%page%", strconv.FormatInt(id, 10))
+	return rt
+}
+
+// absentPageID is one past the highest id a page has, so "a page that is not
+// there" stays true however many pages the fixture grows.
+func absentPageID(t *testing.T, fx *fixture) int64 {
+	t.Helper()
+	var max int64
+	if err := fx.DB.Reader().QueryRow(`SELECT COALESCE(MAX(id), 0) FROM pages`).Scan(&max); err != nil {
+		t.Fatalf("read the highest page id: %v", err)
+	}
+	return max + 1
 }
 
 // statusOf performs a matrix request and returns the status code.
@@ -591,9 +730,19 @@ func TestTheMatrixCoversEveryRoute(t *testing.T) {
 		// view of a page that is not there, an editor for one and a history list
 		// for one are each two different answers to the same URL, and each pair
 		// is the surface's own version of the page row's two absences.
+		//
+		// The export and the reveal join them for that same reason and no other.
+		// `/p/*/export` answers 200 with a page and 404 without one, which is the
+		// pair. `/p/*/secrets/{secretID}/reveal` answers 303 for a fence on the
+		// page and 404 for one that is not on it — and the second is the property
+		// worth two rows, because the index holds every fence id in the campaign
+		// and a route that resolved the id against the index rather than against
+		// the page would be an enumerator for the ids it must not disclose.
 		if n > 1 && key != "GET /p/*" && key != "GET /_/assets/*" &&
 			key != "GET /tag/{name}" && key != "GET /api/pages/{id}/context" &&
 			key != "GET /p/*/raw" && key != "GET /p/*/edit" && key != "GET /p/*/history" &&
+			key != "GET /p/*/export" &&
+			key != "POST /p/*/secrets/{secretID}/reveal" &&
 			key != "POST /api/pages/{id}/rename" &&
 			key != "GET /api/pages/{id}/rename-preview" &&
 			key != "POST /api/pages/{id}/update-links" &&
@@ -770,19 +919,21 @@ func TestADisabledAccountGetsNoSession(t *testing.T) {
 // TestANonAdminIsRefusedAdminSurface is here because a test is what stops an
 // /admin route appearing without a decision.
 //
-// Stage 1 wrote it as "no admin route is mounted", because there were none. That
-// premise expired with /admin/plugins, and the correct response is to keep the
-// test's purpose and replace its premise: the rule is not "there is no admin
-// surface", it is "every admin surface is admin-only". The second is the rule
-// that stays true as the surface grows, and it is checkable from the route table
-// rather than from a list somebody has to remember to update.
+// It has already had its premise replaced once. Stage 1 wrote it as "no admin
+// route is mounted", because there were none; /admin/plugins expired that, and
+// the correct response was to keep the test's purpose and replace its premise.
+// /admin/secrets expires it a second time, and for the same kind of reason: the
+// rule was never "the admin surface is admin-only", it was "every admin surface
+// answers a question somebody wrote down". That rule stays true as the surface
+// grows, and it is checkable from the route table rather than from a list somebody
+// has to remember to update.
 func TestANonAdminIsRefusedAdminSurface(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	fx.accountsFor()
 	ctx := context.Background()
 
-	t.Run("every admin route is admin-only and refuses everyone else", func(t *testing.T) {
+	t.Run("every admin route is gated, and its gate says what it answers", func(t *testing.T) {
 		t.Parallel()
 		// A concrete path per route, because the table carries patterns and a
 		// pattern with a {param} is not a path. A route added without a case here
@@ -790,6 +941,25 @@ func TestANonAdminIsRefusedAdminSurface(t *testing.T) {
 		// rather than a skip.
 		paths := map[string]string{
 			"GET /admin/plugins": "/admin/plugins",
+			"GET /admin/secrets": "/admin/secrets",
+		}
+		// What each admin surface answers for a player and for a DM. A surface
+		// absent from this table is PermAdmin and refuses both, which is the
+		// assumption the subtest states and the probes below check rather than
+		// takes on trust — so a fourth admin route arrives admin-only without an
+		// edit here, and a route mounted with a coarser gate fails.
+		type adminSurface struct {
+			perm         authz.Permission
+			player, isDM int
+		}
+		surfaces := map[string]adminSurface{
+			// The audit trail admits a DM on purpose. authz.PermAuditSecrets is its
+			// own constant with its own policy row, and AGENTS.md §2.6a records
+			// why it is deliberately neither PermAdmin nor PermDM: the events are
+			// metadata, but they disclose that a secret exists and who has touched
+			// it. What this table is here to catch is a surface with no decision at
+			// all, and a surface absent from it still has to be PermAdmin.
+			"GET /admin/secrets": {perm: authz.PermAuditSecrets, player: http.StatusForbidden, isDM: http.StatusOK},
 		}
 		var adminRoutes int
 		for _, route := range fx.Server.Routes() {
@@ -797,23 +967,29 @@ func TestANonAdminIsRefusedAdminSurface(t *testing.T) {
 				continue
 			}
 			adminRoutes++
-			if route.Perm != authz.PermAdmin {
-				t.Errorf("%s is mounted at %q with %q, want %q: an admin surface that is not admin-only is the failure this test exists for",
-					route.Name(), route.Pattern, route.Perm, authz.PermAdmin)
+			key := route.Method + " " + route.Pattern
+			want := surfaces[key]
+			if _, known := surfaces[key]; !known {
+				want = adminSurface{perm: authz.PermAdmin, player: http.StatusForbidden, isDM: http.StatusForbidden}
+			}
+			if route.Perm != want.perm {
+				t.Errorf("%s is mounted at %q with %q, want %q: an admin surface gated on something other than its recorded decision is the failure this test exists for",
+					route.Name(), route.Pattern, route.Perm, want.perm)
 				continue
 			}
-			path, ok := paths[route.Method+" "+route.Pattern]
+			path, ok := paths[key]
 			if !ok {
 				t.Errorf("%s is mounted at %q but this test has no path for it: add one, or the route is ungated as far as this suite knows", route.Name(), route.Pattern)
 				continue
 			}
 			s := fx.asUser(playerName, playerPass)
-			if got := s.status(s.get(path)); got != http.StatusForbidden {
-				t.Errorf("GET %s as a player: status %d, want 403", path, got)
+			if got := s.status(s.get(path)); got != want.player {
+				t.Errorf("GET %s as a player: status %d, want %d", path, got, want.player)
 			}
 			dm := fx.asUser(dmName, dmPass)
-			if got := dm.status(dm.get(path)); got != http.StatusForbidden {
-				t.Errorf("GET %s as a dm: status %d, want 403: the admin role is not a superset of dm", path, got)
+			if got := dm.status(dm.get(path)); got != want.isDM {
+				t.Errorf("GET %s as a dm: status %d, want %d: the dm's answer must be the one %q grants",
+					path, got, want.isDM, want.perm)
 			}
 		}
 		if adminRoutes == 0 {
