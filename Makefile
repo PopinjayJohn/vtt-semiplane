@@ -38,6 +38,23 @@ TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windo
 COVERAGE_PROFILE ?= coverage.out
 COVERAGE_BASELINE := .coverage-baseline
 
+# How far a package may fall before coverage-check calls it a drop, in
+# percentage points.
+#
+# It exists because the gate's own number is quantised to one decimal place and
+# a package's measured value is not reproducible to that decimal: the same tree
+# measured 87.6 and 87.5 for internal/md on consecutive runs, because a test
+# that is conditionally skipped or bailed changes which statements are reached.
+# Comparing two 0.1-quantised numbers exactly makes a gate that fails on
+# rounding, and a flaky gate is worse than no gate — a red build that means
+# nothing is a build the team learns to retry rather than read.
+#
+# Half a point is chosen because it is larger than the noise and smaller than
+# the smallest drop anyone would want to be told about: losing a function's
+# tests is a whole point or several, not half of one. Raise it to silence a
+# flaky gate and you have removed the gate instead of the flake.
+COVERAGE_TOLERANCE ?= 0.5
+
 # Each entry is a marker that must be present in the built binary for the
 # release notes' claim that the binary is self-contained to be true. These are
 # the //go:embed payloads named in .goreleaser.yaml's header, all three of them.
@@ -150,7 +167,7 @@ cover: ## run the tests and report coverage
 coverage-check: ## fail if any package in the baseline lost coverage
 	@test -f $(COVERAGE_PROFILE) || { echo "no $(COVERAGE_PROFILE): run 'make cover' first"; exit 1; }
 	@test -f $(COVERAGE_BASELINE) || { echo "no $(COVERAGE_BASELINE)"; exit 1; }
-	@awk -v BASELINE=$(COVERAGE_BASELINE) '\
+	@awk -v BASELINE=$(COVERAGE_BASELINE) -v TOL=$(COVERAGE_TOLERANCE) '\
 	  FNR==NR { \
 	    if (NF >= 2 && $$1 !~ /^#/) { \
 	      if ($$1 in base) dup = dup " " $$1; \
@@ -180,12 +197,12 @@ coverage-check: ## fail if any package in the baseline lost coverage
 	        printf "MISSING   %s: recorded, not measured. The package was deleted or its tests stopped running; drop the row if that was deliberate.\n", p; \
 	        fails++; continue \
 	      } \
-	      cur = sprintf("%.1f", 100 * cov[p] / tot[p]) + 0; \
-	      if (cur + 0.001 < base[p]) { \
-	        printf "DROP      %s: %.1f%% now, %.1f%% recorded in %s\n", p, cur, base[p], BASELINE; \
-	        fails++; continue \
-	      } \
-	      if (cur > base[p] + 0.001) printf "RAISED    %s: %.1f%% now, %.1f%% recorded - run \"make coverage-baseline\" and commit it\n", p, cur, base[p] \
+	    cur = sprintf("%.1f", 100 * cov[p] / tot[p]) + 0; \
+	    if (cur + TOL < base[p]) { \
+	      printf "DROP      %s: %.1f%% now, %.1f%% recorded in %s (tolerance %.1f)\n", p, cur, base[p], BASELINE, TOL; \
+	      fails++; continue \
+	    } \
+	    if (cur > base[p] + TOL) printf "RAISED    %s: %.1f%% now, %.1f%% recorded - run \"make coverage-baseline\" and commit it\n", p, cur, base[p] \
 	    } \
 	    for (p in seen) if (!(p in base)) printf "UNTRACKED %s: %.1f%% and not in %s\n", p, 100 * cov[p] / tot[p], BASELINE; \
 	    if (fails) { printf "\n%d problem(s) against %s\n", fails, BASELINE; exit fails } \
