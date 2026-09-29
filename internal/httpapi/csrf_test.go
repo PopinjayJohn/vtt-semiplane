@@ -28,6 +28,12 @@ import (
 // to GET stops being checked with no edit either. A test that restated the list
 // would be a test of the list.
 //
+// What that derivation cannot reach is a mounted plugin sub-router, because a
+// mount is not a row and the gates in front of one are not in the table. The
+// mutation on such a sub-router is checked by
+// TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest in pluginmount_test.go,
+// which drives the mounted tree; nothing here claims it.
+//
 // It runs the whole table twice, once against a vault with accounts and once
 // against a vault with none, because one route exists in exactly one of those
 // states: /setup is a 404 once the first administrator is claimed, and a 404 that

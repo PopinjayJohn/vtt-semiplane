@@ -1,0 +1,45 @@
+{
+  "_why_this_file_exists": "gosec's config is JSON, which has no comments, so the reason for every exclusion lives in the _why_* keys below rather than in a // that the parser would eat. gosec reads `global` and `exclude-rules` and ignores everything else, so a reader who opens this file for the machine list gets the argument with it. security.yml runs a second, unexcluded scan and uploads it as an artifact, so nothing hidden here is hidden from the build log.",
+
+  "_floor": "security.yml passes -severity=medium. That is the plan's P12 accept, 'zero gosec findings above low', read the way the phrase is normally meant: nothing at MEDIUM or above. LOW findings are reported by the second scan and do not fail. Confidence stays at the default low, because a confidence floor would hide findings rather than triage them.",
+
+  "_why_the_paths_start_with_a_slash": "gosec matches these regexes against the absolute path of the file it found the issue in, with regexp.MatchString, which is a substring search. A leading ^ would anchor to the filesystem root and match nothing on any machine; the leading / anchors to a path segment instead, so the pattern holds wherever the repository is checked out.",
+
+
+  "global": {
+    "confidence": "low",
+
+    "_why_G101_is_excluded": "G101 matches on the NAME of an identifier plus the entropy of the string assigned to it, and in this tree every one of the seven hits is a constant that is not a credential: authz/predicate.go:24 is the SecretVisibleSQL fragment, store/secret.go:45 and :99 are column lists that happen to name s.body_hash, search/search.go:139 and :161 are FTS5 SQL fragments, md/render.go:23 is a UI caption, and auth/password.go:250 is dummyPassphrase - a string whose entire purpose is to be something no login form can match (TestTheDummyVerifierMatchesNothing asserts that). Excluded by rule rather than by path because the rule has no precision to scope with: a name-based matcher is 0-for-7 here and the credential gate that actually works on this repository is the gitleaks job.",
+
+    "exclude": "G101"
+  },
+
+  "exclude-rules": [
+    {
+      "_why": "auth/password.go:142 is `p.keyLen = uint32(len(p.key))`, the digest length a PHC string asks argon2.IDKey to allocate. It is the only G115 in this tree. The conversion sits three lines below the ceiling that makes it safe — parsePHC refuses any digest over maxVerifyDigestLen first — so the bound and the conversion are read together. The exclusion is scoped to the file AND to that one statement, so a G115 anywhere else in internal/auth is a different statement and still fails; the previous form was scoped to the whole package, which is looser than the reason it gave. The bound was not there when this was first written: it was reasoned away, and TestVerifyRefusesADigestLongerThanTheCeiling now holds it.",
+      "path": "/internal/auth/password\\.go$",
+      "text": "p\\.keyLen = uint32\\(len\\(p\\.key\\)\\)",
+      "rules": ["G115"]
+    },
+    {
+      "_why": "app/commands.go:179 is the os.Lstat in readRegularFile, on a path filepath.WalkDir yielded. G304 is syntactic and cannot see that copyTree's target is filepath.Join(dst, rel) with rel from filepath.Rel(src, path), which cannot leave dst because WalkDir descends no symlink. G703 and G122 used to be excluded here and are not any more: copyTree used to decide from the walk's DirEntry and then read the same name, which is the check-then-use G122 names and which read through a symlink planted after the walk read the directory. That is fixed rather than argued - readRegularFile now refuses on the object it opened (Lstat, then os.SameFile against the handle) and TestTheWalkEntryIsNotTheRefusal holds the removed shape to reading through a swap. The rule stopped matching because the open moved out of the walk callback, which is the rule being syntactic; the reason it is safe is os.SameFile, not the move.",
+      "path": "/internal/app/commands\\.go$",
+      "rules": ["G304"]
+    },
+    {
+      "_why": "Every G302 hit in this tree is os.Chmod(<a directory>, 0o700) - app/commands.go:108, app/vaultpath.go:125, vault/backup.go:132 and :145, vault/lock.go:61. G302 wants 0600 or less because it is written for a secret FILE; a directory at 0600 is untraversable and the process could not read its own vault back. 0700 is the tightest mode that still works, and the comment at commands.go:108 already says why it matters ('the directory is about to hold every secret in the vault').",
+      "path": "/internal/(app|vault)/.*\\.go$",
+      "rules": ["G302"]
+    },
+    {
+      "_why": "All ten G304 hits open a path this process rooted itself: store.go:151 (the SQLite file, 0600), vault/lock.go:66 (the lock file, 0600), vault/syncdir_unix.go:13 (an fsync on a directory handle), vault/backup.go:276/:307/:375/:381 (paths under the backup directory the app created), app/boot.go:457 (the audit log, 0600), testutil/vault.go:86 (the harness reading a file it wrote). The rule is syntactic and cannot see vault.Resolve, which AGENTS.md 2.9 makes the containment authority for the paths that do come from outside. Scoped to these packages so a G304 in md/ or httpapi/ - where a path really can arrive from a request - still fails.",
+      "path": "/internal/(store|vault|testutil|app)/.*\\.go$",
+      "rules": ["G304"]
+    },
+    {
+      "_why": "Two rule families, one argument each. G124 (cookie flags): all five sites build their http.Cookie through cookieOptions(r.TLS != nil) at httpapi/middleware.go:45, which sets HttpOnly: true and SameSite: Strict unconditionally and Secure from the argument. The rule reads the literal at the call site and cannot follow the constructor, and Secure is deliberately conditional - the app serves plain HTTP on a LAN, so an unconditional Secure would silently drop every session cookie. G710 (open redirect): the sinks are http.Redirect at auth.go:108, pageedit.go:439 and secretsroute.go:119. The first is fed by safeNext (auth.go:381), which returns \"/\" for an empty value, anything without a leading slash, anything starting with // and anything containing a backslash or a control character. The other two are fed by Href(), which is the literal \"/p/\" + a vault-relative path (store/page.go:62), so the result cannot begin with a scheme or a second slash and is same-origin by construction. Both stop being true if a new redirect target appears in this package that is neither.",
+      "path": "/internal/httpapi/.*\\.go$",
+      "rules": ["G124", "G710"]
+    }
+  ]
+}

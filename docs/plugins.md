@@ -352,12 +352,16 @@ no migration** — its content is the frontmatter convention `type: houserule`,
 read through `Host.Pages().ListPagesByType`, so the rules are ordinary pages that
 stay readable with the plugin absent.
 
-Its ten sample rules live in `internal/systems/houserules/testdata/` rather than
-in a sample campaign, because `internal/sample` is a package doc and the
-extraction that populates it lands in a later stage. The property that the
-testdata is there to demonstrate — a `type: houserule` page renders with the
-core viewer, and a list built from the convention is exactly the pages carrying
-it — is asserted directly, so the fixture and the sample campaign cannot drift
+Its ten sample rules live in `internal/systems/houserules/testdata/`, because that
+is a fixture the plugin's own tests run on and a test needs its house rules to
+exist whether or not anything has been extracted into a vault. The bundled
+campaign ships ten of its own under
+`internal/sample/campaign/House Rules/` — the plan's 6 `table` / 3 `private` /
+1 `dm` split, authored as content rather than as a Go-level `public` flag, and
+pinned by `TestSampleCampaignExercisesEveryFeature` in `internal/sample`. The
+property the testdata is there to demonstrate — a `type: houserule` page renders
+with the core viewer, and a list built from the convention is exactly the pages
+carrying it — is asserted directly, so the fixture and the campaign cannot drift
 into being two different demonstrations.
 
 **The index ships one section, not the Shared / DM-only split the plan asks for,
@@ -426,9 +430,24 @@ The parts that matter, and why:
   that function a plugin's POST would run with no CSRF check and no permission
   at all, and neither `TestCSRFRequiredOnAllMutations` nor
   `TestTheMatrixCoversEveryRoute` would see it: both read the static route table,
-  not the mounted chi tree. `httpapi.TestAPluginSubRouterIsMountedBehindTheSameGatesAsATableRoute`
-  is the test that closes the gap, and it exists because the gap is invisible to
-  the gates that are supposed to cover it.
+  not the mounted chi tree. **Two tests drive the mounted tree, and they answer
+  different questions.**
+  `TestAPluginSubRouterIsMountedBehindTheSameGatesAsATableRoute` in
+  [`../internal/httpapi/preview_test.go`](../internal/httpapi/preview_test.go)
+  asks whether the gates are there at all.
+  `TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest` in
+  [`../internal/httpapi/pluginmount_test.go`](../internal/httpapi/pluginmount_test.go)
+  is the one that can answer *which* methods a mount gates, because that is a
+  property of each request and not of the mount: a mount is registered once for
+  every method its sub-router serves, so re-applying a per-row gate to a whole
+  router answers for the mount's placeholder method and refuses every safe
+  method with 403 — for every principal, an administrator included. That is not
+  hypothetical; it is what shipped, and it made `GET /plugin/houserules` a link
+  in the sidebar that no signed-in reader could follow. The fix asks the
+  predicate per request instead, from `mutatingMethod` — the same one
+  `Route.Mutating` uses, so the mount and the table cannot disagree about what a
+  mutation is — and the test serves an untokened GET, refuses an untokened POST
+  and serves a POST carrying the session's own token, through the real router.
 - **The rule list filters in SQL** with `authz.SecretVisibleSQL`, and its `COUNT`
   uses the identical predicate. A list that shows one row while counting three is
   an existence leak.

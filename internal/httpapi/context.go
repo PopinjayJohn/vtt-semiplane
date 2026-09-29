@@ -275,10 +275,15 @@ func PluginPanelSlots() []string {
 // The order is the registry's. NavItems is already sorted by Order, then owning
 // plugin id, then declaration index, and sorting it again here could only lose
 // that order.
+//
+// The role-name-to-permission table is authz.PermissionForRole and not a switch
+// here, so that this package asks the policy a question and never answers one:
+// a second copy of that table would be a second answer to "what does `dm` mean",
+// and TestNoRoleComparisonOutsidePerm refuses the copy.
 func PluginNavFor(owned []plugin.Owned[plugin.NavItem], who authz.Principal, policy authz.Policy) []PluginNavItem {
 	out := make([]PluginNavItem, 0, len(owned))
 	for _, item := range owned {
-		perm, known := navItemPermission(item.Value.MinimumRole)
+		perm, known := authz.PermissionForRole(item.Value.MinimumRole)
 		if !known || !policy.Allows(who, perm, authz.Resource{}) {
 			continue
 		}
@@ -302,27 +307,6 @@ func PluginNavFor(owned []plugin.Owned[plugin.NavItem], who authz.Principal, pol
 		return nil
 	}
 	return out
-}
-
-// navItemPermission is the permission a nav item's MinimumRole names.
-//
-// The plugin vocabulary spells the requirement as a role name and the policy
-// speaks in permissions, so this is the only place the two are translated. An
-// unrecognised role is shown to nobody rather than defaulted to everybody: an
-// entry that vanished for a DM and stayed for an admin is a policy with a hole
-// in it, and a typo in a plugin's string should cost its own screen rather than
-// a difference between two readers.
-func navItemPermission(minimum string) (authz.Permission, bool) {
-	switch authz.Role(strings.TrimSpace(minimum)) {
-	case "", authz.RolePlayer:
-		return authz.PermReadPage, true
-	case authz.RoleDM:
-		return authz.PermDM, true
-	case authz.RoleAdmin:
-		return authz.PermAdmin, true
-	default:
-		return "", false
-	}
 }
 
 // pluginNav is the left sidebar's plugin group for one request.

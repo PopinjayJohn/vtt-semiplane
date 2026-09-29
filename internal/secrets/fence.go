@@ -70,11 +70,18 @@ func Parse(d *md.Doc) ([]Secret, []md.Problem) {
 			case err != nil:
 				problems = append(problems, unreadable(s))
 			case dir.HasUnknown:
-				// md demotes such a fence to public passthrough, so it is not a
-				// secret span at all and cannot reach this loop. Arriving here
-				// means the two halves of md disagree, which is reported rather
-				// than trusted: an unknown key is a directive whose meaning this
-				// package cannot claim to have enforced.
+				// md keeps such a fence secret and hidden, so it does reach this
+				// loop, and it arrives unreadable rather than demoted. Reporting it
+				// is how a fence whose directive this package cannot claim to have
+				// enforced becomes visible to the operator who has to fix it.
+				//
+				// The comment here once said the opposite — that md demoted the
+				// fence to public passthrough and it could not reach this loop at
+				// all. That was true of an earlier segmentation and stopped being
+				// true when the fail-closed change landed, and the branch it
+				// described went from load-bearing to a way of noticing that md and
+				// this package disagree. Both now fail closed, and the disagreement
+				// is worth a line in the problems list rather than a silent index.
 				problems = append(problems, unreadable(s))
 			default:
 				sec.Visibility = dir.Visibility

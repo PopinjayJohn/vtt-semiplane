@@ -182,7 +182,10 @@ func (s *Server) pageCarriesSecret(ctx context.Context, who authz.Principal, pag
 //
 // It asks the policy the question the route asks — Check(actor, PermDM,
 // authz.Resource{}) — and nothing else. Two reasons, and the second is the
-// important one. A grep test fails the build on a Role == comparison in a handler,
+// important one. TestNoRoleComparisonOutsidePerm fails the build on a role
+// comparison outside the policy, and it scans the syntax tree rather than the text so a
+// comment saying "Role ==" cannot satisfy it and a comparison split over two lines
+// cannot escape it,
 // so IsDM() is not available; and a control whose visibility is a hand-written
 // copy of its gate is a control that can disagree with the gate, which is the same
 // class of bug as a second redaction. Asking the policy is one line and is the

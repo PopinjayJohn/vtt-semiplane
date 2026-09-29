@@ -533,6 +533,14 @@ adds is the header set and a filename that cannot split a response, and what it
 deliberately refuses is a campaign-wide form. Read the two files' own preambles
 rather than this paragraph for the arguments.
 
+Stage 6 is **P11**: the two ends of shipping a campaign. The embedded sample
+campaign in [`../internal/sample/`](../internal/sample/), extracted on **every**
+boot and never over a file that is already there — the walk is one `Resolve` and
+one `Read` per file, so a first-boot gate would buy no work and would add a
+state file whose loss silently skips the campaign for ever — and the release
+pipeline that builds and signs the static binaries, the deployment half of
+ADR-0002 and the reason that ADR chose the driver.
+
 Delivered and enforced today:
 
 | Area | Where |
@@ -564,13 +572,17 @@ Delivered and enforced today:
 | The raw view, the page-scoped attachment serve path, the broken-links panel | [`../internal/httpapi/pageraw.go`](../internal/httpapi/pageraw.go), [`../internal/httpapi/pageattachment.go`](../internal/httpapi/pageattachment.go), [`../internal/httpapi/broken.go`](../internal/httpapi/broken.go) |
 | The reveal and revoke writes, the per-page export, the `secret_events` audit view | [`../internal/httpapi/secretsroute.go`](../internal/httpapi/secretsroute.go), [`../internal/httpapi/export.go`](../internal/httpapi/export.go), [`../internal/httpapi/auditsecrets.go`](../internal/httpapi/auditsecrets.go), [`../internal/web/secrets.templ`](../internal/web/secrets.templ) |
 | The leak walk derived from the route table, and the instrument's own proof | [`../internal/httpapi/leaksuite_test.go`](../internal/httpapi/leaksuite_test.go), [`../internal/httpapi/leaktripwire_test.go`](../internal/httpapi/leaktripwire_test.go) |
+| The embedded sample campaign and its non-clobbering first-boot extraction | [`../internal/sample/`](../internal/sample/) |
 
 **Not built. Treat every row as a proposal, not as behaviour.** The plan's
-remaining phases are P10 (the VTT) and P12.
+remaining phases are **P10** — the VTT: maps, initiative and dice — and the
+remainder of **P12**, which is where the create, delete and `/admin/users`
+routes below sit. Three smaller things are open as well, and they are listed
+below rather than folded into a phase.
 
 Concretely absent from the tree, so that nobody goes looking:
 
-- **A plugin registers and two surfaces are still unwired.** `internal/plugin`
+- **A plugin registers and one surface is still unwired.** `internal/plugin`
   holds the vocabulary, the `Host` implementation, the registry and the
   lifecycle; `reserved.go` holds the reserved names;
   `cmd/semiplane/registry.go` is the one map entry; `/admin/plugins` is the boot
@@ -580,7 +592,9 @@ Concretely absent from the tree, so that nobody goes looking:
   wired: the plugin's `fs.FS` (there is no reusable "public body" reader to
   hand it, and inventing one is the most likely way to put a secret where a
   plugin can see it). It is nil rather than faked, and the reason is recorded
-  in `internal/app/plugins.go`.
+  in `internal/app/plugins.go`. The other two stage 3 left unwired — the page
+  store and the route mount — are wired; `Host.Pages()` and the `/plugin/{id}`
+  mount are in `internal/app/plugins.go` and `internal/httpapi/routes.go`.
 - **`internal/systems/core` is a `doc.go` and nothing else.** There is no core
   system plugin. Core behaviour is core, not a plugin; the package exists so a
   reader looking for "where is the built-in game system" finds a statement
@@ -592,9 +606,6 @@ Concretely absent from the tree, so that nobody goes looking:
   escaped on the way out cannot be a script even if a plugin writes
   `templ.Raw`, which is what makes "a plugin cannot ship JavaScript" a
   property of the pipeline rather than a claim about the plugins in the tree.
-- **No sample campaign.** `internal/sample` is a `doc.go`; the embedded
-  campaign and its first-boot extraction are not written. The leak suite runs
-  against a harness-seeded vault instead.
 - **No create, delete or `/admin/users` route.** The router mounts only what the
   route table lists. `internal/vault`'s `Delete` and `Move` verbs exist and are
   tested directly, and `RenamePage` is the only one of them a route reaches —
@@ -610,6 +621,37 @@ Concretely absent from the tree, so that nobody goes looking:
   not a gap so much as a decision made against a contract that could not be
   verified from outside. `/_/commands` is a **real page** for the same reason
   every navigation is: the rows are links.
+- **The table of contents' on-this-page links address anchors that do not
+  exist.** `internal/web/components.templ` emits `<a href={"#" + entry.Slug}>`
+  for every heading `md.Extract` found, and the renderer puts no `id` on a
+  content heading — it builds goldmark without `parser.WithAutoHeadingID` and
+  registers no heading renderer of its own, so no heading in the body carries
+  one. The slug counter is in extraction, which is also where the ordinal de-duplication for a repeated heading happens, so the fix is to share
+  it with rendering rather than to invent a second scheme in `internal/web`; a
+  second scheme puts the id on the wrong heading whenever a secret fence holds
+  one with the same text. It is not cosmetic: `.pa11y-baseline` still records
+  five errors per theme on the one page route it measures with any, and the
+  header of the accessibility job names this table of contents as what remains
+  after the contrast fix, and as a defect in `internal/md` that the job should
+  not paper over. Dropping the links is not the fix either —
+  `TestAPageRendersNormallyWithNoRegistry` in
+  [`../internal/web/shell_plugins_test.go`](../internal/web/shell_plugins_test.go)
+  asserts the rendered page carries `href="#the-room"` for a table-of-contents
+  entry, and that pin is correct as a claim about what the page should contain.
+- **There is no `e2e` job.** `.github/workflows/quality.yml` runs accessibility
+  as a gate and benchmarks and a load test as reports, and the file's own header
+  says why a browser end-to-end harness is not in it: a new toolchain and a new
+  flake surface for a claim `internal/httpapi` already has a Go test for. The
+  accessibility gate's ratchet is not zero and cannot be tuned to zero; see the
+  bullet above.
+- **`vault.Restore` checks where a manifest row writes to, not where it reads
+  from.** The destination goes through `within(root, …)` before anything is
+  written, and the hash is verified, but the source is
+  `filepath.Join(dir, FilesDir, entry.Path)` with no containment check of its
+  own — so a hand-edited manifest carrying `../` reads outside the backup
+  directory. The bytes still have to match the manifest's own `sha256`, so what
+  is missing is a check, not an exposure, and `resolveBackupDir` is the
+  function that already models the rule for the directory itself.
 
 ### The edit affordance is now real, and it is conditional
 
@@ -710,8 +752,11 @@ and this table does not replace it.
 | Route table, middleware chain, handlers, view models | `internal/httpapi` | [`../internal/httpapi/doc.go`](../internal/httpapi/doc.go) |
 | templ components, layouts, the renderer | `internal/web` | [`../internal/web/doc.go`](../internal/web/doc.go) |
 | The embedded asset tree | `web` (module root) | [`../web/embed.go`](../web/embed.go) |
+| The bundled sample campaign, as bytes | `internal/sample` | [`../internal/sample/doc.go`](../internal/sample/doc.go), [`ADR-0005`](ADR-0005-sample-is-bytes-extraction-is-in-app.md) |
 | The pure-Go SQLite decision | — | [`ADR-0002`](ADR-0002-pure-go-sqlite.md) |
 | The dependency order and why it differs from the plan | — | [`ADR-0001`](ADR-0001-canonical-dependency-order.md) |
+| Why there is no rendered-page cache, and the key one would have to have | — | [`ADR-0003`](ADR-0003-no-rendered-page-cache.md) |
+| Why content hides through a body fence and never through a frontmatter key | — | [`ADR-0006`](ADR-0006-fences-not-frontmatter.md) |
 | The rules a change must satisfy | — | [`../AGENTS.md`](../AGENTS.md) |
 
 The dependency order itself is **not restated here.** It is
@@ -798,7 +843,9 @@ what the plan said, what the code does, and where the code says so for itself.
     exists for.
 13. **`internal/sample` vs the plan's two names.** Plan §1 lists
     `internal/sample/`, §2.6 lists `internal/samplecampaign/`; the tree has
-    `internal/sample/` and it is a `doc.go`. Either name is unimplemented.
+    `internal/sample/`, and stage 6 put the campaign and its extraction there.
+    The naming divergence is recorded because the two names are still the two
+    names; the *absence* the entry used to record is not.
 14. **`internal/plugin/reserved.go` exists and the plan's gate on it is
     enforced.** Plan §2.2 defines the reserved page-type ids and route segments
     there and §2.4 gates on them. P0 shipped the vocabulary and left the table

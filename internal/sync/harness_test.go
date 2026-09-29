@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -24,8 +26,13 @@ var clockNow = time.Date(2026, 9, 28, 10, 4, 11, 0, time.UTC)
 
 // harness is an indexer over a temp vault, with the database, the bus and a
 // settable clock.
+//
+// t is a testing.TB rather than a *testing.T so that bench_test.go measures the
+// same indexer over the same fixture rather than a second copy of it: a
+// benchmark that builds its own harness is one more thing to keep correct and
+// one more number nobody can compare against a test.
 type harness struct {
-	t     *testing.T
+	t     testing.TB
 	vault *testutil.Vault
 	db    *store.DB
 	ix    *Indexer
@@ -55,9 +62,15 @@ func (h *harness) advance(d time.Duration) { h.setClock(h.now().Add(d)) }
 // The accounts exist because a fence directive names its author by username and
 // secrets.author_id is a foreign key: a corpus with a secret fence and no users
 // would exercise the unknown-author path and nothing else.
-func newHarness(t *testing.T, files map[string]string) *harness {
+//
+// A benchmark can call this, and does: the accounts are inserted with a stub
+// password hash rather than through auth.Setup, so a 2000-page run spends zero
+// argon2id derivations. That is the whole reason this harness is the cheap one
+// to reuse — internal/httpapi's costs four full derivations per fixture, which
+// at ~140ms each is most of a second before the first iteration runs.
+func newHarness(t testing.TB, files map[string]string) *harness {
 	t.Helper()
-	v := testutil.WithVault(t, files)
+	v := newTBVault(t, files)
 	db, err := store.Open(v.Root)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -100,6 +113,38 @@ func (h *harness) newIndexer() *Indexer {
 		h.t.Fatalf("new indexer: %v", err)
 	}
 	return ix
+}
+
+// newTBVault is testutil.WithVault for a testing.TB.
+//
+// It exists because testutil's own constructors take a *testing.T, and a
+// benchmark cannot supply one — which is the only reason the harness could not
+// be reused by bench_test.go as written. The behaviour is the same: a temp
+// directory, files in sorted order so a page id is a function of the corpus
+// rather than of the map's iteration order, 0700 directories and 0600 files, and
+// the fixed clock. The Vault's fields are exported precisely so that a caller
+// outside testutil can build one; only the writers are not.
+func newTBVault(t testing.TB, files map[string]string) *testutil.Vault {
+	t.Helper()
+	v := &testutil.Vault{
+		Root:  t.TempDir(),
+		Clock: testutil.FixedClock(2026, 9, 28, 10, 4, 11),
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		abs := filepath.Join(v.Root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+			t.Fatalf("mkdir for %s: %v", name, err)
+		}
+		if err := os.WriteFile(abs, []byte(files[name]), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return v
 }
 
 func (h *harness) seedUsers() {

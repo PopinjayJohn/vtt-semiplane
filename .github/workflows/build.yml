@@ -1,0 +1,190 @@
+# Cross-build and smoke. ci.yml's `build` job proves one CGO-free binary is
+# not dynamically linked; it never runs one. This is the file that does.
+#
+# It earns its place for exactly one reason, and the reason is in the plan's
+# P11 accept list: "go-smoke passes on all 5 artifacts". There was no such
+# job. `make cross` was a local convenience that no CI run exercised, so a
+# build could be published for a target nobody had ever executed.
+#
+# It also does not exist in ci.yml, deliberately. A separate workflow buys
+# three things ci.yml's structure cannot: a job matrix over runner OS, which
+# would make the whole of ci.yml a 3x2 matrix if it lived there; artifacts
+# that outlive the job, so go-smoke downloads what cross-build produced rather
+# than rebuilding it; and a tag trigger, so a tagged commit is known-good
+# before release.yml spends an OIDC token on it.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+# A second push supersedes the first, except on a tag: two runs of the same tag
+# would both produce artifacts, and the smoke test would then race a build.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  # Read the repository and nothing else. No job here writes to it.
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  GO_VERSION: "1.26.0"
+
+jobs:
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # No cache, deliberately. This job's output is published as an
+          # artifact and then executed by go-smoke, and a Go module cache is
+          # keyed partly by the ref — so a pull request that poisons the cache
+          # poisons the binaries the smoke test is about to trust. The build
+          # takes about two minutes cold, which is the cheap side of it.
+          cache: false
+      # The list of targets lives in exactly one place — the Makefile's
+      # TARGETS — and this asserts it against the release config before
+      # spending ten minutes building it. A matrix declared here would be a
+      # third copy of a list that has already been written down twice and
+      # disagreed once.
+      - name: the Makefile and the release config build the same targets
+        run: make targets-check
+      - name: build every target
+        run: make cross
+      # A build that succeeds and produces the wrong architecture is the one
+      # failure `go build` cannot report. windows/arm64 is the target that
+      # would go unexecuted by every other job in this file, so it is the one
+      # that most needs this.
+      - name: each artifact is a binary for the platform it claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          check() { # <file> <marker> <marker>
+            got=$(file -b "$1")
+            for want in "${@:2}"; do
+              case "$got" in
+                *"$want"*) ;;
+                *) echo "FAIL $1: expected \"$want\" in: $got"; return 1 ;;
+              esac
+            done
+            echo "ok   $1: $want"
+          }
+          check dist/semiplane_linux_amd64       "ELF 64-bit LSB executable" "x86-64" "statically linked"
+          check dist/semiplane_linux_arm64       "ELF 64-bit LSB executable" "ARM aarch64" "statically linked"
+          check dist/semiplane_darwin_amd64      "Mach-O 64-bit" "x86_64"
+          check dist/semiplane_darwin_arm64      "Mach-O 64-bit" "arm64"
+          check dist/semiplane_windows_amd64.exe "PE32+ executable" "x86-64"
+          check dist/semiplane_windows_arm64.exe "PE32+ executable" "ARM64"
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: cross-build
+          path: dist/semiplane_*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Which artifacts actually run, and why the set is four and not six.
+  #
+  # A GitHub-hosted runner is one architecture, so `semiplane version` can only
+  # be executed on a runner that can execute that artifact. linux/amd64,
+  # darwin/arm64 and windows/amd64 run natively and are in this matrix;
+  # linux/arm64 runs under QEMU in its own job below. darwin/amd64 and
+  # windows/arm64 have no runner this repository controls — an x86 macOS
+  # runner cannot execute arm64, and there is no hosted Windows-on-ARM image —
+  # so those two are asserted by file(1) in cross-build and are not executed
+  # anywhere. That is stated rather than papered over with a skip.
+  go-smoke:
+    needs: cross-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux/amd64
+            exe: semiplane_linux_amd64
+          - os: macos-latest
+            target: darwin/arm64
+            exe: semiplane_darwin_arm64
+          - os: windows-latest
+            target: windows/amd64
+            exe: semiplane_windows_amd64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      # The artifact name comes from this file's own matrix, but a matrix value
+      # interpolated straight into a `run:` is a shell word the workflow cannot
+      # vouch for, and zizmor is right to ask for the indirection. Quoting at
+      # the use site is then the shell's job rather than the reader's.
+      EXE: ${{ matrix.exe }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cross-build
+          path: dist
+      # The plan's P11 accept list asks for exactly these two commands. `vault
+      # info` is the expensive one: it claims the lock, creates the vault,
+      # migrates, writes a backup and rebuilds the search index, so a crash in
+      # any of them is a non-zero exit rather than a wrong line of output. The
+      # output is asserted too, because a command that exits 0 having printed
+      # nothing has still not proved the binary works.
+      - name: "${{ matrix.target }}: version"
+        shell: bash
+        run: ./dist/"$EXE" version
+
+      - name: "${{ matrix.target }}: vault info in an empty directory"
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(realpath "./dist/$EXE")
+          work=$(mktemp -d)
+          # A vault the command creates itself, in a directory with no
+          # repository in it: the plan's promise is that a downloaded binary
+          # makes its own vault, and shipping one in would test something else.
+          out=$("$exe" vault info --vault "$work/vault")
+          printf '%s\n' "$out"
+          grep -q "^vault:" <<<"$out"
+          grep -q "^index:" <<<"$out"
+          grep -q "ready" <<<"$out"
+          # A second boot must be cheap: a reindex on every boot is a bug the
+          # first boot cannot show.
+          "$exe" vault info --vault "$work/vault" >/dev/null
+
+  go-smoke-arm64:
+    needs: cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cross-build
+          path: dist
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+        with:
+          platforms: arm64
+      # QEMU rather than a native ARM runner because ubuntu-latest-arm is not
+      # a hosted image, and a linux/arm64 smoke test that only ever runs
+      # through an emulator is still a real execution of the real artifact —
+      # which is the property the plan's accept list is about.
+      - name: "linux/arm64: version and vault info under QEMU"
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(realpath ./dist/semiplane_linux_arm64)
+          work=$(mktemp -d)
+          mkdir -p "$work/vault"
+          docker run --rm --platform linux/arm64 -v "$work:/w" -v "$(dirname "$exe"):/sm:ro" \
+            debian:trixie-slim /sm/$(basename "$exe") version
+          docker run --rm --platform linux/arm64 -v "$work:/w" -v "$(dirname "$exe"):/sm:ro" \
+            debian:trixie-slim /sm/$(basename "$exe") vault info --vault /w/vault

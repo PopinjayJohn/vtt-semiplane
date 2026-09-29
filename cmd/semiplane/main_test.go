@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/app"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/sample"
 )
 
 func TestVersionNeedsNoVault(t *testing.T) {
@@ -232,15 +236,89 @@ func TestHasFlagAcceptsBothSpellings(t *testing.T) {
 	}
 }
 
-func TestPluginsListReportsNothingRatherThanInventingAnEntry(t *testing.T) {
+// TestPluginsListReportsTheRegistryRatherThanACount pins the intent the old
+// version of this test got right and its assertion wrong: `plugins list` must
+// not invent an entry, and neither may it invent an empty one.
+//
+// The oracle is the registry itself, which is the one place in the tree allowed
+// to name a plugin id. A hard-coded count would pass on a build that ships a
+// fourth plugin and fail on one that ships two, and it says nothing about which
+// entries are there — so the assertion is on the set of ids the table carries,
+// compared against the set the registry offers.
+func TestPluginsListReportsTheRegistryRatherThanACount(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"plugins", "list"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("plugins list exited %d (stderr: %s)", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "0 plugins registered") {
-		t.Errorf("plugins list did not report the truth: %q", stdout.String())
+
+	offered := builtinPlugins()
+	listed := tableIDs(t, stdout.String())
+	if len(listed) != len(offered) {
+		t.Errorf("the table has %d rows (%v) and the registry offers %d (%v):\n%s",
+			len(listed), listed, len(offered), sortedKeys(offered), stdout.String())
 	}
+	for id := range offered {
+		if listed[id] != 1 {
+			t.Errorf("the plugin %q appears %d times in the table, want once:\n%s", id, listed[id], stdout.String())
+		}
+	}
+}
+
+// TestPluginsListTouchesNoVault is the reason the command is not a one-shot
+// boot. An operator asking what a binary has may have no vault, and a command
+// that created and locked one to answer that would be a surprising price for a
+// list.
+func TestPluginsListTouchesNoVault(t *testing.T) {
+	t.Parallel()
+	nowhere := filepath.Join(t.TempDir(), "not-a-vault")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"plugins", "list", "--vault", nowhere}, &stdout, &stderr); code != 0 {
+		t.Fatalf("plugins list exited %d (stderr: %s)", code, stderr.String())
+	}
+	if _, err := os.Stat(nowhere); !os.IsNotExist(err) {
+		t.Errorf("plugins list created or opened a vault: %v", err)
+	}
+}
+
+// tableIDs counts the rows of the plugins table by the id in the first column.
+// The table is everything from its header to the end of the output, so a line
+// before the header is prose and a line that is not a row after it is a
+// malformed table — both fail rather than being skipped.
+func tableIDs(t *testing.T, out string) map[string]int {
+	t.Helper()
+	listed := map[string]int{}
+	rows := false
+	for line := range strings.SplitSeq(out, "\n") {
+		fields := strings.Fields(line)
+		if !rows {
+			if len(fields) > 0 && fields[0] == "ID" {
+				rows = true
+			}
+			continue
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) < 2 {
+			t.Errorf("the table has a row that is not an entry: %q\n%s", line, out)
+			continue
+		}
+		listed[fields[0]]++
+	}
+	if !rows {
+		t.Fatalf("there is no table at all:\n%s", out)
+	}
+	return listed
+}
+
+func sortedKeys(plugins map[string]plugin.Plugin) []string {
+	ids := make([]string, 0, len(plugins))
+	for id := range plugins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func TestAnUnknownCommandIsAUsageError(t *testing.T) {
@@ -266,7 +344,16 @@ func TestReindexFromTheCommandLine(t *testing.T) {
 	if code := run([]string{"reindex", "--full", "--vault", root}, &stdout, &stderr); code != exitOK {
 		t.Fatalf("reindex exited %d (stderr: %s)", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "reindexed 1 pages from 1 files") {
+	// The boot writes the bundled campaign into this vault before it indexes
+	// it, so the pass reports the one page this test seeded plus the campaign.
+	// Naming the campaign's size rather than a literal is what keeps the
+	// assertion about the reindex instead of about how many pages ship.
+	campaign, err := sample.Files()
+	if err != nil {
+		t.Fatalf("the bundled sample campaign cannot be read: %v", err)
+	}
+	indexed := strconv.Itoa(1 + len(campaign))
+	if want := "reindexed " + indexed + " pages from " + indexed + " files"; !strings.Contains(stdout.String(), want) {
 		t.Errorf("the command did not report the pass:\n%s", stdout.String())
 	}
 	// The lock is released on the way out, or a second run is refused.

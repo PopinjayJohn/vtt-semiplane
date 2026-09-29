@@ -123,7 +123,7 @@ func (v Visibility) Valid() bool {
 
 // Permission is a named capability checked on routes and services. The route
 // map in §9 of the plan names one Perm per route, and the Perm middleware is
-// the only place a role comparison happens (TestOnlyPermMiddlewareIsConsulted).
+// the only place a role comparison happens (TestNoRoleComparisonOutsidePerm).
 type Permission string
 
 const (

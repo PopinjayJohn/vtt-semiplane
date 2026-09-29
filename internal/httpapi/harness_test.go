@@ -46,8 +46,13 @@ import (
 
 // fixture is a booted application behind an httptest server: a real vault, a
 // real index, real accounts and the real middleware chain.
+//
+// t is a testing.TB rather than a *testing.T so that bench_test.go drives this
+// fixture rather than a second one. A page-render budget is a router + render +
+// SQL number, and a benchmark that built its own server would be measuring a
+// server that is not the one the routes run on.
 type fixture struct {
-	t     *testing.T
+	t     testing.TB
 	dir   string
 	cfg   config.Config
 	DB    *store.DB
@@ -90,7 +95,7 @@ type fixture struct {
 }
 
 // newFixture boots a server over the standard seeded campaign.
-func newFixture(t *testing.T, mutate ...func(*config.Config)) *fixture {
+func newFixture(t testing.TB, mutate ...func(*config.Config)) *fixture {
 	t.Helper()
 	return newFixtureWith(t, campaignFiles, mutate...)
 }
@@ -104,13 +109,17 @@ func newFixture(t *testing.T, mutate ...func(*config.Config)) *fixture {
 // A test that needs one passes a registry; a test that does not gets the nil
 // registry a build with no plugin lifecycle produces, which is a real state
 // rather than an unset one.
-func newFixtureWith(t *testing.T, files map[string]string, mutate ...func(*config.Config)) *fixture {
+//
+// The corpus is a map and the number of entries is not this function's business.
+// It writes what it is given, walks it and indexes it, so a 2000-page campaign
+// costs the same code path a three-page one does.
+func newFixtureWith(t testing.TB, files map[string]string, mutate ...func(*config.Config)) *fixture {
 	return newFixturePlugins(t, files, nil, mutate...)
 }
 
 // newFixturePlugins is the fixture with a plugin registry wired in, for the
 // tests that need a mounted sub-router or a summary provider to exist.
-func newFixturePlugins(t *testing.T, files map[string]string, plugins plugin.Registry, mutate ...func(*config.Config)) *fixture {
+func newFixturePlugins(t testing.TB, files map[string]string, plugins plugin.Registry, mutate ...func(*config.Config)) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	writeVault(t, dir, files)
@@ -787,7 +796,7 @@ func (fx *fixture) addOwner(path string, userID int64) error {
 // session is one browser: its own cookie jar, so two principals in one test
 // never see each other's cookie.
 type session struct {
-	t    *testing.T
+	t    testing.TB
 	fx   *fixture
 	jar  http.CookieJar
 	http *http.Client
@@ -1276,7 +1285,7 @@ func csrfFrom(body string) (string, bool) {
 }
 
 // writeVault seeds a vault directory.
-func writeVault(t *testing.T, dir string, files map[string]string) {
+func writeVault(t testing.TB, dir string, files map[string]string) {
 	t.Helper()
 	for name, body := range files {
 		path := filepath.Join(dir, filepath.FromSlash(name))

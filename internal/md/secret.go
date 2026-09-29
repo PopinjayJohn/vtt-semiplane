@@ -10,9 +10,10 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 )
 
-// Directive keys. The set is closed: a fence whose info string carries anything
-// else is not a secret fence, because a directive that this package does not
-// understand is a directive this package cannot safely redact.
+// Directive keys. The set is closed, and a key outside it makes the directive
+// unreadable rather than ignored: a fence that claims to be a secret is one
+// whatever its directive says, so a directive this package cannot read is a
+// fence it must not serve. A fence is never public because of a typo.
 const (
 	KeyID         = "id"
 	KeyVisibility = "visibility"
@@ -36,9 +37,10 @@ const (
 	// the outer span continues past it.
 	ProblemSecretNested = "secret.nested"
 	// ProblemSecretUnknownKey is a directive carrying a key outside the known
-	// set. The block is rendered as public rather than redacted, because a
-	// directive whose meaning is unknown is not a directive this package may
-	// claim to have enforced.
+	// set. The fence stays secret and is hidden from everybody, fail-closed:
+	// a directive whose meaning is unknown is not one this package may claim to
+	// have enforced, and the body is served on the strength of a key nobody
+	// read. See segmentBody.
 	ProblemSecretUnknownKey = "secret.unknown_key"
 	// ProblemSecretBadVisibility is a directive whose visibility is not one of
 	// the three known values. The fence stays secret and falls back to
@@ -49,7 +51,10 @@ const (
 	// assigned so that span.SecretID is never empty.
 	ProblemSecretMissingID = "secret.missing_id"
 	// ProblemSecretBadDirective is a fence whose info string begins with
-	// `secret` but cannot be parsed at all. The block is public.
+	// `secret` but cannot be parsed at all. The fence stays secret and is
+	// hidden from everybody: the fence still claimed secrecy, and the only
+	// reading of a line this package cannot parse is the one that leaks
+	// nothing. See segmentBody.
 	ProblemSecretBadDirective = "secret.bad_directive"
 	// ProblemSecretUnknownID is a reveal or revoke naming a secret the
 	// document does not contain. Nothing is written; the caller's id and the
@@ -98,7 +103,9 @@ type Directive struct {
 	// broadcasting.
 	BadVisibility bool
 	// HasUnknown records that the info string carried at least one key outside
-	// the known set. The block is public passthrough when it is true.
+	// the known set. The segmenter reads that as an unreadable directive and
+	// hides the fence, so a directive nothing here could read is not one any
+	// reader is shown.
 	HasUnknown bool
 	// UnknownKeys lists those keys, in the order they appeared.
 	UnknownKeys []string
@@ -121,10 +128,10 @@ func IsSecret(info string) bool {
 // a space is written, and the quotes are stripped here.
 //
 // A key outside the known set is not an error: the parse succeeds and
-// HasUnknown is set, because the caller's response to an unknown key — making
-// the block public — is a policy decision, not a parse failure. A key repeated
-// in the same directive IS an error, since last-one-wins would let a directive
-// appear to say one thing and mean another.
+// HasUnknown is set, because whether a directive nothing here could read may
+// be served is the segmenter's decision and not a parse failure. A key
+// repeated in the same directive IS an error, since last-one-wins would let a
+// directive appear to say one thing and mean another.
 func ParseFenceDirective(info string) (Directive, error) {
 	fields := scanDirectiveFields([]byte(info), 0)
 	if len(fields) == 0 || !strings.EqualFold(string(fields[0].key), SecretFenceWord) {
@@ -271,9 +278,10 @@ func scanDirectiveFields(info []byte, base int) []directiveField {
 				for i < len(info) {
 					// A backslash escapes whatever follows, so a title that
 					// contains its own quote character is one field rather than
-					// two. Getting this wrong demotes the fence to public
-					// passthrough, so the escape is honoured even though no
-					// hand-written directive needs it.
+					// two. Without it the value ends at that quote and the rest
+					// of the line becomes unknown keys, which hides the fence
+					// from everybody: a backslash is the only escape this
+					// grammar has, so doubling a quote does not work.
 					if info[i] == '\\' && i+1 < len(info) {
 						i += 2
 						continue

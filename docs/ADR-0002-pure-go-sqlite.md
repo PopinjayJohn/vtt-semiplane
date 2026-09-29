@@ -31,13 +31,18 @@ FTS5 is bundled in the driver, so the search design needs no build flag.
 
 ## Consequences
 
-- **The cost is real and measured, not assumed.** Pure-Go SQLite is expected to
-  be 2–5× slower than cgo SQLite. `BenchmarkIndex1kPages` and
-  `BenchmarkSearch1kPages` exist to put a number on it. The budget is p99 page
-  render under 50 ms and search under 20 ms on a 2,000-page vault; if that
-  fails, the first levers are prepared statements and the connection split, not
-  switching drivers. Switching to cgo would forfeit the static-binary promise,
-  which is the product.
+- **The cost is real, and it is only half measured in this tree.** Pure-Go
+  SQLite is expected to be 2–5× slower than cgo SQLite, and the expectation is
+  not yet a measurement: the only benchmark that puts a number on it is
+  `BenchmarkSearch1kPages` in
+  [`../internal/search/bench_test.go`](../internal/search/bench_test.go), and no
+  index-side benchmark exists. So the cost of the write path — the one a reindex
+  spends its time in — is unmeasured rather than known to be small, and this ADR
+  is where that gap is recorded rather than left to be discovered during a
+  reindex. The budget is p99 page render under 50 ms and search under 20 ms on a
+  2,000-page vault; if that fails, the first levers are prepared statements and
+  the connection split, not switching drivers. Switching to cgo would forfeit the
+  static-binary promise, which is the product.
 - **A version footgun ships with the driver.** `modernc.org/sqlite` requires the
   exact same `modernc.org/libc` version in our `go.mod` as in its own. Bump one
   and not the other and the build fails in a way that reads like a compiler bug.

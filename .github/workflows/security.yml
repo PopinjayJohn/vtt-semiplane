@@ -15,15 +15,31 @@ on:
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  security-events: write
+# The weekly run must not be cancelled by a push that lands in the same hour:
+# the whole reason the schedule exists is to evaluate a tree nobody is
+# working on.
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+# Deny everything, then let each of the nine jobs below say what it needs. The
+# workflow used to carry a blanket `security-events: write`, which handed the
+# code-scanning write token to all nine jobs including the four that install a
+# third-party binary. An empty block is a stronger statement than a read one:
+# a job added later without a block gets nothing, and the failure is a
+# permission error rather than a silent over-grant.
+permissions: {}
 
 jobs:
   govulncheck:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # the source govulncheck analyses
+      security-events: write # govulncheck-action uploads its findings as SARIF; without this they never reach the code-scanning tab
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: "1.26.0"
@@ -33,21 +49,58 @@ jobs:
           go-package: ./...
 
   gosec:
+    permissions:
+      # Read the source. This job writes a file into the workspace
+      # (gosec-full.json) and uploads it as an artifact; neither needs a token.
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: "1.26.0"
-      - name: gosec
+      # Pinned. This used to be `@latest`, which is the one place in this
+      # repository where the SHA-pinning discipline did not hold: a scanner
+      # that decides what counts as a finding changed underneath a green build
+      # with nothing in the diff to show for it.
+      - name: install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+      # The floor is MEDIUM, which is the plan's P12 accept ("zero gosec
+      # findings above low") read the way the phrase is normally meant. The
+      # exclusions are in .gosec.json and every one of them carries its reason
+      # in the file, next to the rule id it removes.
+      - name: gosec at the MEDIUM floor
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -quiet -fmt=github-actions -exclude-dir=testdata ./...
+          gosec -quiet -conf=.gosec.json -severity=medium \
+            -exclude-dir=testdata -fmt=github-actions ./...
+      # The second scan exists because the first one has an exclusion list. An
+      # exclusion is a promise that what it hides is not a finding, and this
+      # run is what makes the promise checkable: it applies no config and no
+      # floor, so every rule at every severity is printed and uploaded on every
+      # run. If a number here grows, one of the reasons in .gosec.json has
+      # stopped being true and this is where it shows.
+      - name: every gosec finding, unexcluded, for the record
+        run: |
+          gosec -no-fail -severity=low -exclude-dir=testdata \
+            -fmt=json -out=gosec-full.json ./... || true
+          gosec -no-fail -severity=low -exclude-dir=testdata -fmt=text ./... || true
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: gosec-full
+          path: gosec-full.json
+          if-no-files-found: warn
 
   osv-scanner:
+    permissions:
+      # Read the source and nothing else.
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: google/osv-scanner-action@e69cc6c86b31f1e7e23935bbe7031b50e51082de # v2.0.2
         with:
           scan-args: |-
@@ -55,61 +108,135 @@ jobs:
             --skip-git
             .
 
+  # CRITICAL,HIGH, and that is a decision rather than a default. The other two
+  # Go dependency gates in this file — govulncheck, which is reachability
+  # aware and therefore the one that actually matters, and osv-scanner — cover
+  # the same advisories at the same severities, so lowering this to MEDIUM
+  # would gate the same facts three times at a worse signal-to-noise ratio
+  # without covering anything the other two miss.
+  #
+  # `secret` is in the scanner set because it is not redundant with gitleaks:
+  # gitleaks reads the git history, trivy reads the working tree. Measured on
+  # this tree at the day this was written: 0 secret findings, 0
+  # misconfigurations, 2 HIGH vulnerabilities — both in golang.org/x/mod
+  # (CVE-2026-56864 and CVE-2026-56865, fixed in 0.40.0), an indirect
+  # dependency of the templ tool. Those two are real and are not ignored;
+  # fixing them is a go.mod bump.
+  #
+  # There is no .trivyignore, and its absence is deliberate: an ignore file
+  # that ignores nothing is a file a reader has to open to learn that. Add
+  # one in the same commit as the first finding that needs it, with the
+  # reason in it.
+  #
+  # `misconfig` is enabled and reports nothing because this repository has no
+  # Dockerfile, no Kubernetes manifest and no Helm chart. That is not the same
+  # as it having checked something; it is the same as there being nothing to
+  # check, and the day a Dockerfile appears this scanner has work to do.
   trivy-fs:
+    permissions:
+      # Read the source and nothing else.
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
+          # Advisories with no upstream patch can only be answered by dropping
+          # a dependency this project does not control, and a gate that can
+          # only be answered that way is a gate that gets switched off.
+          ignore-unfixed: true
           exit-code: "1"
+          # .kilo is gitignored and holds agent worktrees, .tools the pinned
+          # tailwind binary, dist the build output. Scanning them reports on
+          # files that are not in the repository, which is worse than scanning
+          # nothing: it looks like coverage.
+          skip-dirs: .kilo,.tools,dist
 
   gitleaks:
+    permissions:
+      # Read the source and the full history. GITLEAKS_LICENSE is not set, so
+      # gitleaks-action runs in report-only mode: the repository is public, so
+      # a leak found now is already public and the useful output is the SARIF.
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           # The repository is public, so a leak is already public. Report only.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # The SARIF this job used to discard. `codeql database analyze` wrote a file,
+  # the step echoed "upload is wired up in the hardening phase", and the
+  # results went nowhere — the most explicit "the next stage is pending" marker
+  # in the tree, on the scanner that would have found the interesting bugs.
   codeql:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      security-events: write
+      contents: read # read the source CodeQL extracts from
+      security-events: write # upload the SARIF into code scanning; this is the job that needs it
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: "1.26.0"
-      - name: analyze
-        run: |
-          go install github.com/github/codeql-action/analyze@latest
-          codeql database create db --language=go
-          codeql database analyze db --format=sarif-latest \
-            --sarif=codeql.sarif \
-            --output=codeql-results.sarif || true
-          echo "codeql analysis completed; upload is wired up in the hardening phase"
+          cache: true
+      - uses: github/codeql-action/init@60168efe1c415ce0f5521ea06d5c2062adbeed1b # v3.28.17
+        with:
+          languages: go
+          build-mode: autobuild
+      # `always()` is the whole point. Without it a failed init or a failed
+      # autobuild uploads nothing, and the run that found the most is the run
+      # whose findings are invisible — the failure is not reported anywhere
+      # except as a red X on a job whose results are empty.
+      - uses: github/codeql-action/analyze@60168efe1c415ce0f5521ea06d5c2062adbeed1b # v3.28.17
+        if: always()
+        with:
+          category: /language:go
 
   zizmor:
+    permissions:
+      # Read the workflows and nothing else.
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # Pinned. `pipx run zizmor` with no version is the same unpinned
+      # download this repository's own comment above forbids, and it is the
+      # gate that would have caught it.
       - name: every action is pinned to a commit SHA
-        run: |
-          pipx run zizmor --persona=pedantic --min-severity=medium .github/workflows
+        run: pipx run zizmor==1.30.1 --persona=pedantic --min-severity=low .github/workflows
+      # The first run of this at --min-severity=low reported 23 findings in
+      # this repository's own workflows: 18 `artipacked` (a checkout that
+      # persists its token into .git/config), 1 `excessive-permissions` (the
+      # workflow-level security-events grant this file no longer carries), 2
+      # `concurrency-limits` and 3 `undocumented-permissions`. All four are
+      # fixed rather than configured away, and the floor is `low` because the
+      # plan's accept is zero findings, not zero serious ones.
 
   scorecard:
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
-      id-token: write
-      contents: read
+      security-events: write # upload the Scorecard SARIF into code scoring
+      id-token: write # OIDC: the tokenless result upload is what makes the badge verifiable rather than asserted
+      contents: read # read the repository Scorecard is scoring
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: ossf/scorecard-action@ff5dd8929f96a8a4dc67d13f32b8c75057829621 # v2.4.0
         with:
           results_file: results.sarif
@@ -122,10 +249,20 @@ jobs:
           if: always()
 
   dependency-review:
+    permissions:
+      # Read the source and the base branch, which is all the review needs.
+      # It posts its findings as a PR comment, which needs pull-requests:
+      # write — and that is deliberately absent, because a write token here
+      # is a write token a fork-triggered job would ask for. A fork PR gets a
+      # red dependency-review job and no comment; that is the correct failure
+      # for a job whose whole job is to look at someone else's dependencies.
+      contents: read
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/dependency-review-action@ce3cf9537a52e8119d91fd484ab5b8a807627bf8 # v4.6.0
         with:
           fail-on-severity: moderate

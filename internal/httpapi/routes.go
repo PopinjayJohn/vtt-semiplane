@@ -58,8 +58,15 @@ func (rt Route) Name() string { return rt.Method + " " + rt.Pattern }
 
 // Mutating reports whether the route changes something, which is exactly the
 // condition the CSRF gate applies to: anything that is not a safe method.
-func (rt Route) Mutating() bool {
-	switch rt.Method {
+func (rt Route) Mutating() bool { return mutatingMethod(rt.Method) }
+
+// mutatingMethod is what makes a method a mutation, as a function on the method
+// rather than only on the row. A mounted sub-router is registered once for every
+// method it serves and so has to ask this per request, and a second notion of
+// "safe" beside this one would be free to disagree with it exactly where it is
+// cheapest to disagree.
+func mutatingMethod(method string) bool {
+	switch method {
 	case http.MethodGet, http.MethodHead:
 		return false
 	default:
@@ -295,6 +302,16 @@ func (s *Server) groupHandler(g mountGroup) http.Handler {
 // which is a hole in a boundary whose entire claim is that a plugin cannot
 // escape it.
 //
+// The CSRF half of that is decided per *request*, which is the one thing about
+// a mount a table row is not. A row knows its method when it is wrapped, so
+// routeHandler asks once and gets one answer. A mount is registered once for
+// every method its sub-router serves, so the same decision has to be asked again
+// for each request — asking it at mount time answers for the mount's placeholder
+// method and refuses every safe method with 403, which is a plugin surface no
+// signed-in principal could read. The predicate is mutatingMethod, the same one
+// Route.Mutating uses, so the mount and the table cannot disagree about what a
+// mutation is; only the moment they ask it differs.
+//
 // The permission is the plugin's *least* requirement rather than a per-plugin
 // one, because the host has no vocabulary for "the permission this route needs"
 // and inventing one would let a plugin name its own gate. PermSession is the
@@ -315,7 +332,7 @@ func (s *Server) mountPluginRoutes(r *chi.Mux) {
 		prefix := plugin.PluginPrefix(owned.Plugin)
 		rt := Route{Method: "*", Pattern: prefix + "/*", Perm: authz.PermSession}
 		var h http.Handler = owned.Value
-		h = s.checkCSRF(h)
+		h = s.checkCSRFOnMutations(h)
 		h = s.permit(rt)(h)
 		pattern := rt.Pattern
 		inner := h

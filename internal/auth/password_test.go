@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -327,6 +328,51 @@ func TestValidatePassphrase(t *testing.T) {
 			}
 			if tc.reason != "" && !strings.Contains(err.Error(), tc.reason) {
 				t.Errorf("reason = %q, want it to mention %q", err.Error(), tc.reason)
+			}
+		})
+	}
+}
+
+// TestVerifyRefusesADigestLongerThanTheCeiling is the fourth request-to-allocate
+// a PHC string makes, and the one that had no ceiling.
+//
+// m, t and p are all checked against a bound in parseCost, and the reasoning
+// applies verbatim to a digest: a row in the database is a request to allocate,
+// argon2.IDKey allocates keyLen bytes, and nothing upstream of the call can stop
+// it. The negative half is the load-bearing half — a bound that also refuses the
+// key length this binary writes is a bound that has locked its own accounts out.
+func TestVerifyRefusesADigestLongerThanTheCeiling(t *testing.T) {
+	t.Parallel()
+	// m=64,t=1 keeps the accepted rows cheap; the digest is what is under test.
+	const head = "$argon2id$v=19$m=64,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$"
+	for _, tc := range []struct {
+		name    string
+		digest  int
+		wantErr bool
+	}{
+		{"a megabyte of digest", 1 << 20, true},
+		{"one byte over the ceiling", int(maxVerifyDigestLen) + 1, true},
+		{"exactly the ceiling", int(maxVerifyDigestLen), false},
+		{"the length this binary writes", int(argonKeyLen), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			hash := head + base64.RawStdEncoding.EncodeToString(make([]byte, tc.digest))
+			ok, err := Verify([]byte(hash), "Correct-Horse-9")
+			if tc.wantErr {
+				if !errors.Is(err, ErrMalformedHash) {
+					t.Fatalf("err = %v, want ErrMalformedHash for a %d byte digest", err, tc.digest)
+				}
+				if ok {
+					t.Fatal("a refused hash reported a match")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a %d byte digest was refused, so a legitimate verifier could be too: %v", tc.digest, err)
+			}
+			if ok {
+				t.Fatal("a digest of zeroes matched a passphrase")
 			}
 		})
 	}

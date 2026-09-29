@@ -1,0 +1,43 @@
+# Per-route accessibility baseline — a ratchet, not a floor.
+#
+# One row per route per theme: `<route> <theme> <error count>`. Tab separated.
+# The count is what scripts/pa11y.sh measured when this row was recorded; it is
+# not a target and not a claim that the page is clean.
+#
+# How it is read (scripts/pa11y-report.js):
+#
+#   * measured > recorded  -> WORSE, the gate fails, both numbers are printed
+#   * measured < recorded  -> BETTER, the gate passes and says to re-record
+#   * measured = recorded  -> unchanged, the gate passes
+#   * row missing here     -> UNTRACKED, reported, does not fail on its own
+#   * route missing there  -> SKIPPED (the server refused it) or MISSING (it is
+#                             gone from pa11y.config.js), and MISSING fails
+#   * `-1` in the count    -> the route was not measured when this was recorded.
+#                             Never `0`: a page that cannot be measured must not
+#                             look like a page with no errors.
+#
+# **A duplicated key is a hard failure.** `key -> value` reads as last-one-wins,
+# so a second row for the same route and theme silently replaces the number the
+# gate compares against, and the gate passes against a value nobody is looking
+# at. scripts/pa11y-baseline.js refuses to write one; this reader refuses to
+# accept one. The coverage ratchet shipped that bug once.
+#
+# Re-record deliberately, after reading the diff and agreeing the new number is
+# the truth:
+#
+#     ./scripts/pa11y.sh --record
+#
+# Regenerating without reading what the run reported is the same as deleting the
+# file, with more steps.
+
+/	dark	0
+/	light	0
+/login	dark	0
+/login	light	0
+/p/Campaigns/Ash/Page-0000.md	dark	5
+/p/Campaigns/Ash/Page-0000.md	light	5
+/plugin/houserules	dark-forced	0
+/search?q=vault	dark	0
+/search?q=vault	light	0
+/tags	dark	0
+/tags	light	0

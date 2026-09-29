@@ -3,9 +3,8 @@
 #
 # Every action is pinned to a full commit SHA with the version in a comment.
 # zizmor (security.yml) fails the build on a tag reference, and a tag is a
-# mutable string.
-#
-# Later phases add: integration, race, coverage, a11y and e2e jobs.
+# mutable string. The security workflow's own zizmor job is the reason, and it
+# runs this file, so a new action here is checked the moment it lands.
 
 name: ci
 
@@ -14,7 +13,17 @@ on:
     branches: [main]
   pull_request:
 
+# One run per ref. A second push to a branch supersedes the first: two CI runs
+# racing over the same branch is the shape where a red build is read as the
+# newer one when it is the older. zizmor flags a workflow with no concurrency
+# setting at all, and this is the setting that is actually wanted here.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
+  # Read the repository and nothing else. No job in this file writes, and a
+  # workflow-level grant is what a compromised dependency would inherit.
   contents: read
 
 env:
@@ -27,17 +36,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - run: gofmt -l . | tee /tmp/fmt.txt; test ! -s /tmp/fmt.txt
-      - run: go tool templ fmt -check .
+      # -fail, not -check. Verified against `go tool templ fmt --help` on the
+      # pinned v0.3.1020, which lists -fail ("Fails with exit code 1 if files
+      # are changed. (e.g. in CI)") and no -check. The -check spelling this
+      # step used to run exits 2 with "flag provided but not defined" before
+      # it formats anything, so the job was red on a clean tree. Makefile's
+      # fmt-check already spelled it correctly and the two disagreed.
+      - name: templ is formatted (v0.3.1020 spells the flag -fail)
+        run: go tool templ fmt -fail .
 
   generate-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -51,6 +71,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -65,6 +87,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -77,6 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -87,6 +113,19 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -o /tmp/semiplane ./cmd/semiplane
           /tmp/semiplane version
           ldd /tmp/semiplane 2>&1 | grep -qi "not a dynamic executable"
+      # The release artifact set is written in two files, so something has to
+      # read both. This is that something: it derives goos x goarch out of
+      # .goreleaser.yaml and compares the product against the Makefile's
+      # TARGETS, which is the check that was missing when the two disagreed on
+      # windows/arm64.
+      - name: the Makefile and the release config build the same targets
+        run: make targets-check
+      # .goreleaser.yaml's header says the binary carries its own stylesheet,
+      # icon sprite, DataStar bundle and migrations. That sentence had nothing
+      # reading it, and it named the sample campaign, which is not embedded.
+      # This reads it.
+      - name: the binary really does carry its own assets
+        run: make embed-check
 
   unit:
     strategy:
@@ -97,6 +136,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ matrix.go }}
@@ -111,6 +152,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -121,13 +164,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - run: ./scripts/test.sh -coverprofile=coverage.out -covermode=atomic
-      - name: security-relevant packages must not lose coverage
-        run: go tool cover -func=coverage.out | tail -1
+      # This step used to be `go tool cover -func=coverage.out | tail -1` under
+      # the name "security-relevant packages must not lose coverage". It
+      # printed a total, discarded it, and always passed — a gate whose output
+      # nobody reads and whose exit code is always zero. AGENTS.md 5 asks for a
+      # ratchet, so this is one: a per-package baseline, and a failure that
+      # names the package and both numbers. See the header of
+      # .coverage-baseline for why a ratchet and not an absolute floor.
+      - name: no tracked package lost coverage
+        run: make coverage-check
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: coverage

@@ -56,7 +56,7 @@ func Reindex(ctx context.Context, opts Options, out io.Writer, full bool) error 
 	st := a.Status()
 	fmt.Fprintf(out, "reindexed %d pages from %d files (%d indexed, %d already current)\n",
 		st.PageCount, a.IndexFileCount(), len(res.Indexed), res.Unchanged)
-	printReport(out, st)
+	printReport(out, st, a.PluginReport())
 	return nil
 }
 
@@ -122,6 +122,11 @@ func copyBackupTo(ctx context.Context, dir, to string) (string, error) {
 // root's business: the backup package owns one canonical location and this is a
 // second one the operator asked for. The modes are the backup's own, because a
 // copy that is not private is not a copy of a backup.
+//
+// The refusal is readRegularFile's rather than the walk entry's. rel cannot leave
+// dst — WalkDir descends no symlink, so every element of it is a name this walk
+// read — but the entry is a snapshot and the read is not, and readRegularFile is
+// where that difference is closed.
 func copyTree(ctx context.Context, src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -138,15 +143,52 @@ func copyTree(ctx context.Context, src, dst string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}
-		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", filepath.Base(path))
-		}
-		b, err := os.ReadFile(path)
+		b, err := readRegularFile(path)
 		if err != nil {
 			return err
 		}
 		return os.WriteFile(target, b, 0o600)
 	})
+}
+
+// readRegularFile returns the bytes of path, and refuses anything that is not a
+// regular file.
+//
+// The refusal is decided twice, and the second one is the point. The first is an
+// Lstat, which is what refuses a symlink, a directory and a fifo without opening
+// any of them — a fifo opened for reading blocks until a writer arrives, so a
+// check that arrived after the open would itself be the hang. The second
+// compares that Lstat against the handle the open returned, and it is what makes
+// the check and the use agree.
+//
+// A DirEntry cannot do that job. It describes the entry as it was when the walk
+// read the directory, and the walk reads the directory before it reaches this
+// callback, so `d.Type().IsRegular()` followed by a read of the same name is a
+// check whose answer the use can contradict: whatever replaces the entry in
+// between is read through, and a symlink is the cheap version of that. Requiring
+// the name and the open handle to be the same object closes the window, and the
+// bytes are read only after it has been checked.
+func readRegularFile(path string) ([]byte, error) {
+	named, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !named.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(named, opened) {
+		return nil, fmt.Errorf("%s changed while it was being read", filepath.Base(path))
+	}
+	return io.ReadAll(f)
 }
 
 // Restore copies a backup back over the vault's files and reindexes.
@@ -172,7 +214,7 @@ func Restore(ctx context.Context, opts Options, out io.Writer, from string, forc
 	st := a.Status()
 	fmt.Fprintf(out, "restored from %s and reindexed %d pages from %d files\n",
 		from, st.PageCount, a.IndexFileCount())
-	printReport(out, st)
+	printReport(out, st, a.PluginReport())
 	return nil
 }
 
@@ -208,7 +250,7 @@ func VaultInfo(ctx context.Context, opts Options, out io.Writer) error {
 	} else {
 		fmt.Fprintf(tw, "backups:\t%d, newest %s\n", len(backups), backups[0])
 	}
-	printReport(tw, st)
+	printReport(tw, st, a.PluginReport())
 	return tw.Flush()
 }
 

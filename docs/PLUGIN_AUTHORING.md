@@ -100,9 +100,15 @@ surface is shaped this way:
    fabricated value.
 
 **Branch on `who.IsDM()`, never on `who.Role == "..."`.** A role comparison
-outside the `Perm` middleware is refused by
-`TestNoRoleComparisonOutsidePerm`, and it is a second answer to a question that
-has exactly one home.
+outside `internal/authz` is refused by `TestNoRoleComparisonOutsidePerm` in
+[`../internal/architecture_test.go`](../internal/architecture_test.go), and it
+is a second answer to a question that has exactly one home. The gate scans the
+syntax tree rather than grepping, so it catches a switch on a role and a lookup
+keyed by one as well as `==`, and prose that mentions a role cannot trip it —
+which is why `internal/systems/houserules/plugin.go` can warn you about this in a
+comment. `internal/authz` is its single exemption, because it owns the `Role`
+type and the policy table; there is nothing to add to the exemption list without
+arguing for it first.
 
 ## 5. Mount routes, and know what you inherit
 
@@ -130,6 +136,18 @@ counter-intuitive and it is a real hole if you assume otherwise:
 influence either, and that is deliberate: the host has no vocabulary for "the
 permission this route needs", and inventing one would let a plugin name its own
 gate.
+
+**The CSRF half is asked per request, because a mount is not a row.** A row knows
+its method when it is wrapped, so the table asks once and gets one answer. Your
+sub-router serves several methods and the mount is registered once for all of
+them, so asking there answers for the mount's placeholder method — and the shape
+that produced was `403` on every `GET`, including as an administrator, which
+made a plugin nav item a link nobody could follow. The mount therefore gates on
+the request's own method, from the same predicate `Route.Mutating` uses.
+`TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest` in
+[`../internal/httpapi/pluginmount_test.go`](../internal/httpapi/pluginmount_test.go)
+drives the mounted tree and pins all three states; the table-derived CSRF gate
+cannot see a mount at all, because no row of the table describes one.
 
 **A nav item is dropped if you mounted no route.** `host.gatedNav` discards nav
 items from a plugin that registered none, on the grounds that a link to nothing is

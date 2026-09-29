@@ -265,7 +265,8 @@ func (s *Server) pageSecrets(ctx context.Context, who authz.Principal, row store
 	// Asked once for the page rather than per fence, and through the policy rather
 	// than through a role comparison: the route's Perm column is PermDM, so this
 	// is the same question the gate asks and the button cannot disagree with it.
-	// A grep test fails the build on a Role == in a handler, and the deeper
+	// TestNoRoleComparisonOutsidePerm fails the build on a role comparison outside the
+	// policy, and the deeper
 	// reason is that a control whose visibility is a second, hand-written copy of
 	// its gate is a control that can be wrong.
 	mayChange := s.mayChangeSecretVisibility(who)

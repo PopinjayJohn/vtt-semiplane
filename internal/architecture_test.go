@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1583,4 +1584,368 @@ func TestNoProcessExecution(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestNoRoleComparisonOutsidePerm is the gate AGENTS.md §2.7 names and that
+// nothing enforced. The rule is that the only place a role is compared is the
+// policy, so that a handler cannot answer an authorization question by asking
+// what a role is instead of asking the policy — a second answer is a second
+// rule, and a route table that does not know about it is a route that is
+// mounted but ungated.
+//
+// It is a scan of the syntax tree rather than a grep, for the two reasons
+// TestNoOutboundNetwork gives: prose cannot trip it, so a file may explain the
+// rule (and internal/systems/houserules/plugin.go does), and a comparison split
+// across a line break is still a comparison.
+//
+// One package is exempt and the exemption is not a hole. internal/authz owns the
+// Role type and the policy table, so the comparisons there are the rule rather
+// than a copy of it. The `Perm` middleware is deliberately *not* on the list: it
+// asks authz.Policy.Check and compares nothing itself, and a second entry would
+// be a second place to look for the answer.
+func TestNoRoleComparisonOutsidePerm(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+
+	got := scanRoleComparisons(t, root, roleScanExempt)
+	for _, c := range got.Found {
+		t.Errorf("%s:%d: %s: the role comparison belongs in authz.Policy.Check, which is what the route table's Perm column asks",
+			c.Rel, c.Line, c.Form)
+	}
+
+	// Two vacuity guards, because this rule is one nothing in the tree violates
+	// and a gate over a clean tree is green for the wrong reason more easily than
+	// almost any other.
+	//
+	// The first: did the walk read anything at all? An empty file set is a gate
+	// that skips, and the failure has to name what is missing.
+	if got.Files == 0 {
+		t.Fatalf("the scan read no Go file: it has nothing to check, so every result above is vacuous")
+	}
+	if !slices.Contains(got.Read, "internal/httpapi/routes.go") {
+		t.Errorf("the scan did not read internal/httpapi/routes.go, so it is not looking at the package the rule is about; it read %d files, starting with %v",
+			got.Files, firstFew(got.Read, 3))
+	}
+	// The second: the scanner recognises nothing at all. The policy itself
+	// compares roles, so a scan of internal/authz with no exemptions must find
+	// some — that is what makes a clean scan of the rest of the tree mean
+	// "held" rather than "not understood".
+	known := scanRoleComparisons(t, filepath.Join(root, "internal", "authz"), nil)
+	if len(known.Found) == 0 {
+		t.Errorf("no role comparison anywhere, including in internal/authz: the scanner matches nothing, so this gate cannot fail")
+	}
+	if slices.Contains(known.Read, "") {
+		t.Error("the authz scan reported an empty path")
+	}
+}
+
+// firstFew is the head of a list, for a failure message that must not print a
+// hundred paths to say that the hundredth is missing.
+func firstFew(in []string, n int) []string {
+	if len(in) < n {
+		return in
+	}
+	return in[:n]
+}
+
+// roleScan is one pass of the scanner: what it read, and what it found.
+type roleScan struct {
+	// Files is how many files the scan parsed.
+	Files int
+	// Read is every repository-relative path the scan parsed, sorted.
+	Read []string
+	// Found is every role comparison the scanner recognised, sorted by file then
+	// line.
+	Found []roleComparison
+}
+
+// roleComparison is one place outside the policy that decides something by asking
+// what a role is.
+type roleComparison struct {
+	// Rel is the repository-relative path, for the report.
+	Rel string
+	// Line is the 1-indexed line the expression starts on.
+	Line int
+	// Form is the shape that matched, so a failure says which rule fired rather
+	// than repeating the line.
+	Form string
+}
+
+// roleScanExempt reports whether a file may compare a role, and why.
+//
+// The list is deliberately one entry long. A second entry is a second place a
+// role could be compared, and each would need the same argument the first has:
+// that the comparisons there are the rule rather than a copy of it. There is no
+// test file, because walkGoRecursive already excludes those — a test may assert
+// that a response said `admin`, and that assertion is not a policy.
+func roleScanExempt(rel string) (string, bool) {
+	if strings.HasPrefix(rel, "internal/authz/") {
+		return "internal/authz owns Role and the policy table; its comparisons are the rule", true
+	}
+	return "", false
+}
+
+// roleConstants are the names authz gives the four roles. A bare `RoleDM` and a
+// qualified `authz.RoleDM` are the same value and are both matched.
+var roleConstants = map[string]bool{
+	"RoleAdmin":     true,
+	"RoleDM":        true,
+	"RolePlayer":    true,
+	"RoleAnonymous": true,
+}
+
+// roleValues are the four strings a role holds. A comparison against one of them
+// is a comparison against the type whatever the type is spelled, which is why
+// they are listed rather than inferred.
+var roleValues = map[string]bool{
+	"admin":  true,
+	"dm":     true,
+	"player": true,
+	"anon":   true,
+}
+
+// roleNameField reports whether an identifier or field name is about a role. It
+// is a substring test and that is the honest width: the alternative is a type
+// checker, and a gate that only recognises `authz.Role` and nothing else is a
+// gate that misses `if p.Role == ""`, which is the shape
+// internal/systems/houserules/plugin.go warns a plugin about by name.
+//
+// It is safe to be this wide because it is never enough on its own — see
+// isRoleExpr, which requires the *other* side of the comparison to be a role too.
+func roleNameField(name string) bool {
+	return strings.Contains(strings.ToLower(name), "role")
+}
+
+// isRoleExpr reports whether an expression is a role, or names one.
+//
+// It answers "is this a role" and not "is this a principal's role", which is why
+// the caller requires a second role expression on the other side of the
+// comparison: two roles compared to each other is a role comparison whatever
+// they are attached to.
+func isRoleExpr(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return roleConstants[v.Name] || roleNameField(v.Name)
+	case *ast.SelectorExpr:
+		// p.Role, u.Role, authz.RoleDM, principal.RoleName.
+		return v.Sel.Name == "Role" || roleConstants[v.Sel.Name] || roleNameField(v.Sel.Name)
+	case *ast.BasicLit:
+		// "dm", "admin", and "" — a role compared to the empty string is asking
+		// whether a role is set, which is the same question asked by comparison
+		// rather than by the policy.
+		return v.Kind == token.STRING && (roleValues[strings.Trim(v.Value, `"`)] || v.Value == `""`)
+	case *ast.CallExpr:
+		// authz.Role(name): the plugin vocabulary is strings, so the one way a
+		// declared role name becomes a role is a conversion.
+		return isRoleConversion(v.Fun)
+	case *ast.ParenExpr:
+		return isRoleExpr(v.X)
+	}
+	return false
+}
+
+// isRoleConversion reports whether f names the Role conversion, qualified or not.
+func isRoleConversion(f ast.Expr) bool {
+	switch v := f.(type) {
+	case *ast.Ident:
+		return v.Name == "Role"
+	case *ast.SelectorExpr:
+		return v.Sel.Name == "Role"
+	}
+	return false
+}
+
+// isRoleKeyed reports whether an expression is a container indexed by a role. The
+// type of the container is not available without a type checker, so this reads
+// the name — a map called roleTable, a permissions table called byRole — and the
+// caller supplies the other half, which is that the index really is a role.
+func isRoleKeyed(x ast.Expr) bool {
+	switch v := x.(type) {
+	case *ast.Ident:
+		return roleNameField(v.Name)
+	case *ast.SelectorExpr:
+		return roleNameField(v.Sel.Name)
+	}
+	return false
+}
+
+// scanRoleComparisons parses every non-test Go file under root and reports the
+// role comparisons in the ones exempt does not excuse.
+//
+// A file that does not parse is skipped, as in scanTree: a file that does not
+// parse is a build failure, and failing here as well would double every typo. The
+// read is recorded either way, so a scan that parsed nothing is visible as an
+// empty Read rather than as a pass.
+func scanRoleComparisons(t *testing.T, root string, exempt func(rel string) (string, bool)) roleScan {
+	t.Helper()
+	var out roleScan
+	for _, file := range walkGoRecursive(t, root) {
+		rel, _ := filepath.Rel(root, file)
+		rel = filepath.ToSlash(rel)
+		if exempt != nil {
+			if _, ok := exempt(rel); ok {
+				continue
+			}
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		out.Files++
+		if root == rootOf(t) {
+			out.Read = append(out.Read, rel)
+		}
+		out.Found = append(out.Found, findRoleComparisons(fset, f, rel)...)
+	}
+	sort.Strings(out.Read)
+	sort.Slice(out.Found, func(i, j int) bool {
+		if out.Found[i].Rel != out.Found[j].Rel {
+			return out.Found[i].Rel < out.Found[j].Rel
+		}
+		return out.Found[i].Line < out.Found[j].Line
+	})
+	return out
+}
+
+// findRoleComparisons is the part of the scan that can be driven from a string,
+// which is what makes TestTheRoleComparisonScannerFires possible without writing
+// anything into the repository.
+//
+// The three shapes are a comparison, a switch and an index. The switch and the
+// index are here because `p.Role == authz.RoleDM` is not the only way to ask the
+// question: a handler that switches on a role, or looks a role up in a table, has
+// made the same decision by the same means, and a gate that only knows the first
+// spelling is a gate that can be walked past.
+func findRoleComparisons(fset *token.FileSet, f *ast.File, rel string) []roleComparison {
+	var out []roleComparison
+	add := func(n ast.Node, form string) {
+		out = append(out, roleComparison{Rel: rel, Line: fset.Position(n.Pos()).Line, Form: form})
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.BinaryExpr:
+			if node.Op != token.EQL && node.Op != token.NEQ {
+				return true
+			}
+			if isRoleExpr(node.X) && isRoleExpr(node.Y) {
+				add(node, "a role compared with a role")
+			}
+		case *ast.SwitchStmt:
+			if node.Tag == nil || !isRoleExpr(node.Tag) {
+				return true
+			}
+			for _, stmt := range node.Body.List {
+				clause, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, e := range clause.List {
+					if isRoleExpr(e) {
+						add(clause, "a switch over a role with a role case")
+						break
+					}
+				}
+			}
+		case *ast.IndexExpr:
+			if isRoleExpr(node.Index) && isRoleKeyed(node.X) {
+				add(node, "a lookup keyed by a role")
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// TestTheRoleComparisonScannerFires is the self-test for the gate above, in the
+// shape TestNoPluginSwitchGateFires established: a synthetic file per forbidden
+// form, and a set of near-misses that must not be flagged.
+//
+// The negative cases are the load-bearing half. A gate that flags everything
+// passes every positive one, and a rule that cannot be explained in prose is a
+// rule that gets deleted instead — so "a mention in prose" and "a switch on a
+// permission" are here to make the cost of a false positive visible.
+//
+// Nothing is written into the repository: the cases are parsed from a string,
+// which is what the pure half of the scanner takes.
+func TestTheRoleComparisonScannerFires(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"the field compared with a constant", `func f(p authz.Principal) bool { return p.Role == authz.RoleDM }`, 1},
+		{"the field compared with a string", `func f(p authz.Principal) bool { return p.Role != "admin" }`, 1},
+		{"inequality against the empty string", `func f(p authz.Principal) bool { return p.Role != "" }`, 1},
+		{"a comparison split across lines", "func f(p authz.Principal) bool {\n\treturn p.\n\t\tRole ==\n\t\tauthz.RolePlayer\n}", 1},
+		{"a switch over the field", `func f(p authz.Principal) int { switch p.Role { case authz.RoleAdmin: return 1 }; return 0 }`, 1},
+		{"a switch over a local", `func f(role authz.Role) int { switch role { case authz.RoleDM: return 1 }; return 0 }`, 1},
+		{"a switch over a conversion", `func f(s string) int { switch authz.Role(strings.TrimSpace(s)) { case authz.RoleDM: return 1 }; return 0 }`, 1},
+		{"a stored row's column", `func f(u store.User) bool { return u.Role == "player" }`, 1},
+		{"a lookup keyed by a role", `func f(byRole map[authz.Role]bool, p authz.Principal) bool { return byRole[p.Role] }`, 1},
+		// The width of isRoleExpr, recorded as a case rather than as a footnote: a
+		// table keyed by a role-typed variable whose *name* does not say so is
+		// invisible here, because reading the type needs a type checker. The rule
+		// it can see is the one people write — a field or a named local.
+		{"a lookup keyed by an unlabelled role variable, which this scanner cannot see", `func f(byRole map[authz.Role]bool, r authz.Role) bool { return byRole[r] }`, 0},
+		{"a switch with no tag, holding a comparison", `func f(p authz.Principal) bool { switch { case p.Role == authz.RoleDM: return true }; return false }`, 1},
+		{"a role in prose", "// a handler must not ask if p.Role == authz.RoleDM\nfunc f() error { return nil }", 0},
+		{"a role in a string literal", `func f() string { return "p.Role == authz.RoleDM" }`, 0},
+		{"the method, which is the policy's own vocabulary", `func f(p authz.Principal) bool { return p.IsDM() }`, 0},
+		{"a switch on a permission", `func f(perm authz.Permission) int { switch perm { case authz.PermDM: return 1 }; return 0 }`, 0},
+		{"a conversion of a permission", `func f(s string) int { switch authz.Permission(s) { case authz.PermDM: return 1 }; return 0 }`, 0},
+		{"an unrelated empty comparison", `func f(minimum string) bool { return minimum == "" }`, 0},
+		{"a length comparison near the word", `func f(roles []string) int { return len(roles) - 3 }`, 0},
+		{"a role assigned and never compared", `func f(p authz.Principal) authz.Principal { p.Role = authz.RoleDM; return p }`, 0},
+		{"a role constant used as a struct field", `var x = struct{ Role authz.Role }{Role: authz.RoleDM}`, 0},
+		{"no mention at all", `func f() error { return nil }`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "synthetic.go", "package synthetic\n\n"+tc.src+"\n", parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse the fixture: %v", err)
+			}
+			got := findRoleComparisons(fset, f, "synthetic.go")
+			if len(got) != tc.want {
+				t.Errorf("found %d role comparisons, want %d (%s); %v", len(got), tc.want, tc.src, got)
+			}
+		})
+	}
+}
+
+// TestRoleScanExemptIsOnePackage states the exemption list as a test, because a
+// table of exemptions is a grant and the grant is the thing that rots. A second
+// entry fails here by name, which is the moment to argue for it rather than
+// after.
+func TestRoleScanExemptIsOnePackage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		rel    string
+		reason string
+	}{
+		{"internal/authz/principal.go", "internal/authz owns Role and the policy table; its comparisons are the rule"},
+		{"internal/authz/policy.go", "internal/authz owns Role and the policy table; its comparisons are the rule"},
+		{"internal/httpapi/routes.go", ""},
+		{"internal/httpapi/middleware.go", ""},
+		{"internal/app/boot.go", ""},
+		{"internal/plugin/plugin.go", ""},
+		{"internal/web/context.go", ""},
+		{"cmd/semiplane/main.go", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.rel, func(t *testing.T) {
+			t.Parallel()
+			reason, exempt := roleScanExempt(tc.rel)
+			if exempt != (tc.reason != "") {
+				t.Fatalf("exempt = %v, want %v", exempt, tc.reason != "")
+			}
+			if reason != tc.reason {
+				t.Errorf("reason = %q, want %q", reason, tc.reason)
+			}
+		})
+	}
 }

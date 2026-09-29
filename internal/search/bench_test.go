@@ -58,6 +58,61 @@ func BenchmarkSearch1kPages(b *testing.B) {
 	reportPercentiles(b, lat)
 }
 
+// BenchmarkSearch2kPages is the search half of the P12 budget at the scale the
+// budget names: "p99 page render under 50 ms and search under 20 ms on a
+// 2000-page vault", out of docs/ADR-0002-pure-go-sqlite.md. The page half is
+// measured in internal/httpapi/bench_test.go, through the real router; this is
+// the query under the index it reads.
+//
+// It is the same benchmark as BenchmarkSearch1kPages at twice the corpus, not a
+// second kind of measurement: same benchVault, same ten queries, same principal,
+// same reporting. The 1k row exists because the plan's U22 note names 1000 pages
+// as the risk case for pure-Go SQLite; the 2k row exists because the budget says
+// 2000. The ratio between the two rows is the only thing this file claims that
+// the 1k row does not, and it is the honest one: the FTS5 tables are external
+// content over page_text rather than a copy, so a doubling of the corpus doubles
+// the posting lists every MATCH walks.
+//
+// The two ratios are worth reading together, because they do not agree. The read
+// path is roughly linear in corpus size and costs single-digit milliseconds; the
+// write path (internal/sync/bench_test.go) is where the pure-Go driver's cost
+// actually lands, at a reindex of a few seconds per thousand pages.
+func BenchmarkSearch2kPages(b *testing.B) {
+	benchPages := 2000
+	db := benchVault(b, benchPages)
+	queries := []string{
+		"vault", "gundren", "warded door", "traps pressure", "dnd5e",
+		"goblin scouts raid", "necrotic damage", "tiamat baphomet lolth",
+		"portrait", "session zero notes",
+	}
+	dm := authz.ForUser(1, "dm", authz.RoleDM, false)
+	ctx := context.Background()
+
+	for _, q := range queries {
+		if _, err := Query(ctx, db.Reader(), dm, q, Options{Limit: 20}); err != nil {
+			b.Fatalf("warm up %q: %v", q, err)
+		}
+	}
+
+	lat := make([]time.Duration, 0, b.N)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		start := time.Now()
+		res, err := Query(ctx, db.Reader(), dm, q, Options{Limit: 20})
+		lat = append(lat, time.Since(start))
+		if err != nil {
+			b.Fatalf("query %q: %v", q, err)
+		}
+		if res.Total == 0 && i < len(queries) {
+			b.Fatalf("query %q found nothing in a %d-page vault; the fixture is broken", q, benchPages)
+		}
+	}
+	b.StopTimer()
+	reportPercentiles(b, lat)
+}
+
 // BenchmarkSearch1kPagesSecretMiss is the cost of a term that matches nothing,
 // which is what a player typing a secret word they cannot see produces. It must
 // be fast and it must be empty.

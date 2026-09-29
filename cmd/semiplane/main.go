@@ -271,10 +271,20 @@ func vaultCommand(cfg config.Config, stdout, stderr io.Writer) int {
 }
 
 // pluginsCommand dispatches `plugins list`, the only plugins subcommand.
+//
+// It is the only command that does not boot: what it answers is a fact about
+// the build — the same class of question `version` answers — and an operator
+// asking it has no vault yet in the common case, so taking the lock, creating
+// one and walking it would be a strange price for a list.
 func pluginsCommand(cfg config.Config, stdout, stderr io.Writer) int {
 	switch {
 	case len(cfg.SubArgs) == 0, len(cfg.SubArgs) == 1 && cfg.SubArgs[0] == "list":
-		app.PluginsList(stdout)
+		opts := options(cfg, stderr)
+		// The one map entry, from registry.go, and the same one the serve path
+		// boots with: a build offering a plugin to one command and not the
+		// other would report two different sets of them.
+		opts.Plugins = builtinPlugins()
+		app.PluginsList(context.Background(), opts, stdout)
 		return exitOK
 	default:
 		fmt.Fprintf(stderr, "semiplane: unknown plugins subcommand %q; the only one is list\n", strings.Join(cfg.SubArgs, " "))

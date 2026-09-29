@@ -28,6 +28,8 @@ this case.
 | Document | What is in it | Read it when |
 |---|---|---|
 | [`spec.md`](spec.md) | the data model, the Markdown pipeline, the index, the request lifecycle, what each stage delivered, and what does not exist yet | you are changing how a file becomes a page, or a page becomes a response |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | the package map, where a new query / markdown construct / page type / route goes, the boot order and why it is that order, the request lifecycle, the plugin boundary, and **what is deliberately absent and why** | you are new to the repository, or you are about to add something and want to know which package refuses you |
+| [`SECRETS.md`](SECRETS.md) | how to write a secret in your own vault: the fence syntax, the three visibilities, the account-resolution rule, reveal and revoke, attachments — written for a game master, not for a reader of the source | you are a DM putting a real campaign in this, or you want to explain a secret fence to somebody else |
 | [`security.md`](security.md) | the threat model, the canonical visibility predicate, the authorization matrix, the secret lifecycle, the tripwire, and what is deliberately not defended | you are touching anything that can read, write, log or render a secret |
 | [`plugins.md`](plugins.md) | the plugin contract, kinds, capabilities, the version gate, the import boundary, link previews | you are deciding **whether** to write a plugin, or what the boundary is |
 | [`PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md) | the procedure: which kind, what the host inherits, what you may not import, and the order to build in | you are writing a game system, a feature, or a route under `/plugin/` |
@@ -37,6 +39,9 @@ this case.
 | [`ADR-0001`](../docs/ADR-0001-canonical-dependency-order.md) | the dependency order and the two cycle-breaking deviations from the plan | you want to add a package, or an import looks wrong |
 | [`ADR-0002`](../docs/ADR-0002-pure-go-sqlite.md) | why `modernc.org/sqlite` and what it costs | you touch the database, or hit a `libc` version error |
 | [`ADR-0004`](../docs/ADR-0004-plaintext-secrets.md) | why secrets are plaintext at rest and what that forecloses | you are tempted to add encryption, or a backup |
+| [`ADR-0003`](../docs/ADR-0003-no-rendered-page-cache.md) | why there is no rendered-page cache, and the key one would have to have | you are about to make a page render faster |
+| [`ADR-0005`](../docs/ADR-0005-sample-is-bytes-extraction-is-in-app.md) | why `internal/sample` is an embedded filesystem and the first-boot extraction walk lives in `internal/app` | you are adding content that has to reach a vault, or you are tempted to give `sample` a writer |
+| [`ADR-0006`](../docs/ADR-0006-fences-not-frontmatter.md) | why content hides through a body fence and never through a frontmatter key, and what that forecloses | you want a page — rather than a span of one — to be private |
 
 ## The shortest useful summary
 
@@ -54,7 +59,7 @@ Every package in the module is green, from `cmd/semiplane` to `internal/web`: th
 and its migrations, the Markdown pipeline, vault I/O with an atomic writer and a
 single-instance lock, the indexer and the invalidation bus, Argon2id accounts
 with sessions and invites, the authorization policy, the router, the templ
-view layer, and the five stages built on top of them.
+view layer, and the six stages built on top of them.
 
 **Stage 1** is the data layer through to a readable page: the store and its
 migrations, the Markdown pipeline, vault I/O, the indexer and bus, accounts and
@@ -120,15 +125,35 @@ deliberately still `nil`:
   and extracting it under time pressure is the most likely way to put a secret
   where a plugin can see it.
 
-Still **not** built: the sample campaign extraction, the release pipeline, and
-the create, delete and `/admin/users` routes. `spec.md` says so per section and
-names the plan phases that remain. The editor, which was the reason the shell had
-no edit affordance, now exists: `PageView.EditHref` is filled from
-`mayWritePage`, `home.templ` renders the link when it is set, and `app.js`
-implements the `e` key against it. **A whole-vault export is not on that list and
-is not going to be on it:** [`../internal/httpapi/export.go`](../internal/httpapi/export.go)
-argues that the vault-wide form has no authorization question to ask, so it
-would be a copy of the plaintext on disk rather than a feature.
+**Stage 6** is **P11**: the two ends of shipping a campaign — the one an
+operator finds in a fresh vault, and the one they run it in.
+[`../internal/sample/`](../internal/sample/) embeds a written campaign as
+ordinary Markdown, and [`../internal/app/sample.go`](../internal/app/sample.go)
+extracts it on **every** boot without ever touching a file that is already
+there: the vault is canonical, and a first boot that overwrote a page would be
+the one write in the app that destroys what it is derived from. A walk that
+re-checks costs one `Resolve` and one `Read` per file, and a gate would buy no
+work while adding a state file whose loss skips the campaign silently.
+`.goreleaser.yaml` and the release workflow are the other end, and they exist
+for ADR-0002's promise rather than for convenience: a DM who cannot move one
+signed static binary to a thumb drive has the design and none of the
+deployment.
+
+Still **not** built: **P10**, the VTT — maps, initiative and dice — and the
+remainder of **P12**. [`spec.md`](spec.md) §6 is the one place that lists what
+is concretely absent from the tree, so that nobody goes looking: the create,
+delete and `/admin/users` routes are in that list and they are P12's, and
+alongside them it carries the three things stage 6 left open — the
+table-of-contents anchors, an `e2e` job, and `vault.Restore`'s manifest
+containment check on the read side.
+
+The editor, which was the reason the shell had no edit affordance, exists:
+`PageView.EditHref` is filled from `mayWritePage`, `home.templ` renders the link
+when it is set, and `app.js` implements the `e` key against it. **A whole-vault
+export is not on the list above and is not going to be on it:**
+[`../internal/httpapi/export.go`](../internal/httpapi/export.go) argues that the
+vault-wide form has no authorization question to ask, so it would be a copy of
+the plaintext on disk rather than a feature.
 
 ## Adding a document
 

@@ -304,6 +304,13 @@ func TestTheSummaryIsNeverCached(t *testing.T) {
 // not a row — so without mountPluginRoutes re-applying them, a plugin's POST
 // would run with no CSRF check and no permission at all, which is precisely the
 // escape the boundary exists to prevent.
+//
+// What this cannot be asked is which methods the mount gates: a mount is
+// registered once for every method its sub-router serves, so the answer is a
+// property of each request rather than of the mount. That is
+// TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest, and it is the half
+// that was wrong for as long as this file existed — checkCSRF was applied to the
+// mount whole, which gated the reads as well as the writes.
 func TestAPluginSubRouterIsMountedBehindTheSameGatesAsATableRoute(t *testing.T) {
 	t.Parallel()
 
@@ -322,10 +329,15 @@ func TestAPluginSubRouterIsMountedBehindTheSameGatesAsATableRoute(t *testing.T) 
 
 	t.Run("a read is served", func(t *testing.T) {
 		t.Parallel()
-		resp := s.do(s.get("/plugin/houserules/rules"))
+		// noCSRF for the same reason the mutation below carries it: session.do
+		// presents a valid token unless it is told not to, so a GET that
+		// presented one would have been measuring the harness rather than the
+		// gate. It passed for exactly that reason while the mount refused every
+		// untokened read with 403.
+		resp := s.do(&call{method: http.MethodGet, path: "/plugin/houserules/rules", noCSRF: true})
 		defer drain(resp)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status %d, want 200: the sub-router is not mounted", resp.StatusCode)
+			t.Fatalf("status %d, want 200: the sub-router is not mounted, or its reads are gated as mutations", resp.StatusCode)
 		}
 	})
 

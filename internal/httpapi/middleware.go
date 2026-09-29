@@ -566,6 +566,25 @@ func (s *Server) checkCSRF(next http.Handler) http.Handler {
 	})
 }
 
+// checkCSRFOnMutations is checkCSRF for a handler that serves more than one
+// method, which is what a mounted plugin sub-router is.
+//
+// checkCSRF itself makes no decision about methods — routeHandler asks first,
+// while it still knows the row's — so applying it to a whole sub-router gates
+// every request that passes through, including the reads, and a read has no
+// state to forge. The decision is therefore asked again here, per request, from
+// the same predicate the table row uses, so a mutation is still refused without
+// a token and a safe method is served as it is everywhere else in the app.
+func (s *Server) checkCSRFOnMutations(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mutatingMethod(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.checkCSRF(next).ServeHTTP(w, r)
+	})
+}
+
 // refuseCSRF answers 403 with the error page.
 //
 // It is a 403 and not a redirect to the login form: a form whose token did not

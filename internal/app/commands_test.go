@@ -48,7 +48,7 @@ func TestReindexSubcommandRebuildsFromTheVault(t *testing.T) {
 	if err := Reindex(context.Background(), f.opts, &out, false); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
-	if !strings.Contains(out.String(), strconv.Itoa(len(campaignFiles()))+" pages") {
+	if !strings.Contains(out.String(), strconv.Itoa(f.pages())+" pages") {
 		t.Errorf("the command did not report the page count:\n%s", out.String())
 	}
 
@@ -58,7 +58,7 @@ func TestReindexSubcommandRebuildsFromTheVault(t *testing.T) {
 		if err != nil {
 			t.Fatalf("count pages: %v", err)
 		}
-		if want := int64(len(campaignFiles())); pages != want {
+		if want := int64(f.pages()); pages != want {
 			t.Errorf("the index holds %d pages after the reindex, want %d", pages, want)
 		}
 		var body string
@@ -159,8 +159,8 @@ func TestReindexOnBootRebuildsWhatTheDeltaWalkWouldSkip(t *testing.T) {
 	}
 	// The rest of the index survived the rebuild, and the report is the boot's
 	// own: a rebuild that emptied the vault would pass the assertion above.
-	if got := a.Status().PageCount; got != len(campaignFiles()) {
-		t.Errorf("the rebuilt index holds %d pages, want %d", got, len(campaignFiles()))
+	if got := a.Status().PageCount; got != f.pages() {
+		t.Errorf("the rebuilt index holds %d pages, want %d", got, f.pages())
 	}
 }
 
@@ -177,7 +177,7 @@ func TestTheReindexSubcommandStillReportsThePassThatDidTheWork(t *testing.T) {
 	if err := Reindex(context.Background(), f.opts, &out, true); err != nil {
 		t.Fatalf("reindex --full: %v", err)
 	}
-	want := strconv.Itoa(len(campaignFiles())) + " indexed, 0 already current"
+	want := strconv.Itoa(f.pages()) + " indexed, 0 already current"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("the command did not report the pass that rebuilt the index:\n%s", out.String())
 	}
@@ -351,7 +351,7 @@ func TestVaultInfoReportsPathsAndCounts(t *testing.T) {
 		filepath.Base(f.vault.Root), // the campaign name
 		f.dbFile(),                  // the database
 		"schema v",                  // the schema version
-		strconv.Itoa(len(campaignFiles())) + " pages",
+		strconv.Itoa(f.pages()) + " pages",
 		"backups:", // the retention state
 		"ready",    // the boot state
 	} {

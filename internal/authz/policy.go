@@ -39,7 +39,8 @@ func (e *DeniedError) Unwrap() error { return ErrDenied }
 // Policy is the single implementation of "may this principal do this thing to
 // this resource". Every handler consults it; the Perm middleware is the only
 // place it is called with a route-level permission, and no handler compares a
-// Role directly (TestOnlyPermMiddlewareIsConsulted greps for exactly that).
+// Role directly (TestNoRoleComparisonOutsidePerm scans for exactly that, and
+// this package is the one place the scan may match).
 //
 // The zero Policy denies anonymous reads. Construct it with NewPolicy.
 type Policy struct {

@@ -56,6 +56,24 @@ const (
 	maxVerifyThreads uint8  = 16
 )
 
+// maxVerifyDigestLen bounds the length of the derived key a stored hash asks for.
+//
+// It is the fourth request-to-allocate a PHC string makes, and it was the only
+// one without a ceiling. The three costs are bounded because a 20-byte row can
+// name 256 MiB of memory; a digest length is bounded for a weaker reason and the
+// weaker reason is still a reason: argon2.IDKey allocates keyLen bytes and the
+// call site cannot check it, because by then the value has already crossed from a
+// string in somebody's editable directory into a uint32. Nothing this binary
+// writes is near it — argonKeyLen is 32 — so the ceiling is two orders of
+// magnitude above every legitimate hash and it costs a comparison to state.
+//
+// A digest that arrived over the ceiling would not be a bypass even if it got
+// through: the derived key would be a different length from the stored one and
+// subtle.ConstantTimeCompare would answer false. It would be an allocation, and
+// an allocation asked for by a file is exactly what the other three bounds are
+// about.
+const maxVerifyDigestLen uint32 = 64
+
 // ErrMalformedHash reports a stored hash that is not a well-formed Argon2id
 // PHC string. It is a distinct sentinel from a wrong passphrase because it
 // means the database is damaged rather than the input wrong, and the two must
@@ -74,6 +92,11 @@ type argonParams struct {
 	salt []byte
 	// key is the derived key to compare against.
 	key []byte
+	// keyLen is len(key) as a uint32, set in the same breath as the ceiling that
+	// makes the conversion safe. It is a field rather than a `uint32(len(p.key))`
+	// at the call site because a conversion is worth doing once, where its bound
+	// is in view, rather than at every use.
+	keyLen uint32
 }
 
 // encodePHC renders salt and key in the PHC string format, which carries the
@@ -112,6 +135,11 @@ func parsePHC(encoded string) (argonParams, error) {
 	if len(p.key) == 0 {
 		return argonParams{}, fmt.Errorf("%w: empty digest", ErrMalformedHash)
 	}
+	if uint64(len(p.key)) > uint64(maxVerifyDigestLen) {
+		return argonParams{}, fmt.Errorf("%w: digest is %d bytes, over the %d byte ceiling",
+			ErrMalformedHash, len(p.key), maxVerifyDigestLen)
+	}
+	p.keyLen = uint32(len(p.key))
 	return p, nil
 }
 
@@ -232,15 +260,15 @@ func SaltFromPHC(encoded string) ([]byte, error) {
 //
 // The comparison is constant time for a per-account reason rather than an
 // absolute one: the derived key and the stored key are always the same length,
-// because the length is read out of the same string, so subtle's early return
-// on a length mismatch can never fire and cannot encode anything about the
-// passphrase.
+// because the length is read out of the same string and bounded where it is read,
+// so subtle's early return on a length mismatch can never fire and cannot encode
+// anything about the passphrase.
 func Verify(encoded []byte, passphrase string) (bool, error) {
 	p, err := parsePHC(string(encoded))
 	if err != nil {
 		return false, err
 	}
-	key := argon2.IDKey([]byte(passphrase), p.salt, p.time, p.memoryKiB, p.threads, uint32(len(p.key)))
+	key := argon2.IDKey([]byte(passphrase), p.salt, p.time, p.memoryKiB, p.threads, p.keyLen)
 	return subtle.ConstantTimeCompare(key, p.key) == 1, nil
 }
 

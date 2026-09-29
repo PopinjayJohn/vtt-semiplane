@@ -15,6 +15,7 @@ import (
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/sample"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/testutil"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/vault"
@@ -53,6 +54,7 @@ func campaignFiles() map[string]string {
 type fixture struct {
 	t      *testing.T
 	vault  *testutil.Vault
+	files  map[string]string
 	opts   Options
 	steps  []string
 	banner *strings.Builder
@@ -62,12 +64,34 @@ type fixture struct {
 	app *App
 }
 
+// samplePages is how many page rows the bundled campaign adds to every fixture
+// vault.
+//
+// Boot writes the campaign into every vault it opens, so a test that counts
+// pages is counting its own files plus these. Naming the count in one place is
+// what keeps that honest: a bare literal at each call site would be a number
+// that a campaign edit invalidates in eight directions at once, and the failure
+// would read as "the vault was not indexed" rather than "the campaign grew".
+func samplePages() int {
+	files, err := sample.Files()
+	if err != nil {
+		// The campaign is in the binary and the enumeration is a walk of it, so
+		// this is a build defect rather than a runtime condition.
+		panic("the bundled sample campaign cannot be read: " + err.Error())
+	}
+	return len(files)
+}
+
+// pages is how many rows the index holds for this fixture: the files the test
+// seeded, plus the campaign every boot writes.
+func (f *fixture) pages() int { return len(f.files) + samplePages() }
+
 // newFixture seeds a vault and builds Options for it, with a fixed clock, a
 // discarding logger, and a trace that records the boot order.
 func newFixture(t *testing.T, files map[string]string) *fixture {
 	t.Helper()
 	v := testutil.WithVault(t, files)
-	f := &fixture{t: t, vault: v, banner: &strings.Builder{}}
+	f := &fixture{t: t, vault: v, files: files, banner: &strings.Builder{}}
 	f.opts = Options{
 		Config: config.Config{
 			Vault:             v.Root,
@@ -129,7 +153,7 @@ func TestBootTakesTheOrderItClaims(t *testing.T) {
 	a := f.boot(t, f.withHandler())
 
 	want := []string{
-		stepVault, stepLock, stepAudit, stepOpen, stepWire,
+		stepVault, stepLock, stepSample, stepAudit, stepOpen, stepWire,
 		stepBackup, stepSchema, stepFTS, stepIndex, stepPrune,
 		// The plugin lifecycle sits between the index and the watcher, and the
 		// position is the claim being made: a page type a plugin registered has
@@ -317,9 +341,9 @@ func TestCorruptDatabaseIsQuarantinedNotFatal(t *testing.T) {
 	if len(quarantined) != 1 {
 		t.Fatalf("found %d quarantined databases, want exactly one: %v", len(quarantined), quarantined)
 	}
-	if pages := a.Status().PageCount; pages != len(campaignFiles()) {
+	if pages := a.Status().PageCount; pages != f.pages() {
 		t.Errorf("the fresh database holds %d pages, want %d: the vault was not reindexed",
-			pages, len(campaignFiles()))
+			pages, f.pages())
 	}
 	if !anyWarningContains(a, "could not be read") {
 		t.Errorf("the boot report does not mention the quarantine: %v", a.Status().Warnings)
@@ -336,7 +360,7 @@ func TestBootWithoutAHandlerDoesNotListen(t *testing.T) {
 	if addr := a.Status().Addr; addr != "" {
 		t.Errorf("Addr is %q with no handler injected", addr)
 	}
-	if a.Status().PageCount != len(campaignFiles()) {
+	if a.Status().PageCount != f.pages() {
 		t.Errorf("the vault was not indexed: %d pages", a.Status().PageCount)
 	}
 	if a.DB() == nil {
@@ -414,8 +438,9 @@ func TestBannerPrintsWarnings(t *testing.T) {
 			t.Errorf("the banner does not mention %q:\n%s", want, banner)
 		}
 	}
-	if got := a.Status().PageCount; got != 2 {
-		t.Errorf("the index holds %d pages, want the two that could be read", got)
+	if want := 2 + samplePages(); a.Status().PageCount != want {
+		t.Errorf("the index holds %d pages, want %d: the two that could be read, plus the campaign",
+			a.Status().PageCount, want)
 	}
 	if strings.Contains(banner, leakToken) {
 		t.Error("the banner printed a secret body")
@@ -440,7 +465,7 @@ func TestBannerPrintsNoVaultContent(t *testing.T) {
 		"flag:--vault",              // and how it was chosen
 		filepath.Base(f.vault.Root), // the campaign name
 		"schema v",                  // the schema version
-		strconv.Itoa(len(campaignFiles())) + " pages",
+		strconv.Itoa(f.pages()) + " pages",
 		"plugins:",      // the plugin boot report
 		a.Status().Addr, // the listening address
 		"http://",       // and the URL a browser can open
@@ -540,14 +565,14 @@ func TestAReconcilePassFollowsAFileWrittenWhileTheAppRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count pages: %v", err)
 	}
-	if want := int64(len(campaignFiles()) + 1); pages != want {
+	if want := int64(f.pages() + 1); pages != want {
 		t.Errorf("the index holds %d pages, want %d", pages, want)
 	}
 	// The report is refreshed by whichever pass ran, so a caller that reads it
 	// after its own pass sees its own numbers.
 	a.refreshStatus(context.Background())
-	if got := a.Status().PageCount; got != len(campaignFiles())+1 {
-		t.Errorf("the boot report says %d pages, want %d", got, len(campaignFiles())+1)
+	if got := a.Status().PageCount; got != f.pages()+1 {
+		t.Errorf("the boot report says %d pages, want %d", got, f.pages()+1)
 	}
 }
 

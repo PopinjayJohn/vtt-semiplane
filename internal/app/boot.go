@@ -66,8 +66,13 @@ const (
 // process's self-write suppression swallows the other's real edit — and a
 // renamed step should fail that test rather than stop being checked.
 const (
-	stepVault  = "resolve-vault"
-	stepLock   = "lock"
+	stepVault = "resolve-vault"
+	stepLock  = "lock"
+	// stepSample is named in the trace directly after the lock, which is where
+	// the walk runs: nothing may write to a vault another process can hold, and
+	// the walk has to finish before the schema, the first backup and the first
+	// index pass, or a fresh vault's first restore point is an empty one.
+	stepSample = "sample-campaign"
 	stepAudit  = "audit-log"
 	stepOpen   = "open-database"
 	stepWire   = "wire-index"
@@ -216,7 +221,10 @@ type Status struct {
 	// VaultSource is how the path was chosen: a flag, the environment, a
 	// default, or a fallback the operator should know about.
 	VaultSource string
-	// Campaign is the campaign's name. See campaignName.
+	// Campaign is the label the banner shows for this vault, which is the
+	// vault directory's own name. It is not a campaign name and the field is
+	// named for the era before the bundled sample campaign existed; see
+	// campaignName for why nothing better is available.
 	Campaign string
 	// Addr is the listening address, or "" when nothing is listening.
 	Addr string
@@ -242,9 +250,9 @@ type Status struct {
 //
 // The order is the contract, not a preference:
 //
-//	resolve the path → single-instance lock → audit log → database →
-//	backup + migrate → FTS rebuild → full walk and index → prune →
-//	watcher and reconciliation → banner → listener
+//	resolve the path → single-instance lock → sample campaign → audit log →
+//	database → backup + migrate → FTS rebuild → full walk and index →
+//	prune → watcher and reconciliation → banner → listener
 //
 // The lock comes second and before anything is opened, because two processes
 // over one vault would each hold an index and a watcher over the same files and
@@ -298,38 +306,50 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 	}
 	a.step(stepLock)
 
-	// 3. The audit log, which is a file in the vault and so cannot be opened
+	// 3. The bundled sample campaign, into a vault that does not have it.
+	//
+	// After the lock, because this is the first step that writes a vault file
+	// and two processes over one vault would race on the same thirty-eight
+	// paths. Before the audit log, because the audit sink is a security record
+	// and "wrote the files the app already had" is a boot fact rather than one.
+	// Before the migration and the index, so the campaign is in the first index
+	// pass and therefore in the first backup — a fresh vault's first restore
+	// point should not be an empty directory.
+	a.extractSample(ctx)
+	a.step(stepSample)
+
+	// 4. The audit log, which is a file in the vault and so cannot be opened
 	// before the lock.
 	a.openAuditLog()
 	a.step(stepAudit)
 
-	// 4. The index database, quarantining one that cannot be read.
+	// 5. The index database, quarantining one that cannot be read.
 	if err = a.openDatabase(ctx); err != nil {
 		return a, err
 	}
 	a.step(stepOpen)
 
-	// 5. Everything that writes the index, built once against this database and
+	// 6. Everything that writes the index, built once against this database and
 	// this clock.
 	if err = a.wire(); err != nil {
 		return a, fmt.Errorf("boot: build the index components: %w", err)
 	}
 	a.step(stepWire)
 
-	// 6. A backup, then the migration. store.Migrate takes the backup hook as a
+	// 7. A backup, then the migration. store.Migrate takes the backup hook as a
 	// parameter and calls it before it applies anything.
 	if err = a.migrate(ctx); err != nil {
 		return a, fmt.Errorf("boot: %w", err)
 	}
 	a.step(stepSchema)
 
-	// 7. The search index, when the schema generation moved under it.
+	// 8. The search index, when the schema generation moved under it.
 	if err = a.rebuildFTS(ctx, false); err != nil {
 		return a, fmt.Errorf("boot: rebuild the search index: %w", err)
 	}
 	a.step(stepFTS)
 
-	// 8. The pass. Unconditional: the index is derived and the vault is
+	// 9. The pass. Unconditional: the index is derived and the vault is
 	// canonical, so a boot that trusted the index would serve whatever the last
 	// crash left behind. A --reindex boot drops the derived rows and rebuilds
 	// them here rather than afterwards, so nothing in the index is trusted at
@@ -339,13 +359,13 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 	}
 	a.step(stepIndex)
 
-	// 9. Housekeeping: the rows that expired while the app was not running.
+	// 10. Housekeeping: the rows that expired while the app was not running.
 	if err = a.prune(ctx); err != nil {
 		return a, fmt.Errorf("boot: prune expired rows: %w", err)
 	}
 	a.step(stepPrune)
 
-	// 8b. The plugin lifecycle: migrations, registration, and the boot report.
+	// 11. The plugin lifecycle: migrations, registration, and the boot report.
 	//
 	// It runs after the index and before anything serves, so a page type a
 	// plugin registered is available to the first request rather than appearing
@@ -373,13 +393,13 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 		return a, nil
 	}
 
-	// 10. The watcher and the one goroutine that owns the reconciliation scan.
+	// 12. The watcher and the one goroutine that owns the reconciliation scan.
 	if err = a.startBackground(); err != nil {
 		return a, fmt.Errorf("boot: start the vault watcher: %w", err)
 	}
 	a.step(stepWatch)
 
-	// 11. Bind, then print, then serve. Binding first is what lets the banner
+	// 13. Bind, then print, then serve. Binding first is what lets the banner
 	// name the address a client can actually reach — with --port 0 the port is
 	// the kernel's choice — and printing before Serve is what keeps the report
 	// ahead of the first request.
@@ -629,11 +649,16 @@ func (a *App) backupDue(ctx context.Context) (bool, string, error) {
 
 // printBanner writes the boot report to the writer Boot was given, if it was
 // given one.
+//
+// The plugin report is the App's own and not a re-run of the lifecycle: both
+// call sites are after stepPlugins, so a.plugins and a.report are populated and
+// a second load would be a second answer to a question the boot already
+// answered.
 func (a *App) printBanner() {
 	if a.banner == nil {
 		return
 	}
-	PrintBanner(a.banner, a.Status())
+	PrintBanner(a.banner, a.Status(), a.report)
 }
 
 // takeBackup writes a backup and remembers when.

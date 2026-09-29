@@ -254,9 +254,10 @@ benchmarks, and neither carries a recorded result in a comment:
   asserts the result is empty as well as fast.
 
 `docs/ADR-0002-pure-go-sqlite.md` records the **budget**: p99 page render under
-50 ms and search under 20 ms on a 2000-page vault. It names
-`BenchmarkIndex1kPages` as the other half of the measurement; **that benchmark
-does not exist.** If you are quoting a number, run the benchmarks.
+50 ms and search under 20 ms on a 2000-page vault. The index half of that
+measurement has no benchmark anywhere in the tree, which the ADR records where
+the driver choice is argued rather than leaving a name here that resolves to
+nothing. If you are quoting a number, run the benchmarks.
 
 ## 6. The secret invariant
 

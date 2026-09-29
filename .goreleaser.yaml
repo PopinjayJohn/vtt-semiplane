@@ -1,21 +1,53 @@
 # Release configuration. One static binary per platform, CGO disabled.
 #
-# templ components, the stylesheet, the DataStar bundle, the icon sprite, the
-# sample campaign and the migration SQL are all embedded, so each artifact is a
-# single file with no runtime dependencies.
-
+# What the binary carries, and nothing else, is three //go:embed payloads:
+#
+#   web/static/**          web/embed.go:28              app.css, app.js,
+#                                                           icons.svg, datastar.js
+#   internal/store/
+#     migrations/*.sql     internal/store/migrate.go:16
+#   internal/sample/
+#     campaign/            internal/sample/campaign.go:25
+#
+# The header here once said the sample campaign was not embedded, on the
+# strength of `internal/sample` carrying no //go:embed. It carried one, and had
+# for some time: a release binary extracts the campaign on first boot, so the
+# sentence was false in the one direction that matters — it described a payload
+# the operator does receive as one they do not.
+#
+# templ components are compiled in rather than embedded; they are not a
+# separate asset and the distinction is only worth making because an older
+# sentence listed them beside things that genuinely are.
+#
+# `make embed-check` builds the binary and asserts each of those three is
+# present in it, so this header cannot drift from the build without turning a
+# gate red. If a fourth //go:embed payload ever appears, add it to that list in
+# the same commit — a claim here that no gate covers is a claim that can be
+# wrong while looking authoritative.
 version: 2
 
 project_name: semiplane
 
 before:
   hooks:
-    - go mod tidy
+    # A release must build the tree as committed. `go mod tidy` here would have
+    # been the opposite: a hook that rewrites go.mod in the middle of a
+    # release either does nothing or ships a dependency change nobody reviewed.
+    - go mod download
+    - git diff --exit-code -- go.mod go.sum
 
 builds:
   - id: semiplane
     main: ./cmd/semiplane
-    binary: semiplane{{ if .Env.WINDOWS }}.exe{{ end }}
+    # goreleaser appends the platform extension itself, so this is a bare
+    # `semiplane` and not `semiplane{{ if ... }}.exe{{ end }}`. The template
+    # that was here was wrong twice over: `{{ if .Env.WINDOWS }}` failed to
+    # build at all ("map has no entry for key WINDOWS" — goreleaser builds a
+    # fresh Env map per target and does not define that key), and once that was
+    # corrected to `{{ if eq .Os "windows" }}` the snapshot build produced
+    # semiplane.exe.exe. Only a run finds either of these; `goreleaser check`
+    # passed on the file that could not build a single binary.
+    binary: semiplane
     env:
       - CGO_ENABLED=0
     flags:
@@ -25,6 +57,17 @@ builds:
       - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Version={{ .Version }}
       - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Commit={{ .FullCommit }}
       - -X github.com/PopinjayJohn/vtt-semiplane/internal/app.Date={{ .Date }}
+    # goos x goarch is the whole set: six targets, no 32-bit ARM, because
+    # goarm below is empty. The `ignore:` block that used to follow listed
+    # goarm: ["7"] against arm64 targets, which is not a thing — goarm only
+    # applies to GOARCH=arm — and it did not parse: goreleaser rejected it as
+    # a sequence where a string was expected. "5 artifacts" in the plan's
+    # accept list predates this matrix and undercounts it; the sixth is
+    # windows/arm64, which is the platform a Surface Pro user is on.
+    #
+    # `make targets-check` fails if this matrix and the Makefile's TARGETS
+    # ever differ, which is the only thing that makes a count in two files
+    # safe to state in two files.
     goos:
       - linux
       - darwin
@@ -33,16 +76,6 @@ builds:
       - amd64
       - arm64
     goarm: []
-    ignore:
-      - goos: darwin
-        goarch: arm64
-        goarm: ["7"]
-      - goos: linux
-        goarch: arm64
-        goarm: ["7"]
-      - goos: windows
-        goarch: arm64
-        goarm: ["7"]
 
 archives:
   - id: semiplane
@@ -55,11 +88,17 @@ archives:
       - goos: windows
         formats:
           - zip
+    # LICENSE, README and the DM's guide to secrets. The entry that used to sit
+    # here, `src: docs/SECRETS.md / if: exists`, was a file that did not exist
+    # AND a field goreleaser v2 does not have — `if` is not in the file entry
+    # type, so the whole config failed to load. docs/SECRETS.md is written now,
+    # so the plain string below is both present and a real `src`: no guard
+    # needed for a file the repository owns, and a guarded reference is how a
+    # release ships without its own documentation while still looking like one.
     files:
       - LICENSE
       - README.md
-      - src: docs/SECRETS.md
-        if: exists
+      - docs/SECRETS.md
     # The vault is never in an archive: a DM's plaintext secrets must not
     # travel in a release artifact.
 
@@ -88,5 +127,8 @@ changelog:
       - "^test:"
       - "^chore:"
 
-# Optional: `COSIGN` must be present in the environment or the sign step is
-# skipped and the release is marked unsigned in the notes.
+# Keyless signing needs no cosign key: the release workflow grants
+# id-token: write, cosign exchanges the OIDC token from the job for a
+# short-lived certificate, and only checksums.txt is signed — the archives are
+# covered by the checksum file, so signing six archives instead of one would
+# add six signatures a verifier has to check and no property it lacks.

@@ -342,7 +342,13 @@ templ BacklinkList(chips []httpapi.BacklinkChip, count int) {
 		<h2 id="backlinks-heading" class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
 			@Icon("i-backlink", "h-4 w-4")
 			Linked from
-			<span class="rounded bg-neutral-200 px-1.5 text-xs dark:bg-neutral-800">{ count }</span>
+			// The count is a Badge rather than a hand-written span. It is one
+			// class name on a chip in the heading, and it is also the whole of
+			// what `.badge` means — the ink a count on a tint is drawn in, which
+			// is not the ink of the heading it sits inside. Written out here it
+			// inherited that heading's muted step and measured 3.83:1 on the
+			// tint, which fails WCAG 1.4.3.
+			<span class="badge rounded bg-neutral-200 px-1.5 text-xs dark:bg-neutral-800">{ count }</span>
 		</h2>
 		if len(chips) == 0 {
 			<p class="mt-2 text-sm text-neutral-500 dark:text-neutral-400">No other page links here yet.</p>

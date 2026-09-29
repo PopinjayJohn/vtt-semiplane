@@ -105,9 +105,15 @@ These are not style preferences. Each has a test or a grep that fails the build.
    that holds no title, no author and no length, so there is nothing in the
    view model for a template to render.
 7. **Any new route must be added to the route table in
-   `internal/httpapi/routes.go` and to `TestAuthorizationMatrix`.** The `Perm`
-   middleware is the only place a role is compared; a grep test fails the build
-   on a `Role ==` comparison in a handler.
+   `internal/httpapi/routes.go` and to `TestAuthorizationMatrix`.** The only
+   place a role is compared is the policy, and
+   `TestNoRoleComparisonOutsidePerm` fails the build on a comparison, a switch
+   or a lookup keyed by a role anywhere else. It is a scan of the syntax tree,
+   not a grep, for the reason `TestNoOutboundNetwork` gives: prose cannot trip
+   it, so a file may explain the rule, and a comparison split across a line
+   break is still a comparison. `internal/authz` is the single exemption,
+   because it owns the `Role` type and the policy table — its comparisons are
+   the rule rather than a copy of it.
    **The `Perm` column is asked with a zero `authz.Resource`, so its name is not
    always what it grants.** `Server.permit` calls `Policy.Check` with
    `Resource{}`, so a `PermWritePage` column is answered "is this a DM or an
@@ -372,12 +378,13 @@ Checklist, restated so it can be read without the plan:
   without being rendered to anybody — the 500 page and the request and audit
   logs — and each case provokes a failure the application can genuinely hit and
   asserts the log stream grew, so a clean capture cannot pass it.
-  **The name-checking advice stays.** One name is still carried in this
-  repository with no test ever answering to it: `TestNoRoleComparisonOutsidePerm`,
-  named in [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md) §4 as the gate
-  that refuses a `Role ==` outside the `Perm` middleware. Nothing enforces it —
-  the rule holds because the handler packages do not do it, not because a test
-  says they may not.
+  **The name-checking advice stays, and the name that motivated it is now
+  closed.** `TestNoRoleComparisonOutsidePerm` was carried here and in
+  [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md) §4 for several stages
+  with no test answering to it; it exists as of stage 6, and writing it found a
+  real violation on its first run — a switch on a role in `httpapi`, outside the
+  policy — which is the argument for the habit rather than against it. A name
+  nobody checked is a rule with no enforcement behind it.
 
 ## 7. Plugin development
 
@@ -472,10 +479,19 @@ unsatisfiable rather than stricter.
   mount is not a row. `httpapi.mountPluginRoutes` re-applies both at
   `PermSession`. Neither `TestCSRFRequiredOnAllMutations` nor
   `TestTheMatrixCoversEveryRoute` can catch a missing re-application: both read
-  the static route table, not the mounted chi tree. Plugin surfaces are therefore
-  for signed-in readers, which is a deliberate ceiling — the host has no
-  vocabulary for "the permission this route needs", and inventing one would let
-  a plugin name its own gate.
+  the static route table, not the mounted chi tree. The table-derived gates also
+  cannot answer *which methods* a mount gates, because a mount is registered
+  once for every method its sub-router serves and the answer is a property of
+  each request — asking it at mount time answered for the mount's placeholder
+  method and refused every plugin read with 403, for every principal including an
+  administrator. `TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest` in
+  [`internal/httpapi/pluginmount_test.go`](internal/httpapi/pluginmount_test.go)
+  is the test that can: it drives the mounted tree and asserts that a safe method
+  is served without a token, that a mutation without one is refused, and that the
+  same mutation with one is served. Plugin surfaces are therefore for signed-in
+  readers, which is a deliberate ceiling — the host has no vocabulary for "the
+  permission this route needs", and inventing one would let a plugin name its own
+  gate.
 - **A plugin cannot reach the principal without `authz`.** The context carrier is
   `authz.WithPrincipal` / `authz.PrincipalFrom` (`internal/authz/context.go`),
   one unexported key with one writer — the session middleware. `httpapi` keeps a
@@ -543,8 +559,10 @@ generated and committed. Never hand-edit any of them. `make generate` and
 | `make fuzz` | 30s of each fuzz target |
 | `make lint` | golangci-lint |
 | `make fmt` | gofmt + templ fmt |
-| `make check` | **the CI gate**: fmt-check, generate-check, css-check, lint, test |
-| `make cross` | five release binaries |
+| `make check` | **the CI gate**: fmt-check, generate-check, css-check, lint, targets-check, test |
+| `make embed-check` | fail if the built binary is missing an embedded payload — **not** in `make check` |
+| `make coverage-check` | fail if a package lost coverage against `.coverage-baseline` — a ratchet, and **not** in `make check` |
+| `make cross` | six release binaries |
 | `make clean` | remove build output |
 
 A test that writes into the repository fails CI on purpose: after every test

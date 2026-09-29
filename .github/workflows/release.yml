@@ -1,0 +1,151 @@
+# Release. Pushing a version tag publishes a signed, checksummed, SBOM-carrying
+# release built by goreleaser.
+#
+# Nothing invoked goreleaser before this file existed. .goreleaser.yaml was
+# complete-looking and had never been run, which is worth recording as a
+# finding in its own right: it did not parse (`goarm: ["7"]` against an arm64
+# target, and an `if:` key that is not in goreleaser v2's file entry), and
+# once those were fixed the build still failed on `{{ if .Env.WINDOWS }}`.
+# `goreleaser check` passed the whole time. A config that is never executed is
+# not a config, and the reason it survived is that nothing ran it.
+#
+# Every action is pinned to a full commit SHA. zizmor runs on this repository
+# and this file is no exception.
+
+name: release
+
+# Deliberately not `pull_request`, and deliberately not `workflow_dispatch`.
+#
+# The fork case, stated rather than assumed. A `push` event fires only in the
+# repository that received the push, so a fork pushing a v* tag runs *the
+# fork's* copy of this file, with the fork's GITHUB_TOKEN (scoped to the fork)
+# and the fork's own OIDC identity. It cannot create a release here, because
+# nothing in that run is authorised against this repository. What a fork CAN do
+# is open a pull request whose diff rewrites this file, and the trigger that
+# would run that rewrite is `pull_request` — so there is none. A
+# `workflow_dispatch` is the same hazard with a different handle: it would let
+# anyone with write access run a release against an arbitrary ref, which is the
+# one thing the branch check below exists to prevent.
+#
+# The remaining gap is a tag pushed by someone with write access to a commit
+# that is not on main. The `on the default branch` step closes it.
+on:
+  push:
+    tags: ['v*']
+
+# Never cancel. A cancelled release has published some of its assets and
+# revoked the token of none of them, and the fix is to delete a release
+# nobody can find. Re-running the same tag is harmless and idempotent.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+  # The same version tools/versions.env pins, so a release cannot be built
+  # with a toolchain ci.yml has never exercised.
+  GO_VERSION: "1.26.0"
+
+# The grants live on the job, not on the workflow, even though there is only
+# one job here. zizmor is right that a workflow-level `contents: write` is
+# broader than the surface that needs it: a workflow-level grant is the default
+# for every future job added to this file, and this file is the one place in
+# the repository where a job is allowed to write.
+permissions: {}
+
+jobs:
+  release:
+    permissions:
+      contents: write # create the GitHub Release and upload its assets; goreleaser reads GITHUB_TOKEN for this and needs nothing else
+      id-token: write # keyless cosign exchanges this job's OIDC identity for a short-lived Fulcio certificate; drop it and `.goreleaser.yaml`'s `signs:` block fails the release, which is the intended failure
+    # An environment is GitHub's own second gate, separate from the token:
+    # set required reviewers on `release` and a tag can no longer publish
+    # without a human on the same repository. The environment is created on
+    # first use, so declaring it costs nothing until it is configured.
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history: the next step asks whether this tag's commit is an
+          # ancestor of the default branch, which needs the graph, not a
+          # shallow clone.
+          fetch-depth: 0
+          persist-credentials: false
+      # The module cache is off, and it must be off *explicitly*: omitting
+      # `cache` leaves it at the action's default of true. A Go module cache is
+      # keyed partly by the ref, and this is the one job whose output a third
+      # party is told to trust — a cache poisoned by a pull request would be
+      # read here, signed by keyless cosign, and published as a signed release.
+      # A cold module cache once per release is the cheap side of that trade.
+      # zizmor's cache-poisoning audit is what surfaced it.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: the tag is a version, and it is on the default branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # A tag glob cannot express "semver, optionally with a prerelease
+          # suffix" without also admitting `v1.2.3.4` and `vbanana`, and a tag
+          # that is not a version becomes a published artifact name.
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || {
+            echo "refusing to release: $tag is not vMAJOR.MINOR.PATCH[-PRERELEASE]"; exit 1; }
+          default_branch="${GITHUB_EVENT_REPOSITORY_DEFAULT_BRANCH:-main}"
+          git rev-parse --verify "origin/$default_branch" >/dev/null
+          # This is the check that makes "only from the default branch's tags"
+          # true rather than merely intended. A tag pushed at a commit on a
+          # topic branch, or at a commit that was force-pushed away, is not an
+          # ancestor of the default branch and stops here — before the token
+          # has done anything.
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$default_branch" || {
+            echo "refusing to release: $tag points at a commit that is not on $default_branch"; exit 1; }
+          echo "==> releasing $tag (commit $GITHUB_SHA, on $default_branch)"
+
+      - name: the Makefile and the release config build the same targets
+        run: make targets-check
+
+      # goreleaser does not bundle syft; `sboms:` shells out to whatever is on
+      # PATH and fails the release with `executable file not found` if nothing
+      # is. Measured, not assumed.
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          syft-version: v1.52.0
+      # Keyless cosign. `.goreleaser.yaml` signs checksums.txt only: the
+      # archives are covered by that file, so six signatures would add six
+      # things for a verifier to check and no property it lacks.
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
+        with:
+          # Pinned, and the same version `goreleaser check` and a snapshot
+          # release were run against while this file was written. The action's
+          # own default is "latest", which is a moving target for something
+          # that publishes a signed release.
+          version: v2.12.7
+          distribution: goreleaser
+          args: --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: the published release carries every artifact and its signature
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # goreleaser exits 0 if a later stage is skipped, so "the release
+          # exists" is not evidence that it is complete. The signature is the
+          # one artifact nothing else implies.
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | tee /tmp/assets
+          grep -q 'checksums.txt' /tmp/assets
+          grep -q 'checksums.txt.sig' /tmp/assets
+          grep -q 'checksums.txt.pem' /tmp/assets
+          archives=$(grep -c -E '\.(tar\.gz|zip)$' /tmp/assets)
+          expected=$(make -s target-count)
+          echo "==> $archives archives published, $expected targets configured"
+          test "$archives" -eq "$expected" || {
+            echo "a release published $archives archives for $expected targets"; exit 1; }

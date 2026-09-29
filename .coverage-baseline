@@ -1,0 +1,47 @@
+# Per-package coverage baseline — a ratchet, not a floor.
+#
+# `make coverage-check` fails when any package here measures BELOW its recorded
+# number, and says which package, by how much, on both sides. AGENTS.md §5 asks
+# for exactly that shape: a change to internal/secrets, internal/authz or
+# internal/sync that drops their coverage is a failed change, which is a
+# statement about a drop and not about an absolute threshold. A single
+# repository-wide floor could not express it — it would either sit low enough
+# to be meaningless or high enough to block a legitimate refactor, and it
+# would say nothing about the three packages the rule names.
+#
+# A package that RISES prints RAISED and does not fail; run
+# `make coverage-baseline` and commit the result to ratchet it up. A package
+# with no row here is reported UNTRACKED and does not fail, so a new package
+# can land without a gate — but a package that disappears while its row stays
+# is a MISSING and does fail, because that is how a test file gets deleted
+# without anyone noticing.
+#
+# Resolution is 0.1 percentage points: both sides are compared after rounding
+# to one decimal, which is the precision this file records. Regenerate with
+# `make cover && make coverage-baseline`; never hand-edit a number.
+#
+# Measured 2026-09-29 on the stage-5 tree with
+# ./scripts/test.sh -coverprofile=coverage.out -covermode=atomic
+# (total across all packages: 75.3%).
+/cmd/semiplane 50.0
+/internal/app 73.2
+/internal/auth 83.6
+/internal/authz 86.3
+/internal/config 94.9
+/internal/diff 100.0
+/internal/httpapi 80.4
+/internal/md 87.6
+/internal/obs 77.6
+/internal/plugin 92.4
+/internal/search 84.1
+/internal/secrets 89.9
+/internal/store 70.3
+/internal/sync 87.4
+/internal/systems/dnd5e 67.2
+/internal/systems/example 88.0
+/internal/systems/houserules 74.5
+/internal/systems/linkpreview 79.6
+/internal/testutil 84.8
+/internal/vault 82.6
+/internal/web 63.9
+/web 75.0

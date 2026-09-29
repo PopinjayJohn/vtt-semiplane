@@ -41,9 +41,9 @@
  * The default is `prefers-color-scheme` alone, which cannot express a manual
  * override: a reader who forces light on a dark machine still gets every
  * `dark:` utility. This definition applies the utilities under either switch,
- * and the `:not(.light)` exclusion is what makes a forced-light page win on a
- * dark machine. Without it the two switches are not a pair, they are a race
- * that the media query always wins.
+ * and the exclusion below is what makes a forced-light page win on a dark
+ * machine. Without it the two switches are not a pair, they are a race that the
+ * media query always wins.
  *
  * The class is on the root element and app.js owns it: it reads the
  * `semiplane_theme` cookie (`dark` or `light`, absent means follow the OS) on
@@ -53,27 +53,84 @@
  * theme block resolves against — so the class and the tokens cannot disagree.
  * With this file blocked there is no override, and the OS preference is the
  * whole answer, which is the safe direction to fail.
+ *
+ * ## The exclusion is `:not(:is(.light, .light *))`, and the spelling matters
+ *
+ * It was written `:where(:not(.light), :not(.light *))` — two alternatives,
+ * each negated on its own. `:not(.light)` is satisfied by **every element that
+ * simply lacks the class**, and the overwhelming majority of the document does:
+ * so under `prefers-color-scheme: dark` the media arm applied to the entire
+ * page whatever `<html>` said, and a reader who had explicitly forced light
+ * still got every `dark:` utility.
+ *
+ * The failure is silent and it is measured. Headless Chromium reports
+ * `prefers-color-scheme: dark`, and with `semiplane_theme=light` on the cookie,
+ * `#sync-status` and every other `text-neutral-500 dark:text-neutral-400`
+ * label computed to `oklch(0.71 0.01 250)` — the *dark* step — on the light
+ * page's `#f9fafb`, which is 2.46:1. The theme override the paragraph above
+ * describes had no effect at all on the one surface it exists for, and the
+ * stylesheet agreed with itself about why: `dark:` and the base utility have
+ * the same specificity, so the later rule wins, and "later" was always `dark:`.
+ *
+ * `:is(.light, .light *)` is "self or an ancestor carries the class", and one
+ * `:not()` over the whole list is what actually excludes it. `:where()` around
+ * the lot stays, because the variant's rules must keep the base utility's
+ * specificity — that is what lets `dark:` win by order rather than by weight,
+ * which is the contract every `dark:` call site in this repository is written
+ * against.
+ *
+ * ## `dark-forced` is a third switch, and it was a no-op
+ *
+ * app.js lists it beside `dark` and `light` so that `applyTheme` *removes* it,
+ * and both `internal/web/layout.templ` and the houserules plugin's own document
+ * put it on `<html>` out of the box. On a shell page that is a pre-hydration
+ * default that app.js replaces a few milliseconds later. On a page that loads no
+ * script — and the houserules plugin deliberately loads none, which is its whole
+ * design — it is permanent, and it named a theme the stylesheet did not
+ * implement: the class was in app.js's vocabulary, in two templates and in no
+ * rule, so `color-scheme` fell through to the OS preference and the page ignored
+ * both the reader's cookie and its own class name.
+ *
+ * It is here rather than in the media arm because it is unconditional: the page
+ * says so, and a media query is not a preference. The cost is the pre-hydration
+ * frame on a shell page, which is dark for an OS-light reader until app.js
+ * resolves their stored override — one frame, and the frame the class exists to
+ * make.
  */
 @custom-variant dark {
 	@media (prefers-color-scheme: dark) {
-		&:where(:not(.light), :not(.light *)) {
+		&:where(:not(:is(.light, .light *))) {
 			@slot;
 		}
 	}
-	&:where(.dark, .dark *) {
+	&:where(.dark, .dark *, .dark-forced, .dark-forced *) {
 		@slot;
 	}
 }
 
-/* Design tokens. A ten-step neutral ramp, one accent, and two semantic colours
- * for secret state. Colour is never the only carrier of meaning, so every
+/* Design tokens. An eleven-step neutral ramp, five accent steps, and the
+ * semantic colours. Colour is never the only carrier of meaning, so every
  * secret-state style also carries an icon and a text label in the markup.
  *
  * Every colour that has a dark counterpart is written once, as
  * `light-dark(light, dark)`, which resolves against the element's computed
  * `color-scheme`. One mechanism, two switches, and no second copy of the dark
- * values to forget to update: the two rules that set `color-scheme` are the
- * only place the theme is decided. */
+ * values to forget to update: the rules that set `color-scheme` further down are
+ * the only place the theme is decided.
+ *
+ * **The two ramps are not `light-dark()` pairs, and deliberately so.** A step of
+ * a lightness ramp is asked to be a background in one theme and a foreground in
+ * the other — `bg-neutral-200 dark:bg-neutral-800` is the same lightness idea
+ * used at both ends — so inverting the ramp per theme would mean every one of
+ * those call sites double-inverting. What *is* theme-aware is the role layer
+ * above it: `--color-ink`, `--color-ink-muted`, `--color-link`, `--color-rule`,
+ * `--color-surface` and the secret-state pairs, and a component that wants "the
+ * muted ink" says so instead of naming a step and remembering the other theme's
+ * step. That is why `--color-ink-muted` exists at all when
+ * `--color-neutral-500` sits three lines above it doing nearly the same job:
+ * the ramp step cannot be legible on the page surface *and* on the tinted chips
+ * the chrome draws on it, and a role can. */
+
 @theme {
 	--color-neutral-50: oklch(0.985 0.002 250);
 	--color-neutral-100: oklch(0.967 0.003 250);
@@ -94,11 +151,14 @@
 	--color-accent-700: oklch(0.44 0.13 265);
 
 	/* A secret the viewer may not read. Always paired with a lock icon and a
-	 * text label; the colour is reinforcement, never the message. */
-	--color-secret: light-dark(oklch(0.55 0.13 25), oklch(0.72 0.14 25));
+	 * text label; the colour is reinforcement, never the message. The light
+	 * value is oklch(0.52) rather than the 0.55 it started at: 4.40:1 on
+	 * `--color-secret-soft` is a failure, and 5.00:1 is not. */
+	--color-secret: light-dark(oklch(0.52 0.13 25), oklch(0.72 0.14 25));
 	--color-secret-soft: light-dark(oklch(0.95 0.03 25), oklch(0.32 0.06 25));
-	/* A secret currently revealed to the table. */
-	--color-revealed: light-dark(oklch(0.58 0.12 150), oklch(0.74 0.13 150));
+	/* A secret currently revealed to the table. The light value is 0.50, not
+	 * 0.58: 3.56:1 on `--color-revealed-soft` was a failure. */
+	--color-revealed: light-dark(oklch(0.50 0.12 150), oklch(0.74 0.13 150));
 	--color-revealed-soft: light-dark(oklch(0.95 0.04 150), oklch(0.3 0.05 150));
 
 	/* The diff's three row tints. They are their own ramp and not the secret
@@ -138,6 +198,31 @@
 	 * 16.9:1 light and 15.2:1 dark: the ramp's soft end is a background, not
 	 * a text colour. */
 	--color-ink: light-dark(oklch(0.19 0.011 250), oklch(0.967 0.003 250));
+
+	/* Secondary ink: a caption, a count, a timestamp, anything that is not the
+	 * body but has to be read rather than skipped. It is its own token and not
+	 * a step of the neutral ramp because the ramp cannot answer the question —
+	 * the same step is asked to be legible on the page surface AND on the
+	 * tinted chips the chrome draws on top of it, and those two surfaces are a
+	 * different lightness apart. 7.4:1 on the page and 6.1:1 on the chip in
+	 * light; 7.8:1 and 6.0:1 in dark. */
+	--color-ink-muted: light-dark(oklch(0.44 0.013 250), oklch(0.71 0.01 250));
+
+	/* A link inside prose. Its own token rather than the accent ramp, and the
+	 * reason is a collision of roles: `accent-600` is the fill of a button
+	 * whose label is white (5.4:1), which is the same step a reader reads as
+	 * link text. A step that clears 4.5:1 as text on the dark surface does not
+	 * clear it as a fill under white — the two want opposite ends of the ramp —
+	 * so a link gets a token and the ramp keeps its job. 5.2:1 light, 8.0:1
+	 * dark, and 6.2:1 on the inline-code tint a link can sit inside. */
+	--color-link: light-dark(oklch(0.53 0.15 265), oklch(0.72 0.12 265));
+	--color-link-hover: light-dark(oklch(0.44 0.13 265), oklch(0.82 0.09 265));
+
+	/* A form field's placeholder. Tailwind's preflight derives it from the
+	 * field's own ink at 50% opacity, which is 3.5:1 on a white field and
+	 * therefore a WCAG 1.4.3 failure — the text is still text, and the hint a
+	 * reader types over is text they have to read first. 7.8:1 and 7.2:1. */
+	--color-placeholder: light-dark(oklch(0.44 0.013 250), oklch(0.71 0.01 250));
 
 	/* The focus ring, at 5:1 on the light surface and 9:1 on the dark one.
 	 * WCAG 1.4.11 wants 3:1 for a focus indicator and the ring is the only one
@@ -183,6 +268,16 @@
 		color: var(--color-ink);
 	}
 
+	/* A form field's placeholder is text the reader has to read before they
+	 * can type over it, and Tailwind's preflight derives its colour from the
+	 * field's own ink at 50% opacity — 3.5:1 on a white field, which fails
+	 * WCAG 1.4.3 like any other text. It is set from a token rather than per
+	 * field because the preflight's value is inherited from whatever ink the
+	 * field happens to have, and the two fields this shell renders differ. */
+	::placeholder {
+		color: var(--color-placeholder);
+	}
+
 	/* Every transition in the app is disabled for a reader who asked for
 	 * reduced motion, not just the ones we remembered. This is the global
 	 * counterpart to `motion-reduce:transition-none`, which a component can
@@ -218,17 +313,24 @@
 	}
 }
 
-/* The two dark switches. Everything else in this file reads the theme out of
- * `color-scheme`, so these two rules are the whole manual-override
- * mechanism, and `!important` is not needed: they are unlayered, which beats
- * every layer regardless of specificity. */
+/* The dark switches. Everything else in this file reads the theme out of
+ * `color-scheme`, so these rules are the whole manual-override mechanism, and
+ * `!important` is not needed: they are unlayered, which beats every layer
+ * regardless of specificity.
+ *
+ * They name the same three classes as `@custom-variant dark` above, and that is
+ * load-bearing rather than decorative. `color-scheme` decides the light half of
+ * every `light-dark()` token while the variant decides which half of every
+ * `dark:` utility applies, so a class named in one and not the other produces a
+ * page whose tokens say light and whose utilities say dark — which is what
+ * `.dark-forced` did, and what this walk found a plugin page doing. */
 @media (prefers-color-scheme: dark) {
 	:root:where(:not(.light)) {
 		color-scheme: dark;
 	}
 }
 
-:root:where(.dark) {
+:root:where(.dark, .dark-forced) {
 	color-scheme: dark;
 }
 
@@ -271,7 +373,12 @@
 	}
 
 	.prose-vtt a {
-		@apply text-accent-600 underline underline-offset-2 hover:text-accent-500;
+		@apply underline underline-offset-2;
+		color: var(--color-link);
+	}
+
+	.prose-vtt a:hover {
+		color: var(--color-link-hover);
 	}
 
 	.prose-vtt ul {
@@ -398,6 +505,22 @@
 	.table td {
 		@apply border px-2 py-1 align-top;
 		border-color: var(--color-prose-rule);
+	}
+
+	/* A badge is a count or a status on a tinted chip, and the chip is the
+	 * caller's: the padding and the roundness differ from badge to badge and so
+	 * stay in the `tone` string. The INK is not per-caller and was not written
+	 * at all — `.badge` had no rule here, which is the second instance of the
+	 * footgun AGENTS.md §11 records for `.card`, and its cost was measurable:
+	 * with no rule, a badge took the ink of whichever heading it happened to
+	 * sit under, and on `bg-neutral-200` that is `--color-neutral-500` at
+	 * 3.83:1, a WCAG 1.4.3 failure in nine of the ten places the class is
+	 * used. A `text-*` utility in a caller's tone still wins — the utilities
+	 * layer beats this one — so `text-white` on the accent badges is
+	 * untouched.
+	 */
+	.badge {
+		color: var(--color-ink-muted);
 	}
 
 	/* A card is a titled box in a column, and the Card component's own contract

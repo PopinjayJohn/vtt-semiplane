@@ -457,12 +457,17 @@ which fails on a lock with an extra attribute as firmly as on an extra word.
   gets a `pages` row**, so the campaign-status panel renders a secret-only
   attachment's *filename* on a player's page. The bytes are not served and the
   name is metadata, but it is a disclosure the plan does not make — see
-  [Divergences](#divergences-from-the-plan), and the test that will fire when it
-  is closed.
+  [Divergences](#divergences-from-the-plan). It is **asserted as the behaviour
+  that is there**, not as the absence of the disclosure:
+  `TestThePagePointsAtTheAttachmentItServes` fails the day the indexer stops
+  writing a page row for a file, and its failure message says to delete the
+  assertion and assert the absence instead. A green test at that line is
+  therefore not evidence that the name stopped leaking.
   Separately, the page has to *point at* the route that serves the file:
-  `TestThePagePointsAtTheAttachmentItServes` reads the `src` off the rendered
-  page and follows that, because a test that requests the route directly proves
-  the handler works and not that anything in the app points at it.
+  `TestThePagePointsAtTheAttachmentItServes` also reads the `src` off the
+  rendered page and follows that, because a test that requests the route
+  directly proves the handler works and not that anything in the app points at
+  it.
 - **The editor and the redacted sentinel.** The sentinel grammar
   `‹s:<id>:<bodyLen>:<bodySHA256first8>›`, its byte-splice save, and the
   position-matching that makes a forged or stale token a refusal rather than a
@@ -501,9 +506,12 @@ a rule is not in this table, nothing enforces it.
 | Nothing shells out except the composition root | `TestNoProcessExecution` | same |
 | A plugin id appears only in the registry | `TestNoPluginSwitchInCore` (skips until a plugin exists) | same |
 | The plugin import boundary | `TestPluginImportsAreWithinBoundary` | same |
+| A role is compared, switched on or looked up only in the policy | `TestNoRoleComparisonOutsidePerm`, `TestTheRoleComparisonScannerFires` | same |
+| The bundled campaign is bytes, and only the composition root writes it — never over a file that is there, never through a symlink out of the vault | `TestSampleExtractDoesNotClobber`, `TestThatTheExtractionRefusesToWriteThroughASymlinkedCampaignRoot` | [`internal/app/sample_test.go`](../internal/app/sample_test.go), [ADR-0005](ADR-0005-sample-is-bytes-extraction-is-in-app.md) |
 | The dependency order holds | `TestDependencyDirection`, `TestPackageListIsComplete` | same |
 | The policy answers the whole matrix | `TestAuthorizationMatrix` | [`internal/authz/policy_test.go`](../internal/authz/policy_test.go) |
 | The router answers the whole matrix | `TestAuthorizationMatrix`, `TestTheMatrixCoversEveryRoute` | [`internal/httpapi/matrix_test.go`](../internal/httpapi/matrix_test.go) |
+| A page cannot be hidden — content hides through a `visibility=` fence in a body, and no frontmatter key does it | `TestTheIndexShipsOneSectionAndSaysWhy` | [`internal/systems/houserules/houserules_test.go`](../internal/systems/houserules/houserules_test.go), [ADR-0006](ADR-0006-fences-not-frontmatter.md) |
 | A page owner may not read a `dm` secret on their own page | `TestAWriterMayNotReadADMSecret`, `TestAPageOwnerMayNotRevealADMSecret` | same |
 | A page owner **does** read another author's `private` secret on a page they own | `TestAWriterMayNotReadADMSecret`, `authz.TestCanReadSecretOverTheWholeMatrix`, `store.TestPredicateMatrixAgrees` | same, [`../internal/authz/authz_test.go`](../internal/authz/authz_test.go) |
 | The page-scoped write gate is made with the page's real ownership, not a zero `Resource` | `TestThePageScopedWriteGateIsARefusalAndNotADecoration` | [`internal/httpapi/pageedit_internal_test.go`](../internal/httpapi/pageedit_internal_test.go) |
@@ -542,9 +550,10 @@ a rule is not in this table, nothing enforces it.
 | The last admin cannot be demoted or disabled | `TestTheLastAdminCannotBeDemotedOrDisabled` | [`internal/authz/policy_test.go`](../internal/authz/policy_test.go) |
 | An unknown permission fails closed | `TestUnknownPermissionFailsClosed` | same |
 | CSRF is required on every non-GET route, derived from the route table | `TestCSRFRequiredOnAllMutations` | [`internal/httpapi/csrf_test.go`](../internal/httpapi/csrf_test.go) |
+| A mounted plugin sub-router gates CSRF by the method of each request, so a read is not turned into a refusal | `TestAMountedPluginRouteGatesCSRFByTheMethodOfEachRequest` | [`internal/httpapi/pluginmount_test.go`](../internal/httpapi/pluginmount_test.go) |
 | The middleware chain is in the documented order and sets the security headers | `TestTheMiddlewareChainIsInOrder` | same |
 | Rate limits: 10 logins/min, a lower search budget, a general budget; dev mode disables them | `TestRateLimitRefusesTheEleventhLoginInAMinute`, `TestTheSearchBudgetIsLowerThanTheGeneralOne` | same |
-| There is no rendered-page cache | `TestNoRenderedPageCache` | same |
+| There is no rendered-page cache | `TestNoRenderedPageCache` | same, [ADR-0003](ADR-0003-no-rendered-page-cache.md) |
 | Every asset comes from the binary; no remote origin in any rendered page | `TestAssetsAreServedFromTheBinary`, `TestNoRemoteAssetReference` | [`internal/httpapi/render_test.go`](../internal/httpapi/render_test.go) |
 | No asset mirror outside the committed set | `TestThereIsNoAssetMirror`, `TestAssetsAreTheCommittedFiles` | [`internal/web/assets_test.go`](../internal/web/assets_test.go) |
 | `templ.Raw` has exactly two call sites, both in one file | `TestOnlyThisPackageMarksHTMLRaw` | [`internal/httpapi/tripwire_test.go`](../internal/httpapi/tripwire_test.go) |
@@ -559,16 +568,22 @@ a rule is not in this table, nothing enforces it.
 | A parse problem carries an id, never the content | `TestProblemErrorCarriesTheIdNotTheContent` | [`internal/md/span_test.go`](../internal/md/span_test.go) |
 | A secret's `String` carries no body | `TestSecretStringCarriesNoBody` | [`internal/secrets/fence_test.go`](../internal/secrets/fence_test.go) |
 
-**One rule in the plan that still has no test.** The plan names
-`TestOnlyPermMiddlewareIsConsulted`, a grep for `Role ==` in the handler
-packages. It does not exist. A `Role ==` comparison does happen in exactly two
-places — `Principal.IsDM` and `Principal.IsAdmin` in
-[`../internal/authz/principal.go`](../internal/authz/principal.go) — and the
-route table's `Perm` column is the only place a route is gated
-([`../internal/httpapi/routes.go`](../internal/httpapi/routes.go)), so the rule
-holds today by construction rather than by enforcement. The two companion rules
-the plan also named, `TestNoOutboundNetwork` and `TestNoProcessExecution`, are
-now in `internal/architecture_test.go`; the first greps for client-side
+**The plan's name for the role rule is not the name in the tree; the rule is
+enforced now.** The plan calls the grep `TestOnlyPermMiddlewareIsConsulted`, and
+no test answers to that name. What the code has is
+`TestNoRoleComparisonOutsidePerm` in
+[`../internal/architecture_test.go`](../internal/architecture_test.go): a scan of
+the syntax tree for a comparison, a switch or a lookup keyed by a role, anywhere
+outside `internal/authz`, carrying a 21-case self-test and two vacuity guards.
+`internal/authz` is exempt because it owns the `Role` type and the policy table,
+so its comparisons are the rule rather than a copy of it; the exemption list is
+one entry long and its length is a test. The gate refused one real violation
+when it was written — a switch on a role in `httpapi` — and the fix was to move
+the table it held into
+[`../internal/authz/vocabulary.go`](../internal/authz/vocabulary.go) rather than
+to widen the exemption.
+The two companion rules the plan also named, `TestNoOutboundNetwork` and
+`TestNoProcessExecution`, are in the same file; the first greps for client-side
 capability (`http.Get`, `http.Client{`, `net.Dial`, `"net/smtp"`, …) rather than
 for the `net/http` import, because a server legitimately imports it and a
 background goroutine dialling home would never appear in a rendered page.
@@ -681,7 +696,16 @@ is a claim about the future.
   vault-wide form has no per-page authorization question to ask, so it would be
   a copy of the plaintext on disk. The argument is at the top of
   [`../internal/httpapi/export.go`](../internal/httpapi/export.go).
-- **The a11y and end-to-end gates**, and the CI jobs beyond the Go suite.
+- **An `e2e` job.** The accessibility, benchmark and load jobs exist
+  ([`.github/workflows/quality.yml`](../.github/workflows/quality.yml)), and the
+  build and release workflows beside them exist too; a browser end-to-end
+  harness is the one that does not, and the reason is in that file's header.
+  The accessibility gate is a ratchet against `.pa11y-baseline`, and
+  **the count it records is not zero**: the markdown renderer emits no `id` on a
+  content heading, so every on-this-page link in a table of contents addresses
+  an anchor that does not exist. That is a fix in `internal/md` — the slug
+  counter has to be shared between extraction and rendering — and not something
+  the gate can be tuned out of.
 
 ## Divergences from the plan
 
