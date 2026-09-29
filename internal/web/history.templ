@@ -1,0 +1,276 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
+)
+
+// History is a page's revision list.
+//
+// Every revision is listed, including the ones this principal may not be able
+// to open. That is the whole decision on this page and it goes the way it does
+// because a list that is shorter for a player than for a DM is a list whose
+// length is a function of what the reader may see: a row that is not shown is
+// a revision nobody can know ever existed, and a revision that existed and
+// cannot be read is a fact about the past rather than about the present. The
+// count in the heading is the handler's own, so the number over the list and
+// the list cannot disagree.
+//
+// There is no link to the editor here, deliberately. The editor's route answers
+// a session and then a page-scoped write, and a player who may read this page
+// can be refused by both — so a link to it would be a control that answers
+// 403, which AGENTS.md §7 calls a bug rather than a cosmetic one. The view
+// model carries no "may write" fact to gate it on, and one invented here from
+// the principal would be a second authorization decision in a template.
+templ History(v httpapi.HistoryView) {
+	<section aria-labelledby="history-heading">
+		<h1 id="history-heading" data-focus-target class="text-2xl font-semibold tracking-tight">
+			History of { v.Card.Title }
+		</h1>
+		<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+			<code>{ v.Card.Path }</code>
+			<span aria-hidden="true">·</span>
+			<span>{ itoa(v.Total) } { plural(v.Total, "revision", "revisions") }</span>
+		</p>
+		<nav aria-label="This page" class="mt-3 flex flex-wrap items-center gap-2">
+			<a href={ v.PageHref } class="btn">
+				@Icon("i-book", "h-4 w-4")
+				<span>Read the page</span>
+			</a>
+		</nav>
+		@historyNotice(v)
+		@historyRows(v.Revisions, v.CSRF)
+	</section>
+}
+
+// historyNotice is the truncation line, and only that.
+//
+// A panel that says "50 revisions" over 50 rows has said everything; a panel
+// that says 50 over the 50 most recent of 400 has said something the reader
+// cannot work out from the page, and the number of rows that are not here is
+// the smallest honest version of it.
+templ historyNotice(v httpapi.HistoryView) {
+	if v.Truncated {
+		<p class="mt-4 text-sm text-neutral-600 dark:text-neutral-300">
+			Showing the { itoa(len(v.Revisions)) } most recent of { itoa(v.Total) }. The rest
+			are not listed here.
+		</p>
+	}
+}
+
+templ historyRows(revisions []httpapi.RevisionRow, csrf string) {
+	if len(revisions) == 0 {
+		<div class="mt-4">
+			@EmptyState("No revisions yet", noRevisionsYet())
+		</div>
+	} else {
+		<div class="mt-4 overflow-x-auto">
+			<table class="table">
+				<caption class="sr-only">
+					Every revision of this page, newest first, with the change that recorded it
+				</caption>
+				<thead>
+					<tr>
+						<th scope="col">Recorded</th>
+						<th scope="col">By</th>
+						<th scope="col">Revision</th>
+						<th scope="col">Put it back</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range revisions {
+						@historyRow(row, csrf)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// noRevisionsYet explains an empty list.
+//
+// A vault is a folder of files that anybody can edit with anything, so an empty
+// history is the normal state of a page nobody has saved through the app, and
+// saying that is different from saying the page is new.
+templ noRevisionsYet() {
+	<p>
+		Nothing has been written through the app since this page was indexed. A revision is
+		recorded when the app writes the file, so a change made in another editor does not
+		appear here.
+	</p>
+}
+
+// historyRow is one revision.
+//
+// The link is rendered whether or not the row's own Visible flag says this
+// principal can open it, and the reason is that the flag is an approximation
+// documented as one: a row marked true can still refuse to open and a row
+// marked false can still open, because the single-revision read re-decides from
+// the revision's own bytes. Rendering the flag would put a claim on the page
+// that the row itself says it cannot make — including on the rows it gets
+// wrong — and dropping the link would remove the one way to find out. So the row
+// is listed, the link is offered, and nothing here predicts which will happen.
+//
+// The revert is a form and not a link, because a revert is a write and the
+// server authorizes it as one: the edit permission, with the page's real
+// ownership, is the gate. This template has no such fact to ask about, so it
+// offers the control to everybody who can read the list and lets the server
+// answer — which is the same thing it does with every other write.
+templ historyRow(row httpapi.RevisionRow, csrf string) {
+	<tr data-revision={ strconv.FormatInt(row.ID, 10) }>
+		<td class="whitespace-nowrap">
+			<time datetime={ row.At.UTC().Format("2006-01-02T15:04:05Z07:00") }>
+				{ row.At.UTC().Format("2006-01-02 15:04") } UTC
+			</time>
+		</td>
+		<td>{ revisionCause(row.Source, row.Author, row.External) }</td>
+		<td>
+			<a href={ row.Href } class="font-medium hover:underline">Open</a>
+		</td>
+		<td>
+			<form method="post" action={ row.RevertHref } class="contents">
+				@CSRFInput(csrf)
+				<button type="submit" class="btn">Revert to this</button>
+			</form>
+		</td>
+	</tr>
+}
+
+// revisionCause is who or what produced a revision, as one phrase.
+// The two callers hold the same fact in two shapes: a history row carries an
+// External flag, and a single revision carries an Author that is empty when the
+// row was external. This is where both become one sentence, and where an empty
+// author is named as what it is — a change made outside the app, by nobody in
+// particular — rather than as a blank cell or as the word "nobody", which is a
+// person-shaped answer to a question about a file.
+func revisionCause(source, author string, external bool) string {
+	if external || author == "" {
+		return "changed outside the app"
+	}
+	switch source {
+	case string(store.RevisionCreate):
+		return "created by " + author
+	case string(store.RevisionDelete):
+		return "deleted by " + author
+	default:
+		return "changed by " + author
+	}
+}
+
+// Revision is one revision, and the comparison against the page as it is now.
+//
+// Two decisions, and they are not the same decision, which is the whole reason
+// this view model carries Comparable separately from Content.
+//
+// The content is the revision's own bytes, and the handler has already
+// re-segmented and re-authorized them: a revision holding a body this principal
+// may not read is answered 404 before a view model exists at all, so a
+// Content that arrived here is authorized. Rendering it is not a fresh
+// decision; withholding it would be one, and it would be the wrong one — a
+// reader who may read the revision is refused their own history because of
+// something in the *current* file they never asked about.
+//
+// The comparison is the other side of the same question, and it is the one
+// §8.10 is about: the left column is the page as it is now, the only way to make
+// that safe to show is to redact it, and the redaction marker carries a hidden
+// body's length and a digest of it. So Comparable gates the hunks and only the
+// hunks, and DiffOpaque carries whichever of the two reasons applies. The narrow
+// direction to be wrong in is closed: a principal who may not read everything the
+// page holds now loses a comparison, and never gains a diff with a secret's size
+// in it.
+templ Revision(v httpapi.RevisionView) {
+	<section aria-labelledby="revision-heading">
+		<h1 id="revision-heading" data-focus-target class="text-2xl font-semibold tracking-tight">
+			Revision of { v.Card.Title }
+		</h1>
+		<p class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+			<code>{ v.Card.Path }</code>
+			<span aria-hidden="true">·</span>
+			<time datetime={ v.At.UTC().Format("2006-01-02T15:04:05Z07:00") }>
+				{ v.At.UTC().Format("2006-01-02 15:04") } UTC
+			</time>
+			<span aria-hidden="true">·</span>
+			<span>{ revisionCause(v.Source, v.Author, v.Author == "") }</span>
+		</p>
+		<nav aria-label="This page" class="mt-3 flex flex-wrap items-center gap-2">
+			<a href={ v.PageHref } class="btn">
+				@Icon("i-book", "h-4 w-4")
+				<span>Read the page</span>
+			</a>
+			<a href={ v.HistoryHref } class="btn">
+				@Icon("i-list", "h-4 w-4")
+				<span>All revisions</span>
+			</a>
+		</nav>
+		@revisionBody(v)
+	</section>
+}
+
+templ revisionBody(v httpapi.RevisionView) {
+	@revisionText(v.Content)
+	if v.Comparable {
+		@revisionComparison(v.Hunks)
+	} else {
+		@Callout(
+			"border-neutral-300 bg-neutral-100 text-neutral-800 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200",
+			"No comparison is offered",
+			Text(revisionReason(v.DiffOpaque)),
+		)
+	}
+}
+
+// revisionReason is DiffOpaque, or a neutral sentence for a view model that
+// carries neither a comparison nor a reason.
+//
+// The fallback is not defensive noise: this branch is the only thing standing
+// between a comparison and a reader, and a view model that reached it with no
+// reason must not be answered with a diff of the current file.
+func revisionReason(opaque string) string {
+	if opaque != "" {
+		return opaque
+	}
+	return "This revision is not compared with the page as it is now."
+}
+
+// revisionText is the file as it was, as preformatted text.
+//
+// Preformatted and escaped, and not rendered Markdown: this is the source, and
+// the page it was read from is one click away.
+templ revisionText(content string) {
+	<section aria-labelledby="revision-text-heading" class="mt-6">
+		<h2 id="revision-text-heading" class="card-heading">The file as it was</h2>
+		<pre class="source">{ content }</pre>
+	</section>
+}
+
+templ revisionComparison(hunks []httpapi.DiffHunk) {
+	if len(hunks) > 0 {
+		<section aria-labelledby="revision-diff-heading" class="mt-6">
+			<h2 id="revision-diff-heading" class="card-heading">Against the page as it is now</h2>
+			<div class="mt-2 space-y-4">
+				for i, hunk := range hunks {
+					@revisionHunk(i, len(hunks), hunk)
+				}
+			</div>
+		</section>
+	}
+}
+
+// revisionHunk is one hunk of a revision's comparison, with nothing to choose.
+//
+// It is the same component the conflict page uses, minus the select: a
+// comparison against the present is something a reader reads, and the only
+// "put it back" is the revert on the history panel, which the server
+// authorizes as an edit and which this page has no permission fact to offer.
+templ revisionHunk(index, total int, hunk httpapi.DiffHunk) {
+	<section aria-labelledby={ revisionHunkID(index) }>
+		<h3 id={ revisionHunkID(index) } class="card-heading">
+			{ hunkHeading(index, total, hunk, nowProse, revisionProse) }
+		</h3>
+		@diffTable(hunk, nowLabel, revisionLabel, "Every line of this change")
+	</section>
+}
+
+func revisionHunkID(index int) string { return "revision-hunk-" + strconv.Itoa(index) }

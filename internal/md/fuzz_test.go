@@ -2,6 +2,7 @@ package md
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -81,6 +82,38 @@ func FuzzNeverCorrupt(f *testing.F) {
 		if !bytes.Equal(text, d.PublicBody()) || len(spans) != len(d.PublicSpans()) {
 			t.Fatal("PublicBodyOffsets does not agree with PublicBody")
 		}
+
+		// The redacted round trip, which is the invariant most likely to be
+		// broken by a shape no fixture has: a body whose content is empty, a
+		// body that is only newlines, a fence with no closing fence, a fence
+		// inside a quote, a body that is a line of backticks. Redacting every
+		// secret and splicing the buffer back must return the input bytes.
+		hidden := map[string]bool{}
+		for _, s := range d.SecretSpans() {
+			if !validSecretID(s.SecretID) {
+				continue
+			}
+			hidden[s.SecretID] = true
+		}
+		if len(hidden) == 0 {
+			return
+		}
+		buffer := Redact(d, hidden)
+		out, problems, err := Splice(d, buffer, hidden)
+		if err != nil {
+			// Two fences claiming one id is the only way a splice cannot be
+			// reasoned about, and refusing it is the answer.
+			if !errors.Is(err, ErrDuplicateSecretID) {
+				t.Fatalf("Splice: %v", err)
+			}
+			return
+		}
+		if len(problems) > 0 {
+			t.Fatalf("a redacted round trip of %q reported %d problems: %v", src, len(problems), problems)
+		}
+		if !bytes.Equal(out, src) {
+			t.Fatalf("the redacted round trip of %q changed the file: %s", src, firstDifference(src, out))
+		}
 	})
 }
 
@@ -149,10 +182,34 @@ func FuzzMalformedMarkdown(f *testing.F) {
 		if _, err := r.Render(d.PublicBody()); err != nil {
 			t.Fatalf("render: %v", err)
 		}
-		if _, problems := Extract(d, r); len(problems) > len(d.Problems)+1 {
+		facts, problems := Extract(d, r)
+		if len(problems) > len(d.Problems)+1 {
 			t.Fatalf("extract reported %d problems for a document parsed with %d",
 				len(problems), len(d.Problems))
 		}
+
+		// Every byte-level path the editor and the updater use, over bytes no
+		// author would type. None of them may panic or hang: they are handed a
+		// buffer and a set of offsets and they index into both.
+		hidden := map[string]bool{}
+		for _, s := range d.SecretSpans() {
+			ParseSentinel(SecretBody(d.Bytes, s))
+			hidden[s.SecretID] = true
+		}
+		buffer := Redact(d, hidden)
+		if out, _, err := Splice(d, buffer, hidden); err == nil && !bytes.Equal(out, src) {
+			t.Fatalf("the redacted round trip changed the file: %s", firstDifference(src, out))
+		}
+		if _, _, err := Splice(nil, buffer, hidden); !errors.Is(err, ErrNoDocument) {
+			t.Fatalf("Splice(nil) = %v, want ErrNoDocument", err)
+		}
+		_, _ = RewriteLinks(d, []LinkEdit{
+			{Offset: -1, Length: 1, Want: "x", With: "y"},
+			{Offset: len(d.Bytes) + 1, Length: 1, Want: "x", With: "y"},
+			{Offset: 0, Length: len(d.Bytes) + 100, Want: "x", With: "y"},
+			{Offset: 0, Length: 0, Want: "", With: "y"},
+		})
+		_ = LinkEdits(d, facts, "x", "y")
 	})
 }
 

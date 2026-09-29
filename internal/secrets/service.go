@@ -352,9 +352,25 @@ func (s *Service) CountPage(ctx context.Context, actor authz.Principal, pageID i
 	return store.CountVisibleSecrets(ctx, s.db.Reader(), actor, pageID)
 }
 
-// Events returns a secret's audit trail, newest first. An event records that
-// something happened to a secret and never what the secret said, so this is safe
-// to render to a DM and to show nothing at all to a player.
-func (s *Service) Events(ctx context.Context, secretID string) ([]store.SecretEvent, error) {
+// EventsFor returns a secret's audit trail for a principal who may see it, newest
+// first.
+//
+// It exists because Events did not take a principal and had no permission behind
+// it, which AGENTS.md §6a records as a live gap: a route mounted for it would
+// have inherited no gate, because the authorisation is this package's job and a
+// route that does not ask cannot be granted one. The gate is PermAuditSecrets,
+// which exists for exactly this and is not PermDM: the trail is a separable
+// capability, and naming the permission after what it grants is what keeps the
+// next route from reusing the wrong one.
+//
+// The check comes before the lookup, for SetVisibility's reason: a principal who
+// may not see the trail gets the same answer for every id, and cannot use the
+// time it takes to say so as an oracle for which ids exist. There is no resource
+// check after it because a DM reads every secret — that is the definition of the
+// role — so asking again would refuse nobody and cost a lookup per call.
+func (s *Service) EventsFor(ctx context.Context, actor authz.Principal, secretID string) ([]store.SecretEvent, error) {
+	if err := s.policy.Check(actor, authz.PermAuditSecrets, authz.Resource{}); err != nil {
+		return nil, err
+	}
 	return store.ListSecretEventsBySecret(ctx, s.db.Reader(), secretID)
 }

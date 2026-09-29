@@ -30,10 +30,19 @@ type Route struct {
 	// checked for a CSRF token, which is why the table is the source of that
 	// list rather than a separate one.
 	Method string
-	// Pattern is the chi route pattern. A trailing /* is chi's catch-all and its
-	// value is read with chi.URLParam(r, "*"); the named form, /p/{path...}, is
-	// not what chi v5 implements and yields an empty value, which would make
-	// every page 404 for a reason no test would name.
+	// Pattern is the row's address, and it is both what a reader types and what
+	// a failing subtest prints: "/p/*/raw" is the URL the raw view lives at.
+	//
+	// It is not always the pattern handed to chi. A trailing /* is chi's
+	// catch-all and its value is read with chi.URLParam(r, "*"); the named
+	// form, /p/{path...}, is not what chi v5 implements and yields an empty
+	// value, which would make every page 404 for a reason no test would name.
+	// A /* in the *middle* cannot be mounted at all — see pagedispatch.go for
+	// the measurement — so the segments after it are the template that tells
+	// this row apart from its siblings on the one shared catch-all. That is
+	// the whole of the difference, and it is derived from Pattern by
+	// mountPattern and selectTemplate rather than stated again in a field, so
+	// the table cannot hold two addresses for one route.
 	Pattern string
 	// Perm is the permission the policy is asked about, or PermNone.
 	Perm authz.Permission
@@ -70,6 +79,75 @@ func (s *Server) Routes() []Route {
 		{Method: http.MethodGet, Pattern: "/", Perm: authz.PermAnonRead, Handle: s.home},
 
 		{Method: http.MethodGet, Pattern: "/p/*", Perm: authz.PermReadPage, Handle: s.page},
+
+		// The page-scoped surfaces. Every one of them shares the /p/* catch-all
+		// with the page row and with each other, and each is one row here with
+		// its own permission, its own CSRF treatment and its own handler;
+		// pagedispatch.go holds the measurement that forces the shape and the
+		// tie-break that makes it unambiguous.
+		//
+		// They are in one block because they are one idea, and a row added
+		// somewhere else in the table is a row a reader will not connect to the
+		// catch-all it is hung off.
+		//
+		// raw is a text/plain response rather than a view, for the reason in
+		// pageraw.go: the answer is a file, and a file rendered as HTML is
+		// either escaped into uselessness or raw, and raw is not available.
+		{Method: http.MethodGet, Pattern: "/p/*/raw", Perm: authz.PermReadPage, Handle: s.rawPage},
+		// The editor and the revert are the two writes.
+		//
+		// The Perm column is PermSession, not PermWritePage, and that is a
+		// deliberate reading of the table's own contract rather than a weaker
+		// gate. permit() asks the policy with a zero Resource, so a PermWritePage
+		// column is answered "is this a DM" and its ownership arm is unreachable;
+		// the real, page-scoped decision — which carries this page's ownership —
+		// is the one mayWritePage makes inside the handler, and it is the check
+		// the secrets service makes before it writes. Gating on the coarse one
+		// as well would make the redacted editor unreachable over HTTP: §8.9
+		// exists so a player may edit the public parts of a page a DM has put a
+		// secret on, and a DM-only column answers 403 to exactly that player
+		// before the handler runs.
+		//
+		// The coarse gate therefore stays where it can do work, on the surfaces
+		// that are genuinely campaign-wide, and the per-page decision is made
+		// once, in one function, where the page row is already loaded.
+		{Method: http.MethodGet, Pattern: "/p/*/edit", Perm: authz.PermSession, Handle: s.editForm},
+		{Method: http.MethodPost, Pattern: "/p/*/edit", Perm: authz.PermSession, Handle: s.editSubmit},
+		// History and one revision are reads, re-authorised at read time: a
+		// revision recorded before a revoke is refused after it. The revert is
+		// a write and is authorized as an edit, not as a read of the revision.
+		{Method: http.MethodGet, Pattern: "/p/*/history", Perm: authz.PermReadPage, Handle: s.historyPage},
+		{Method: http.MethodGet, Pattern: "/p/*/revisions/{revID}", Perm: authz.PermReadPage, Handle: s.revisionPage},
+		{Method: http.MethodPost, Pattern: "/p/*/revert/{revID}", Perm: authz.PermSession, Handle: s.revertPage},
+		// §8.8's serve path. The name is {name...} and not {name} because an
+		// attachment's recorded path is vault-relative and may sit in a
+		// subdirectory; {name} binds one segment and would refuse to serve
+		// every file under assets/.
+		{Method: http.MethodGet, Pattern: "/p/*/attachment/{name...}", Perm: authz.PermReadPage, Handle: s.attachment},
+
+		// The broken-links panel. PermReadPage rather than PermAnonRead, so an
+		// unauthenticated reader with anonymous read off is sent to the login
+		// form: a panel that lists where the campaign refers to itself is
+		// content, and the list is filtered by the same predicate a page render
+		// is.
+		{Method: http.MethodGet, Pattern: "/broken", Perm: authz.PermReadPage, Handle: s.brokenLinksPage},
+
+		// Renaming a page and the opt-in bulk link updater (§5.6), on the same
+		// two-layer gate as the editor: PermSession here, the page-scoped
+		// PermWritePage inside the handler by mayWritePage.
+		//
+		// The rename is the only one of the three that moves a file, and it does
+		// not touch a single referring page: it returns a pointer to the updater
+		// rather than running it, because rewriting twelve links in somebody
+		// else's prose is the reader's decision and not the app's.
+		{Method: http.MethodPost, Pattern: "/api/pages/{id}/rename", Perm: authz.PermSession, Handle: s.renamePage},
+		// The preview is a read of the same decision, and it is where the
+		// per-page permission is checked, so a reader is never told twelve links
+		// will update when only four can.
+		{Method: http.MethodGet, Pattern: "/api/pages/{id}/rename-preview", Perm: authz.PermSession, Handle: s.renamePreview},
+		// The update is the confirmed write. confirmed=true is required: without
+		// it the route answers 400 and touches nothing.
+		{Method: http.MethodPost, Pattern: "/api/pages/{id}/update-links", Perm: authz.PermSession, Handle: s.updateLinks},
 
 		{Method: http.MethodGet, Pattern: "/login", Perm: PermNone, Handle: s.loginForm},
 		{Method: http.MethodPost, Pattern: "/login", Perm: PermNone, Handle: s.loginSubmit},
@@ -152,26 +230,33 @@ func (s *Server) Routes() []Route {
 // gating one would mean every page load needed a token the browser had not
 // fetched yet, and the failure would be a blank page rather than a refused
 // write.
+//
+// The loop is over *groups* rather than over rows, because several rows mount
+// on one chi pattern and chi silently overwrites a handler registered twice for
+// the same method and pattern. A group of one row that owns its pattern is
+// mounted as before; anything sharing a catch-all gets the dispatcher, which
+// picks the row and then runs that row's own gates — so the table's per-row
+// permissions and CSRF treatment still apply to the row that was actually
+// selected, which is the property the matrix is derived from.
 func (s *Server) router() http.Handler {
 	r := chi.NewRouter()
-	for _, rt := range s.Routes() {
-		var h http.Handler = rt.Handle
-		if rt.Mutating() {
-			h = s.checkCSRF(h)
-		}
-		h = s.permit(rt)(h)
-		// context.Set keeps the matched pattern reachable from the request
-		// record without the log carrying a page path and a title in it.
-		pattern := rt.Pattern
-		inner := h
-		r.Method(rt.Method, pattern, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			inner.ServeHTTP(w, req.WithContext(withValue(req.Context(), routeKey, pattern)))
-		}))
+	for _, g := range groupsOf(s.Routes()) {
+		r.Method(g.method, g.pattern, s.groupHandler(g))
 	}
 	r.NotFound(s.notFound)
 	r.MethodNotAllowed(s.methodNotAllowed)
 	s.mountPluginRoutes(r)
 	return r
+}
+
+// groupHandler is the mounted handler for one group of table rows.
+func (s *Server) groupHandler(g mountGroup) http.Handler {
+	if len(g.rows) == 1 && g.rows[0].Pattern == g.pattern {
+		// A row that owns its pattern: nothing to tell apart, so the gates go
+		// straight on it.
+		return s.routeHandler(g.rows[0])
+	}
+	return s.catchAllHandler(g)
 }
 
 // mountPluginRoutes mounts every registered plugin's sub-router under its own

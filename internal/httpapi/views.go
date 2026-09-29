@@ -275,6 +275,17 @@ type PageView struct {
 	Shell
 	// Card identifies the page.
 	Card PageCard
+	// EditHref is where the editor for this page is, or "" when this viewer may
+	// not write it.
+	//
+	// It is empty rather than a URL nobody may follow, so that a reader who
+	// cannot edit this page is shown no control for it at all: app.js's `e` key
+	// acts on the link this field decides about, and that link's absence is the
+	// permission check. A shortcut that navigated to a refused editor would be a
+	// broken control rather than a refused one, and a client-side guess at the
+	// same question would be a second answer to it in a place with no policy to
+	// ask.
+	EditHref string
 	// Body is the rendered public body. It is HTML produced by md.Renderer and
 	// by nothing else; see web.PreRendered.
 	Body string
@@ -638,6 +649,286 @@ type InviteView struct {
 	Token string
 }
 
+// EditView is the editor: one page's buffer, the hash it was built from, and
+// the problems the file carries.
+//
+// Content is the buffer to put in the textarea and Mode says what it is. In
+// EditModeFull it is the file verbatim; in EditModeRedacted it holds one
+// restore sentinel per body in HiddenIDs and never a body. The two are a pair
+// rather than a flag a template reads on its own, because a template that
+// rendered a redacted buffer as though it were the file would put a body it
+// cannot see into a form, and a form is a place a body is submitted from.
+type EditView struct {
+	Shell
+	// Card identifies the page being edited.
+	Card PageCard
+	// Action is where the form posts. It is the page's own edit URL rather
+	// than a constant, so the form keeps working on a page whose path the
+	// router will route back to this handler.
+	Action string
+	// PageHref is the page this editor is for, so the form can offer "back to
+	// the page" without the template reconstructing a URL.
+	PageHref string
+	// RawHref is the page's raw Markdown view.
+	RawHref string
+	// HistoryHref is the page's revision list.
+	HistoryHref string
+	// Content is the buffer to edit. It is the file's true bytes only when Mode
+	// is EditModeFull.
+	Content string
+	// BaseHash is vault.HashHex of the bytes on disk when this buffer was built,
+	// and is what a submission must carry back.
+	BaseHash string
+	// Mode is "full" or "redacted": whether Content holds the file or sentinels.
+	Mode string
+	// HiddenIDs are the secret ids whose bodies Content does not carry, sorted.
+	// They are ids and nothing else — no length, no author, no digest — because
+	// a marker in an editor is a place a disclosure would be.
+	HiddenIDs []string
+	// HiddenCount is len(HiddenIDs) as a number, for the editor's own summary
+	// line. It is a convenience for the template and not a second source: it is
+	// the same slice, counted.
+	HiddenCount int
+	// Problems are the page's recoverable parse problem codes, in file order.
+	// They never carry file content.
+	Problems []string
+	// Saved reports that this response is the answer to a successful save rather
+	// than to a request for the form, so the template can say so. It is a bool
+	// and not a message: a message per outcome is a string table in a template,
+	// and the outcome is the only fact the handler knows.
+	Saved bool
+	// MayWrite is false when the route's coarse gate let the request through but
+	// the page-scoped write permission — the one that carries this page's
+	// ownership — refused it. The editor then renders read-only rather than a
+	// form whose submission would be refused.
+	MayWrite bool
+}
+
+// The editor's two modes, as the string the view model carries.
+//
+// They are strings rather than the secrets package's EditMode so that a
+// template compares against a constant it can read in one place, and so that
+// internal/httpapi's view models do not carry a type from a package whose
+// constants would be a second spelling of the same two states.
+const (
+	// EditModeFull says Content is the file verbatim.
+	EditModeFull = "full"
+	// EditModeRedacted says Content holds a sentinel in place of every body in
+	// HiddenIDs.
+	EditModeRedacted = "redacted"
+)
+
+// DiffLine is one line of a rendered diff.
+type DiffLine struct {
+	// Op is the unified-diff marker for the line: " ", "-" or "+".
+	Op string
+	// No is the 1-based line number the line has in the side it belongs to.
+	No int
+	// Text is the line's content without its terminator. It is escaped text,
+	// never markup: nothing a vault contains reaches a template unescaped.
+	Text string
+}
+
+// DiffHunk is one run of changed lines with context on both ends.
+type DiffHunk struct {
+	// FromA is the first line of the run on the left side, 1-based.
+	FromA int
+	// CountA is how many left-side lines the hunk covers, context included.
+	CountA int
+	// FromB is the first line of the run on the right side, 1-based.
+	FromB int
+	// CountB is how many right-side lines the hunk covers, context included.
+	CountB int
+	// Lines are the hunk's own lines in order, context lines included. A hunk
+	// is renderable from this slice alone, so the counts are for the header
+	// and the lines are for the body.
+	Lines []DiffLine
+}
+
+// Conflict is the two sides of a lost race, already authorized.
+//
+// Both strings are renderings this principal is entitled to read and nothing
+// else. Theirs went through the same redacted read path the page view and the
+// editor use, so a secret this principal may not read is a fixed label in it
+// and never a body and never a length. Mine is the actor's own submitted
+// buffer, echoed back: the only way a body is in it is that the actor typed it
+// or pasted it, and a save that does not echo it is a save that throws away the
+// work it refused.
+type Conflict struct {
+	// Theirs is the file as it is on disk right now, as this principal may
+	// read it.
+	Theirs string
+	// Mine is the buffer that lost the race, echoed.
+	Mine string
+	// Hunks is the line diff between the two, computed over the two authorized
+	// renderings and never over a raw file.
+	Hunks []DiffHunk
+	// BaseHash is the on-disk hash now, as hex, so the editor can be re-opened
+	// against the current bytes rather than against the ones that lost.
+	BaseHash string
+	// Reason is a fixed phrase naming what was being written: "save" or
+	// "revert". It is a closed set of two because a handler is the only thing
+	// that fills it in.
+	Reason string
+}
+
+// ConflictView is the 409 a lost optimistic-concurrency race answers with.
+//
+// It is a view and not an error page for a reason that is worth stating, because
+// every other non-2xx response in this package is the fixed errorCopy: a 409 is
+// not a refusal. The two documents on it are the current file as this principal
+// may read it and the actor's own submission, both re-derived through the
+// authorized read path, and the actor is the only reader. Nothing here is shown
+// to anybody who could not already read it, so the fixed copy has nothing to
+// add and a template with two text areas does.
+type ConflictView struct {
+	Shell
+	// Card identifies the page the race was on.
+	Card PageCard
+	// Conflict holds the two authorized renderings and the diff between them.
+	Conflict Conflict
+}
+
+// RevisionRow is one revision in a page's history list.
+//
+// It carries no content and no diff. secrets.Service.History reads metadata
+// only, and the reason is not merely economy: fifty rows of a with-content read
+// would be fifty whole files, each of which may hold secret plaintext that no
+// read-time authorization has touched yet.
+type RevisionRow struct {
+	// ID is the revision's id, and what the open and revert URLs carry.
+	ID int64
+	// At is when the revision was recorded.
+	At time.Time
+	// Source is one of the four store.RevisionSource values.
+	Source string
+	// Author is the account responsible, and empty for an external change.
+	Author string
+	// External reports that no account is responsible, so an empty Author means
+	// "nobody" rather than "the name was not shown".
+	External bool
+	// Visible is secrets' cheap answer to "can this principal open it". It is an
+	// approximation and is documented as one: a row marked true can still fail
+	// to open, and a row marked false can still open. It never gates a body —
+	// the single-revision read re-decides from the revision's own bytes.
+	Visible bool
+	// Href opens the revision.
+	Href string
+	// RevertHref restores the page to this revision. It is present on every row
+	// regardless of Visible, because a revert is authorized as an edit and the
+	// edit authorization is the gate, not this flag.
+	RevertHref string
+}
+
+// HistoryView is a page's revision list.
+type HistoryView struct {
+	Shell
+	// Card identifies the page.
+	Card PageCard
+	// Revisions are the rows, newest first, capped at the retention limit.
+	Revisions []RevisionRow
+	// Total is how many revisions the page has. It comes from the count over
+	// the identical predicate, so the badge cannot disagree with the list
+	// about anything a reader may see.
+	Total int
+	// Truncated reports that Revisions is the most recent slice of Total.
+	Truncated bool
+	// PageHref is the page these revisions belong to.
+	PageHref string
+}
+
+// RevisionView is one revision and, when it may be compared, the diff against
+// the page as it is now.
+type RevisionView struct {
+	Shell
+	// Card identifies the page.
+	Card PageCard
+	// ID is the revision's id.
+	ID int64
+	// At is when the revision was recorded.
+	At time.Time
+	// Source is one of the four store.RevisionSource values.
+	Source string
+	// Author is the account responsible, and empty for an external change.
+	Author string
+	// Content is the file as it was. It is populated only when every secret in
+	// the revision's own bytes is readable by this principal: a revision
+	// holding one body the reader may not see is not served with a placeholder,
+	// it is not served at all.
+	Content string
+	// Hunks is the line diff against the page as it is now, or nil.
+	//
+	// It is nil whenever Comparable is false, and the reason is stated in
+	// DiffOpaque: a diff is computed over two renderings, and the only way to
+	// make the current side safe to show is to redact it, and md.Redact's
+	// sentinel carries the hidden body's length and a digest of it. So the diff
+	// is offered only to a principal who can read every secret the page holds
+	// now, for whom the redaction is a no-op.
+	Hunks []DiffHunk
+	// Comparable reports whether Hunks means anything.
+	Comparable bool
+	// DiffOpaque is a fixed phrase explaining why not, or empty.
+	DiffOpaque string
+	// PageHref is the page the revision belongs to.
+	PageHref string
+	// HistoryHref is the page's revision list.
+	HistoryHref string
+}
+
+// The reasons a revision's diff is not offered.
+//
+// They are constants rather than a format string because a template should not
+// be assembling sentences, and a closed set of two means a template can switch
+// on them without a default case that hides a third.
+const (
+	// DiffOpaqueUnreadable is the reason for a principal who may not read every
+	// secret the page holds right now.
+	DiffOpaqueUnreadable = "This page holds content you may not read, so no comparison is offered."
+	// DiffOpaqueIdentical is the reason for a revision whose authorized
+	// rendering is byte-identical to the page as it is now.
+	DiffOpaqueIdentical = "This revision is the page as it is now."
+)
+
+// BrokenLinkRow is one dangling reference, as a page names it.
+type BrokenLinkRow struct {
+	// Card is the page the reference is written on.
+	Card PageCard
+	// Target is the reference as the author wrote it, which is what is
+	// dangling: a path with no extension is a page that does not exist.
+	Target string
+	// Line is the line the reference is on, 1-based.
+	Line int
+	// Kind is the reference kind, one of the store.LinkKind values.
+	Kind string
+}
+
+// BrokenLinksView is the broken-links panel: every reference in the vault that
+// does not resolve to a page.
+type BrokenLinksView struct {
+	Shell
+	// Rows are the dangling references this principal may see, in the order the
+	// identical count query produces, capped at ShownLimit.
+	Rows []BrokenLinkRow
+	// Total is how many the principal may see in total, from the count over the
+	// identical predicate. It is the badge; Rows is the list; Truncated says
+	// when the two differ because the list was capped.
+	Total int
+	// ShownLimit is the cap, carried so a template can say what the cap is
+	// rather than inventing a number.
+	ShownLimit int
+	// Truncated reports that Rows is the first ShownLimit of Total.
+	Truncated bool
+}
+
+// ShownLimit is how many broken links the panel renders.
+//
+// The count is unbounded in the store, and a campaign that has just been
+// restructured can hold tens of thousands of them. The panel is a diagnostic
+// surface, not an export: a reader who needs the rest has the files, and a
+// response that grows without bound is a denial-of-service lever a single GET
+// can pull.
+const ShownLimit = 200
+
 // ErrorView is the one shape every non-2xx response uses.
 //
 // It carries a status, a heading and a detail, and nothing that varies per
@@ -667,6 +958,11 @@ func (v AdminPluginsView) isView() {}
 func (v LoginView) isView()        {}
 func (v SetupView) isView()        {}
 func (v InviteView) isView()       {}
+func (v EditView) isView()         {}
+func (v HistoryView) isView()      {}
+func (v RevisionView) isView()     {}
+func (v BrokenLinksView) isView()  {}
+func (v ConflictView) isView()     {}
 func (v ErrorView) isView()        {}
 
 // The ViewShell methods hand the layout's half of each model back through the
@@ -709,6 +1005,21 @@ func (v SetupView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the InviteView.
 func (v InviteView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the EditView.
+func (v EditView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the HistoryView.
+func (v HistoryView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the RevisionView.
+func (v RevisionView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the BrokenLinksView.
+func (v BrokenLinksView) ViewShell() Shell { return v.Shell }
+
+// ViewShell returns the layout's half of the ConflictView.
+func (v ConflictView) ViewShell() Shell { return v.Shell }
 
 // ViewShell returns the layout's half of the ErrorView.
 func (v ErrorView) ViewShell() Shell { return v.Shell }

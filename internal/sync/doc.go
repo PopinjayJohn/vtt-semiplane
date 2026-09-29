@@ -5,5 +5,4 @@
 // The vault is canonical. This package never writes content to the vault; the
 // only write path is vault.Writer, and the only way content enters the index is
 // by reading a file.
-
 package sync

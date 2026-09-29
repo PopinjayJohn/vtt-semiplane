@@ -85,7 +85,104 @@ func roundTripOps() []roundTripOp {
 				return out
 			},
 		},
+		{
+			// Redacting nothing must be the document's own bytes and not a
+			// re-encoding of them: the editor in full mode is handed exactly
+			// what the file holds.
+			name: "redact nothing",
+			run:  func(t *testing.T, d *Doc) []byte { return Redact(d, nil) },
+		},
+		{
+			// The redacted round trip, over every secret whose id a sentinel
+			// can carry: redact every body, splice the buffer back, and get the
+			// file byte for byte. This is §8.9's central claim and it has to hold
+			// for a BOM, for CRLF, for a fence with no frontmatter above it and
+			// for a secret with an unterminated fence — which is to say for every
+			// shape the corpus has.
+			name: "redacted round trip",
+			run: func(t *testing.T, d *Doc) []byte {
+				hidden := sentinelledSecretIDs(d)
+				out, problems, err := Splice(d, Redact(d, hidden), hidden)
+				if err != nil {
+					t.Fatalf("Splice: %v", err)
+				}
+				assertNoProblems(t, problems)
+				return out
+			},
+		},
+		{
+			// A hidden set naming secrets the file does not have changes
+			// nothing: the caller is stale, not the file.
+			name: "redacted round trip with a stale hidden set",
+			run: func(t *testing.T, d *Doc) []byte {
+				out, problems, err := Splice(d, Redact(d, map[string]bool{"000000000000": true}), map[string]bool{"000000000000": true})
+				if err != nil {
+					t.Fatalf("Splice: %v", err)
+				}
+				assertNoProblems(t, problems)
+				return out
+			},
+		},
+		{
+			// A save from full mode is a pass-through: with nothing hidden there
+			// is nothing to restore, so the submitted bytes are the bytes.
+			name: "unredacted splice",
+			run: func(t *testing.T, d *Doc) []byte {
+				out, problems, err := Splice(d, d.Bytes, nil)
+				if err != nil {
+					t.Fatalf("Splice: %v", err)
+				}
+				assertNoProblems(t, problems)
+				return out
+			},
+		},
+		{
+			// A rename that matches nothing must leave every byte alone,
+			// including the ones a naive rewriter would normalise on the way
+			// past.
+			name: "link rewrite with no edits",
+			run: func(t *testing.T, d *Doc) []byte {
+				out, problems := RewriteLinks(d, nil)
+				assertNoProblems(t, problems)
+				return out
+			},
+		},
+		{
+			// The same, through the builder rather than through a literal: a
+			// rename the page does not mention is a no-op, and the builder has
+			// to agree that it is rather than emitting an edit that renames
+			// something the author never wrote.
+			name: "link rewrite of a name the page does not use",
+			run: func(t *testing.T, d *Doc) []byte {
+				if len(d.Bytes) > renderSizeLimit {
+					// The third-party wikilink parser is quadratic on the
+					// flood fixture, and the byte-level guarantees this op
+					// checks do not need it. The same skip the AST-level
+					// tests make, for the same reason.
+					return d.Bytes
+				}
+				facts, _ := Extract(d, nil)
+				edits := LinkEdits(d, facts, "zz-no-such-page-zz", "zz-renamed-zz")
+				out, problems := RewriteLinks(d, edits)
+				assertNoProblems(t, problems)
+				return out
+			},
+		},
 	}
+}
+
+// sentinelledSecretIDs is the set of secret ids a sentinel can carry for this
+// document: the ones with a real on-disk id. A fence whose directive could not
+// be read has a placeholder the segmenter made up, and redacting one would
+// exercise the unaddressable path rather than the round trip.
+func sentinelledSecretIDs(d *Doc) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range d.SecretSpans() {
+		if validSecretID(s.SecretID) {
+			out[s.SecretID] = true
+		}
+	}
+	return out
 }
 
 func assertNoProblems(t *testing.T, problems []Problem) {

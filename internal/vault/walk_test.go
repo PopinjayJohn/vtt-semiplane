@@ -343,6 +343,30 @@ func TestIgnoredRelChecksEveryElement(t *testing.T) {
 	}
 }
 
+// TestIgnoredIsTheSameRuleTheWalkUses pins the exported predicate to the
+// unexported one. A route that deletes or moves a page asks Ignored, and the
+// walker asks ignoredRel; if the two ever answer differently then a path the
+// app never indexed is one a DM could still delete, and the lock file inside
+// .semiplane is the case that makes that matter.
+func TestIgnoredIsTheSameRuleTheWalkUses(t *testing.T) {
+	t.Parallel()
+	for _, rel := range []string{
+		"Campaigns/Ash/Gundren.md",
+		".semiplane/semiplane.lock",
+		".semiplane/backups/20260101T000000Z/Campaigns/Ash/Gundren.md",
+		".obsidian/workspace.json",
+		"Campaigns/Ash/x.md.semiplane-tmp",
+		"a/b/c.md",
+	} {
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+			if got, want := Ignored(rel), ignoredRel(rel); got != want {
+				t.Errorf("Ignored(%q) = %v, ignoredRel = %v", rel, got, want)
+			}
+		})
+	}
+}
+
 func contains(list []string, want string) bool {
 	for _, got := range list {
 		if got == want {

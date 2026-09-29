@@ -68,11 +68,19 @@ type Link struct {
 	Line int
 	// Span is where the reference was written.
 	Span Span
-	// Offset is the byte offset of the reference in Doc.Body, which is what
-	// the AST carries. Doc.FileOffset turns it into a file offset; the line and
-	// the span are already resolved, and the bulk link updater in a later phase
-	// needs the offset to rewrite the target in place.
+	// Offset is the byte offset of the reference in Doc.Bytes, the same absolute
+	// coordinates Span uses. Extract adds the region's base offset to whatever
+	// the AST carried, so a link found inside a secret body is addressed in the
+	// file and not in the region that was walked.
 	Offset int
+	// TargetStart and TargetEnd bound the target token itself — the text a
+	// rename rewrites — in the same absolute coordinates as Offset. They are
+	// zero when the target could not be located, which is the signal that the
+	// link is not one the bulk updater may touch: a destination written with
+	// escapes or angle brackets, or a wikilink whose opening brackets are not
+	// where the target says they are, is left alone rather than guessed at.
+	// Nothing outside [TargetStart, TargetEnd) is ever rewritten.
+	TargetStart, TargetEnd int
 }
 
 // Heading is one heading with the span it was written in.
@@ -270,16 +278,22 @@ func (f *facts) walk(r *Renderer, src []byte, base int, attribute attributor, li
 		case *wikilink.Node:
 			if l := linkFromWikilink(src, node); l != nil {
 				l.Offset += base
+				l.TargetStart += base
+				l.TargetEnd += base
 				f.addLink(lines, out, l, attribute(l.Offset))
 			}
 		case *ast.Link:
 			if l := linkFromMarkdown(src, node, false); l != nil {
 				l.Offset += base
+				l.TargetStart += base
+				l.TargetEnd += base
 				f.addLink(lines, out, l, attribute(l.Offset))
 			}
 		case *ast.Image:
 			if l := linkFromMarkdown(src, node, true); l != nil {
 				l.Offset += base
+				l.TargetStart += base
+				l.TargetEnd += base
 				f.addLink(lines, out, l, attribute(l.Offset))
 			}
 		case *hashtag.Node:
@@ -344,13 +358,22 @@ func linkFromWikilink(src []byte, n *wikilink.Node) *Link {
 	if label != "" && label != raw {
 		alias = label
 	}
+	off := nodeOffset(src, n)
 	l := &Link{
 		Kind:      LinkWikilink,
 		TargetRaw: raw,
 		Target:    target,
 		Alias:     alias,
 		SelfLink:  target == "" && fragment != "",
-		Offset:    nodeOffset(src, n),
+		Offset:    off,
+	}
+	// The target is what a rename rewrites, and it is not where the node starts:
+	// a link with a fragment or an alias has neither of them as its first text
+	// child. The range is located from the opening brackets and checked against
+	// the bytes the parser read, so a mismatch leaves the link unrewritable
+	// rather than pointing an edit at the wrong token.
+	if start, end, ok := wikilinkTargetRange(src, off, target); ok {
+		l.TargetStart, l.TargetEnd = start, end
 	}
 	if n.Embed {
 		l.Kind = LinkEmbed
@@ -381,13 +404,18 @@ func linkFromMarkdown(src []byte, n ast.Node, image bool) *Link {
 	if hasExtension([]byte(dest)) && !isMarkdownExt(dest) {
 		kind = LinkAttachment
 	}
-	return &Link{
+	off := nodeOffset(src, n)
+	l := &Link{
 		Kind:      kind,
 		TargetRaw: dest,
 		Target:    strings.TrimSuffix(dest, ".md"),
 		Alias:     inlineLabel(src, n),
-		Offset:    nodeOffset(src, n),
+		Offset:    off,
 	}
+	if start, end, ok := markdownTargetRange(src, off, dest); ok {
+		l.TargetStart, l.TargetEnd = start, end
+	}
+	return l
 }
 
 func markdownDestination(src []byte, n ast.Node) string {

@@ -288,6 +288,8 @@ var snapshotQueries = []struct{ name, query string }{
 	{"page_text", `SELECT pg.path, t.title, t.headings, t.body FROM page_text t
 		JOIN pages pg ON pg.id = t.page_id`},
 	{"secret_text", `SELECT st.secret_id, st.body FROM secret_text st`},
+	{"attachment", `SELECT pg.path, a.path, a.mime, a.size_bytes FROM attachments a
+		JOIN pages pg ON pg.id = a.page_id`},
 	{"page_fts", `SELECT rowid, title, headings, body FROM page_fts`},
 	{"secret_fts", `SELECT rowid, body FROM secret_fts`},
 }

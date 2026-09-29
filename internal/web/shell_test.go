@@ -12,6 +12,7 @@ import (
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/web"
 	"github.com/a-h/templ"
 )
@@ -152,8 +153,103 @@ func allViews() []httpapi.View {
 		httpapi.SetupView{Shell: shell, Problem: "that is too short", Field: "username"},
 		httpapi.InviteView{Shell: shell, Token: "0123456789abcdef01234567", Role: "player"},
 		httpapi.ErrorView{Shell: shell, Status: 404, Heading: "Not found", Detail: "There is no page at that address."},
+		// The editor, in the mode that has the most to get wrong: redacted, so
+		// the buffer holds a marker and not a body, and the file is not the
+		// buffer. A fixture in full mode would pass a template that rendered
+		// either.
+		httpapi.EditView{
+			Shell:       shell,
+			Card:        card,
+			Action:      "/p/Tavern.md/edit",
+			PageHref:    "/p/Tavern.md",
+			RawHref:     "/p/Tavern.md/raw",
+			HistoryHref: "/p/Tavern.md/history",
+			Content:     "# The Drowned Lantern\n\n" + editSentinel + "\n",
+			BaseHash:    strings.Repeat("b", 64),
+			Mode:        httpapi.EditModeRedacted,
+			HiddenIDs:   []string{"a1a1a1a1a1a1"},
+			HiddenCount: 1,
+			Problems:    []string{"secret_fence_unreadable"},
+			MayWrite:    true,
+		},
+		// The conflict, with two hunks: a replacement and a pure insertion,
+		// because the second is the case where one side has no line at all and
+		// a fabricated line number would be a lie about the file.
+		httpapi.ConflictView{
+			Shell: shell,
+			Card:  card,
+			Conflict: httpapi.Conflict{
+				Theirs:   "# The Drowned Lantern\n\nThe room.\n",
+				Mine:     "# The Drowned Lantern\n\nThe cellar.\nA new line.\n",
+				BaseHash: strings.Repeat("c", 64),
+				Reason:   "save",
+				Hunks: []httpapi.DiffHunk{
+					{FromA: 3, CountA: 1, FromB: 3, CountB: 2, Lines: []httpapi.DiffLine{
+						{Op: " ", No: 1, Text: "# The Drowned Lantern"},
+						{Op: " ", No: 2, Text: ""},
+						{Op: "-", No: 3, Text: "The room."},
+						{Op: "+", No: 3, Text: "The cellar."},
+						{Op: "+", No: 4, Text: "A new line."},
+					}},
+				},
+			},
+		},
+		// The history, with the count larger than the list so a template that
+		// read one for the other is wrong here rather than invisible, and with
+		// one external row and one row this viewer may not be able to open.
+		httpapi.HistoryView{
+			Shell: shell,
+			Card:  card,
+			Revisions: []httpapi.RevisionRow{
+				{ID: 9, At: aDay, Source: "app", Author: "thia", Visible: true, Href: "/p/Tavern.md/revisions/9", RevertHref: "/p/Tavern.md/revert/9"},
+				{ID: 8, At: aDay.Add(-24 * time.Hour), Source: "external", External: true, Visible: false, Href: "/p/Tavern.md/revisions/8", RevertHref: "/p/Tavern.md/revert/8"},
+			},
+			Total:     14,
+			Truncated: true,
+			PageHref:  "/p/Tavern.md",
+		},
+		// A revision that may be compared, carrying the one secret this viewer
+		// is entitled to see, so the assertion that the content is rendered is
+		// against content that could have been withheld.
+		httpapi.RevisionView{
+			Shell:       shell,
+			Card:        card,
+			ID:          9,
+			At:          aDay,
+			Source:      "app",
+			Author:      "thia",
+			Content:     "# The Drowned Lantern\n\n" + fixtureSecret + "\n",
+			Comparable:  true,
+			PageHref:    "/p/Tavern.md",
+			HistoryHref: "/p/Tavern.md/history",
+			Hunks: []httpapi.DiffHunk{
+				{FromA: 3, CountA: 1, FromB: 3, CountB: 1, Lines: []httpapi.DiffLine{
+					{Op: " ", No: 1, Text: "# The Drowned Lantern"},
+					{Op: "-", No: 3, Text: "The room was dry."},
+					{Op: "+", No: 3, Text: "The room is wet."},
+				}},
+			},
+		},
+		httpapi.BrokenLinksView{
+			Shell:      shell,
+			Total:      431,
+			ShownLimit: httpapi.ShownLimit,
+			Truncated:  true,
+			Rows: []httpapi.BrokenLinkRow{
+				{Card: card, Target: "The Salt Keep", Line: 12, Kind: "wikilink"},
+				// A referring page the index has not caught up with: no title, so
+				// no link to invent a URL for.
+				{Target: "old-name", Line: 4, Kind: "markdown"},
+			},
+		},
 	}
 }
+
+// editSentinel is a restore marker built by md.Sentinel rather than written
+// out by hand, so a change to the marker's shape fails every assertion about
+// the redacted editor instead of quietly leaving them testing a shape the
+// application no longer writes.
+var editSentinel = md.Sentinel("a1a1a1a1a1a1", []byte("a body this reader may not read, of some length."))
 
 // campaignStatus is a panel with every field filled, so that a template which
 // stopped rendering one of them shows up as a missing row rather than as a test

@@ -41,6 +41,15 @@ const internalPath = modulePath + "/internal/"
 // store. authz imports nothing of ours: a Resource is a plain struct handed to
 // it by the service that already has the row, so authz never queries a
 // database and holds no *sql.DB of its own.
+//
+// diff sits immediately below httpapi because httpapi is its only consumer:
+// the conflict page a save shows when it loses an optimistic-concurrency race.
+// It imports nothing of ours, so its position is free and this is the last
+// place a package can go without being able to reach a handler. It is
+// deliberately not in pluginBoundary below — a diff of two byte slices is a
+// pure function with no reach into the request path, but nothing in the plugin
+// contract needs one either, and an allow-list entry is a grant rather than a
+// prohibition. A plugin that ever needs it gets one line added, deliberately.
 var order = []string{
 	"config",
 	"obs",
@@ -53,6 +62,7 @@ var order = []string{
 	"secrets",
 	"sync",
 	"search",
+	"diff",
 	"httpapi",
 	"web",
 }
@@ -109,7 +119,13 @@ func walkGoRecursive(t *testing.T, root string) []string {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base != "." && (base == ".git" || base == "dist" || base == "node_modules") {
+			// .kilo holds Agent Manager worktrees, which are a checkout of this
+			// repository nested inside it. A gate that walks the project root
+			// therefore reads its own source twice, and a failure inside one is
+			// reported against a path that does not exist on the branch under
+			// test.
+			if base != "." && (base == ".git" || base == ".kilo" || base == ".tools" ||
+				base == "dist" || base == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil

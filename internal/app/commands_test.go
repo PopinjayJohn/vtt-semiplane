@@ -216,8 +216,21 @@ func TestBackupThenMigrateTakesABackup(t *testing.T) {
 	}
 
 	// Roll the schema back so the next boot has a migration to run.
+	//
+	// Dropping the columns matters as much as the version does. A migration
+	// that only rolls the version back leaves the head schema in place, so the
+	// pending migration re-runs its ALTER over a table that already has the
+	// column — and SQLite reports that as "duplicate column name" rather than
+	// treating the step as already applied. The version pragma alone was enough
+	// while the series had one file, because one was also the head.
 	head := store.SchemaVersion()
 	withDB(t, f.vault.Root, func(db *store.DB) {
+		for _, col := range []string{"byte_start", "byte_len"} {
+			if _, err := db.Writer().ExecContext(context.Background(),
+				"ALTER TABLE links DROP COLUMN "+col); err != nil {
+				t.Fatalf("roll the schema back: %v", err)
+			}
+		}
 		if _, err := db.Writer().ExecContext(context.Background(),
 			"PRAGMA user_version = 1"); err != nil {
 			t.Fatalf("roll the schema back: %v", err)

@@ -56,7 +56,65 @@ type Revision struct {
 	Source RevisionSource
 }
 
+// RevisionMeta is a revision without its bytes.
+//
+// It is a separate type rather than a Revision with an empty Content, because
+// those are not the same thing: a zero Content is indistinguishable from a
+// revision whose file was empty, so a history panel that took []Revision would
+// have to know which of its rows it is allowed to read. A type with no Content
+// field makes the question unaskable, which is the same reason PageRow and
+// SecretRow exist.
+type RevisionMeta struct {
+	// ID is the surrogate key, and what the single-revision read takes.
+	ID int64
+	// PageID is the page the file belonged to.
+	PageID int64
+	// ContentHash is the sha256 of the content, which identifies a revision
+	// without carrying it.
+	ContentHash []byte
+	// AuthorID is the account responsible, or nil for an external change.
+	AuthorID *int64
+	// At is when the revision was recorded.
+	At time.Time
+	// Source is one of the four RevisionSource values.
+	Source RevisionSource
+}
+
+// revisionMetaColumns deliberately does not name content. The statement it is
+// spliced into must be readable as a fact about that absence: a history panel
+// asking for fifty rows would otherwise pull fifty whole files, each of which
+// may contain secret plaintext that no read-time authorization has touched yet.
+const revisionMetaColumns = `id, page_id, content_hash, author_id, at, source`
+
+// The page's revisions, as a FROM and a WHERE, in one constant. The count below
+// the list is the same question asked twice, and a paraphrase is how a badge
+// ends up disagreeing with the list beside it.
+const revisionMetaFromSQL = `FROM revisions
+	WHERE page_id = ?`
+
+const (
+	revisionMetaListSQL  = `SELECT ` + revisionMetaColumns + ` ` + revisionMetaFromSQL + ` ORDER BY at DESC, id DESC`
+	revisionMetaCountSQL = `SELECT COUNT(*) ` + revisionMetaFromSQL
+)
+
 const revisionColumns = `id, page_id, content_hash, content, author_id, at, source`
+
+func scanRevisionMeta(s RowScanner) (RevisionMeta, error) {
+	var (
+		m   RevisionMeta
+		at  string
+		src string
+	)
+	if err := s.Scan(&m.ID, &m.PageID, &m.ContentHash, &m.AuthorID, &at, &src); err != nil {
+		return RevisionMeta{}, err
+	}
+	var err error
+	if m.At, err = ParseTime(at); err != nil {
+		return RevisionMeta{}, err
+	}
+	m.Source = RevisionSource(src)
+	return m, nil
+}
 
 func scanRevision(s RowScanner) (Revision, error) {
 	var (
@@ -90,9 +148,47 @@ func AppendRevision(ctx context.Context, e Execer, r Revision) (int64, error) {
 	return id, nil
 }
 
-// ListRevisionsByPage returns a page's revisions, newest first, without their
-// content. The history panel needs ids and timestamps; only the single-revision
-// view needs the bytes.
+// ListRevisionMetaByPage returns a page's revisions, newest first, without their
+// content. This is the history panel's read.
+//
+// The content is not selected and cannot be reached from the result, which is
+// the whole point: fifty rows of this are fifty ids and timestamps, and fifty
+// rows of ListRevisionsByPage are fifty whole files, each of which may hold
+// secret plaintext that has not been re-authorised at read time.
+func ListRevisionMetaByPage(ctx context.Context, q Queryer, pageID int64, limit int) ([]RevisionMeta, error) {
+	rows, err := q.QueryContext(ctx, revisionMetaListSQL+` LIMIT ?`, pageID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list revision metadata of page %d: %w", pageID, err)
+	}
+	var out []RevisionMeta
+	err = ForEach(rows, func(r Rows) error {
+		rev, err := scanRevisionMeta(r)
+		if err != nil {
+			return fmt.Errorf("store: scan revision metadata: %w", err)
+		}
+		out = append(out, rev)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CountRevisionsByPage returns how many revisions a page has, for the history
+// panel's total beside a windowed list.
+func CountRevisionsByPage(ctx context.Context, q Queryer, pageID int64) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, revisionMetaCountSQL, pageID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count revisions of page %d: %w", pageID, err)
+	}
+	return n, nil
+}
+
+// ListRevisionsByPage returns a page's revisions, newest first, WITH their
+// content. The metadata-only read is ListRevisionMetaByPage, and that is the one
+// a panel wants: this one exists for the callers that need the bytes to compare
+// or to diff, and it will hand out every secret body a revision ever held.
 func ListRevisionsByPage(ctx context.Context, q Queryer, pageID int64, limit int) ([]Revision, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT `+revisionColumns+` FROM revisions

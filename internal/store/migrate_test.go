@@ -36,12 +36,13 @@ func TestMigrationsAreEmbedded(t *testing.T) {
 }
 
 // TestMigrationsFromEveryVersion builds a database at each historical version
-// from the migration file itself, migrates it to head, and asserts the result is
-// indistinguishable from a freshly created head database.
+// from the migration files themselves, migrates it to head, and asserts the
+// result is indistinguishable from a freshly created head database.
 //
-// The v1 fixture is the migration applied directly rather than through Migrate,
-// so it stands in for a file written by a released binary: no meta stamp, no
-// backup hook, a populated row that must survive.
+// The fixture is a real database at that version — see newDBAtVersion for why
+// the files are applied cumulatively and the version stamped by the test — with a
+// populated row in every table a later migration touches, so the delta is proved
+// over data rather than over an empty schema.
 func TestMigrationsFromEveryVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -52,17 +53,21 @@ func TestMigrationsFromEveryVersion(t *testing.T) {
 	for _, fixture := range Migrations() {
 		t.Run("from_v"+strconv.Itoa(fixture.Version), func(t *testing.T) {
 			t.Parallel()
-			db := newDB(t)
-
-			// Stand up the historical database exactly as the old binary would
-			// have left it.
-			mustExec(t, db.Writer(), fixture.SQL)
+			db := newDBAtVersion(t, fixture.Version)
 			if got, err := UserVersion(ctx, db.Writer()); err != nil {
 				t.Fatalf("read fixture version: %v", err)
 			} else if got != fixture.Version {
 				t.Fatalf("fixture is at v%d, want v%d", got, fixture.Version)
 			}
 			seedPage(t, db.Writer(), "Campaigns/Ash/Gundren.md", "Gundren")
+			// A row in every table a later migration touches, so the delta is
+			// proved over a populated table rather than over an empty one. An
+			// ALTER that only worked on an empty table would leave this row with
+			// a NULL default and the assertion below would catch it.
+			mustExec(t, db.Writer(),
+				`INSERT INTO links (source_page_id, target_raw, kind, line)
+				 SELECT id, 'Ash', 'wikilink', 7 FROM pages WHERE path = ?`,
+				"Campaigns/Ash/Gundren.md")
 
 			backupCalls := 0
 			if err := Migrate(ctx, db.Writer(), func(context.Context) error {
@@ -91,6 +96,17 @@ func TestMigrationsFromEveryVersion(t *testing.T) {
 			}
 			if p.Title != "Gundren" {
 				t.Errorf("seeded page title = %q, want %q", p.Title, "Gundren")
+			}
+			// A row written before the byte-offset columns existed must come out
+			// of the migration as "not recorded" rather than as offset 0.
+			var start, length int64
+			if err := db.Writer().QueryRowContext(ctx,
+				`SELECT byte_start, byte_len FROM links WHERE target_raw = 'Ash'`).Scan(&start, &length); err != nil {
+				t.Fatalf("seeded link lost: %v", err)
+			}
+			if start != LinkByteStartUnset || length != 0 {
+				t.Errorf("a pre-migration link reads byte_start=%d byte_len=%d, want %d/0",
+					start, length, LinkByteStartUnset)
 			}
 			// The meta stamp is what §7.5 step 4 compares the FTS generation
 			// against, so a migrated database must carry it.

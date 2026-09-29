@@ -1,0 +1,432 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+)
+
+// The conflict page: what §8.9 puts in a 409 instead of "reload and try again".
+//
+// Both sides on it are renderings this principal is already entitled to read —
+// "theirs" is the file with every fence they may not read replaced by the fixed
+// lock label, and "mine" is the buffer they typed — so the page can be rendered
+// as ordinary escaped text. Nothing here calls templ.Raw, and the only thing
+// that would make it want to is the diff, which is Markdown and is therefore
+// escaped like every other line of user text on the site.
+
+// pageEditHref is the editor's own URL for a page.
+//
+// The conflict page has to post somewhere, and the route table has one write
+// for a page: /p/*/edit. Rebuilding it from the card rather than carrying a
+// field is deliberate — ConflictView is filled by a handler whose only job on
+// this path is the 409, and a second URL field on the model would be a second
+// thing to keep equal to the first.
+func pageEditHref(card httpapi.PageCard) string { return card.Href() + "/edit" }
+
+// The two sides' names, as the reader is shown them.
+//
+// They are constants because the diff headings and the table headers must name
+// the same two documents, and a heading that calls one side "yours" and a table
+// header that calls it "mine" is a diff nobody can read. Each name exists twice
+// because a table header and a sentence want different casings, and lowercasing
+// a constant at the call site is how a label ends up lowercased twice.
+const (
+	// onDiskLabel heads the column holding the file as it is on disk, as this
+	// principal may read it.
+	onDiskLabel = "On disk"
+	// mineLabel heads the column holding the buffer that lost the race.
+	mineLabel = "Your version"
+	// nowLabel heads the left column of a revision's comparison, which is the
+	// page as it is now.
+	nowLabel = "The page now"
+	// revisionLabel heads the right column of a revision's comparison.
+	revisionLabel = "This revision"
+	// revisionBackLabel heads the right column of a *revert*'s conflict, where
+	// that column is a revision being put back rather than a buffer somebody
+	// typed. Calling it "your version" would show a reader a document with no
+	// author.
+	revisionBackLabel = "The revision"
+
+	// The same names, for use inside a sentence.
+	onDiskProse       = "the file on disk"
+	mineProse         = "your version"
+	revisionBackProse = "the revision"
+	nowProse          = "the page as it is now"
+	revisionProse     = "this revision"
+)
+
+// conflictSides are the two columns' names, and the only thing a revert changes
+// about a conflict page's shape.
+func conflictSides(reason string) (string, string) {
+	if reason == "revert" {
+		return onDiskLabel, revisionBackLabel
+	}
+	return onDiskLabel, mineLabel
+}
+
+func conflictSidesProse(reason string) (string, string) {
+	if reason == "revert" {
+		return onDiskProse, revisionBackProse
+	}
+	return onDiskProse, mineProse
+}
+
+// ConflictPage is a lost save, rendered as the two documents and the choice
+// between them.
+//
+// The form is here rather than a set of buttons because the resolution is a
+// per-hunk choice and a form with one control per hunk needs no script at all:
+// the choices are a list of `<select>`s, the buffer that lost is a hidden
+// field, and pressing one button posts the answer. app.js may make it
+// convenient; it may not be required.
+templ ConflictPage(v httpapi.ConflictView) {
+	<section aria-labelledby="conflict-heading">
+		<h1 id="conflict-heading" data-focus-target class="text-2xl font-semibold tracking-tight">
+			{ conflictHeading(v.Conflict.Reason) }
+		</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			<code>{ v.Card.Path }</code>
+		</p>
+		@conflictExplain(v.Conflict.Reason)
+		<form method="post" action={ pageEditHref(v.Card) } data-conflict-form>
+			@CSRFInput(v.CSRF)
+			// The hash the on-disk side was read at. A save is checked against
+			// it, so a third writer who lands between this render and the
+			// submission is caught rather than overwritten.
+			<input type="hidden" name="base_hash" value={ v.Conflict.BaseHash }/>
+			// The buffer that lost, verbatim. It is the actor's own bytes, and
+			// the merge below is a merge against them — posting the choices
+			// without them would leave the server with nothing to merge into.
+			<input type="hidden" name="content" value={ v.Conflict.Mine }/>
+			@conflictHunks(v.Conflict.Reason, v.Conflict.Hunks)
+			<div class="mt-4 flex flex-wrap items-center gap-2">
+				<button type="submit" class="btn">Write the resolved file</button>
+				<a href={ pageEditHref(v.Card) } class="btn">Open the editor instead</a>
+			</div>
+		</form>
+		@conflictBothSides(v.Conflict)
+	</section>
+}
+
+// conflictHeading is the h1, and it is a function rather than a format string
+// because Reason is a closed set of two and a template should not be
+// assembling sentences out of a verb it does not own.
+func conflictHeading(reason string) string {
+	if reason == "revert" {
+		return "This page changed while you were reverting it"
+	}
+	return "This page changed while you were editing it"
+}
+
+// conflictExplain says what the two documents are, in the reader's terms.
+//
+// It is two sentences rather than one because a refused save and a refused
+// revert are the same shape and a different pair of documents: on a save the
+// right-hand side is what the reader typed, and on a revert it is the revision
+// they asked to put back. A reader told they were "editing" while they were
+// reverting has been told something false about their own action, and a reader
+// who is shown a buffer they never typed is looking at a document with no
+// author.
+//
+// The word "yours" is load-bearing in both. A reader who thinks the left-hand
+// column is about to be overwritten by their own save has the relationship
+// backwards, and the cost of that misreading is somebody else's session of
+// notes.
+templ conflictExplain(reason string) {
+	if reason == "revert" {
+		<p class="mt-3 text-sm text-neutral-700 dark:text-neutral-300">
+			Nothing has been written. The file on disk is what it was when this page was built,
+			and the right-hand column is the older revision you asked to put back. Choose which of
+			the two each change below keeps, and the file is written from the result.
+		</p>
+	} else {
+		<p class="mt-3 text-sm text-neutral-700 dark:text-neutral-300">
+			Nothing has been written. The file on disk is what it was when this page was built,
+			and your version is exactly what you submitted. Choose which of the two each change
+			below keeps, and the file is written from the result.
+		</p>
+	}
+}
+
+// conflictHunks is the per-hunk choice, one fieldset per hunk.
+//
+// The select is named `resolve` and its value is the hunk's index and the side
+// to keep, so the answer does not depend on the order the browser happened to
+// serialise two controls in, and a submission missing a hunk is visibly
+// missing rather than silently shifted onto its neighbour's answer.
+//
+// Yours is the preselected side. A reader who presses the button without
+// reading the diff should not lose the work they just did, and the whole reason
+// this page exists is that a refused save used to throw it away.
+templ conflictHunks(reason string, hunks []httpapi.DiffHunk) {
+	if len(hunks) == 0 {
+		<p class="mt-4 text-sm text-neutral-600 dark:text-neutral-400">
+			There is nothing to choose between: the two versions are the same text.
+		</p>
+	} else {
+		<div class="mt-4 space-y-4">
+			for i, hunk := range hunks {
+				@conflictHunk(reason, i, len(hunks), hunk)
+			}
+		</div>
+	}
+}
+
+templ conflictHunk(reason string, index, total int, hunk httpapi.DiffHunk) {
+	{{ left, right := conflictSides(reason) }}
+	{{ leftProse, rightProse := conflictSidesProse(reason) }}
+	<fieldset class="card" data-hunk={ strconv.Itoa(index) }>
+		<legend class="card-heading">
+			{ hunkHeading(index, total, hunk, leftProse, rightProse) }
+		</legend>
+		<div class="mt-1 mb-2 flex flex-wrap items-center gap-2">
+			<label for={ resolveControlID(index) } class="text-sm">Keep</label>
+			<select
+				id={ resolveControlID(index) }
+				name="resolve"
+				class="rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+			>
+				<option value={ resolveValue(index, "mine") } selected>{ right }</option>
+				<option value={ resolveValue(index, "theirs") }>{ left }</option>
+			</select>
+		</div>
+		@diffTable(hunk, left, right, "Every line of this change")
+	</fieldset>
+}
+
+func resolveControlID(index int) string { return "resolve-" + strconv.Itoa(index) }
+
+// resolveValue is one hunk's answer, addressed to the hunk by index.
+func resolveValue(index int, side string) string { return strconv.Itoa(index) + ":" + side }
+
+// conflictBothSides is the two documents in full, behind a disclosure each.
+//
+// The diff is what the choice is made from, but the diff is not the file: it
+// shows the changed regions and three lines of context. A reader who needs the
+// whole side — to copy it, to read it aloud, to paste it somewhere — needs both
+// texts, and the disclosure keeps them off the page until asked for.
+templ conflictBothSides(conflict httpapi.Conflict) {
+	{{ left, right := conflictSides(conflict.Reason) }}
+	{{ rightNote := "This is the buffer you submitted, exactly as you sent it." }}
+	if conflict.Reason == "revert" {
+		{{ rightNote = "This is the revision you asked to put back, exactly as it recorded it." }}
+	}
+	<div class="mt-6 space-y-3">
+		@sideDisclosure(
+			"conflict-theirs",
+			left+" now",
+			Text("This is the file as it is on disk, with every secret you may not read replaced by a lock."),
+			conflict.Theirs,
+		)
+		@sideDisclosure("conflict-mine", right, Text(rightNote), conflict.Mine)
+	</div>
+}
+
+templ sideDisclosure(id, summary string, note templ.Component, text string) {
+	<details id={ id } class="card">
+		<summary class="cursor-pointer text-sm font-semibold">{ summary }</summary>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
+			@note
+		</p>
+		<pre class="source mt-2">{ text }</pre>
+	</details>
+}
+
+// diffTable is one hunk as a side-by-side table.
+//
+// A table and not a pair of preformatted blocks, because the pairing is the
+// answer: a reader comparing two columns of text by eye is doing the work the
+// row alignment already did, and the line numbers beside them are what make a
+// reported difference checkable. Every line of it is escaped text.
+//
+// The caption names the two sides in the sentence case the headings use, so a
+// screen reader reading the table linearly meets "On disk" and "Your version"
+// in the same words the columns are labelled with.
+templ diffTable(hunk httpapi.DiffHunk, leftHead, rightHead, caption string) {
+	<table class="diff">
+		<caption class="sr-only">
+			{ caption } — { leftHead } on the left, { rightHead } on the right, with each side's own line number
+		</caption>
+		<thead>
+			<tr>
+				<th scope="col" class="diff-no">
+					<span class="sr-only">Line in { leftHead }</span>
+					<span aria-hidden="true">#</span>
+				</th>
+				<th scope="col">{ leftHead }</th>
+				<th scope="col" class="diff-no">
+					<span class="sr-only">Line in { rightHead }</span>
+					<span aria-hidden="true">#</span>
+				</th>
+				<th scope="col">{ rightHead }</th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, row := range diffRows(hunk) {
+				@diffRowView(row)
+			}
+		</tbody>
+	</table>
+}
+
+templ diffRowView(row diffRow) {
+	<tr data-diff-op={ row.Op }>
+		<td class="diff-no">{ lineNo(row.LeftNo) }</td>
+		<td class="diff-text">
+			@diffMark(row.Op)
+			{ row.Left }
+		</td>
+		<td class="diff-no">{ lineNo(row.RightNo) }</td>
+		<td class="diff-text">
+			@diffMark(row.Op)
+			{ row.Right }
+		</td>
+	</tr>
+}
+
+// diffMark is the row's glyph: the carrier that is not the colour, so a reader
+// who cannot see the tint still reads which side of the pair is which. It is
+// hidden from assistive technology because the column headers already say which
+// side a cell belongs to, and a glyph announced as "plus minus" in the middle of
+// a line of Markdown is noise rather than information.
+templ diffMark(op string) {
+	if op != diffOpContext {
+		<span aria-hidden="true" class="diff-mark">{ diffMarkGlyph(op) }</span>
+	}
+}
+
+func diffMarkGlyph(op string) string {
+	switch op {
+	case diffOpRemoved:
+		return "−"
+	case diffOpAdded:
+		return "+"
+	case diffOpChanged:
+		return "±"
+	default:
+		return ""
+	}
+}
+
+// diffRow is one printed line of a side-by-side diff: what each side has on
+// this row, and what kind of row it is.
+//
+// A zero number means that side has no line here, which is how a pure
+// insertion or a pure deletion is printed without inventing a number for the
+// side that does not have one.
+type diffRow struct {
+	// LeftNo is the line number on the left side, or 0.
+	LeftNo int
+	// Left is the left side's text, empty when LeftNo is 0.
+	Left string
+	// RightNo is the line number on the right side, or 0.
+	RightNo int
+	// Right is the right side's text, empty when RightNo is 0.
+	Right string
+	// Op is "context", "removed", "added" or "changed", and it is the row's
+	// class: the colours are reinforcement and the words beside them are not,
+	// so a reader who cannot see the tint still reads the same row.
+	Op string
+}
+
+// The four row classes.
+const (
+	diffOpContext = "context"
+	diffOpRemoved = "removed"
+	diffOpAdded   = "added"
+	diffOpChanged = "changed"
+)
+
+// diffRows folds a hunk's change script into printable rows.
+//
+// The script is flat and the view is not: a removal and an insertion belong on
+// one row, because the reader's question about a change is "what did this
+// replace", and two rows per change makes them compare it by eye. So a run of
+// removals and insertions is paired by position and padded out to the longer of
+// the two, and the padding cells carry no line number at all — a blank with a
+// number in it would be a line that does not exist.
+//
+// The right-hand number of a context line is the one thing here that is
+// derived rather than read. The script numbers an equal line into the left
+// side, so after an insertion the same line has a different number on the
+// right, and printing the left number on both sides is a diff that misreports
+// where the file changed. So the offset between the sides is carried from the
+// hunk's own FromB and FromA — which is why they are on the model — and moved
+// by each run of edits as the run is consumed.
+func diffRows(hunk httpapi.DiffHunk) []diffRow {
+	var out []diffRow
+	var removed, added []httpapi.DiffLine
+	offset := hunk.FromB - hunk.FromA
+
+	flush := func() {
+		for i := 0; i < max(len(removed), len(added)); i++ {
+			row := diffRow{Op: diffOpChanged}
+			if i < len(removed) {
+				row.LeftNo, row.Left = removed[i].No, removed[i].Text
+			}
+			if i < len(added) {
+				row.RightNo, row.Right = added[i].No, added[i].Text
+			}
+			if row.LeftNo == 0 {
+				row.Op = diffOpAdded
+			}
+			if row.RightNo == 0 {
+				row.Op = diffOpRemoved
+			}
+			out = append(out, row)
+		}
+		offset += len(added) - len(removed)
+		removed, added = nil, nil
+	}
+
+	for _, line := range hunk.Lines {
+		switch line.Op {
+		case "-":
+			removed = append(removed, line)
+		case "+":
+			added = append(added, line)
+		default:
+			flush()
+			out = append(out, diffRow{
+				LeftNo: line.No, Left: line.Text,
+				RightNo: line.No + offset, Right: line.Text,
+				Op: diffOpContext,
+			})
+		}
+	}
+	flush()
+	return out
+}
+
+// hunkHeading names one hunk, for a legend.
+//
+// It is a function because the range arithmetic is the same on both surfaces
+// and a hunk header that says "lines 0 to 0" is a header nobody can act on:
+// a pure insertion has no left-hand lines, and "after line 12" is the only
+// honest way to place it.
+func hunkHeading(index, total int, hunk httpapi.DiffHunk, leftName, rightName string) string {
+	head := "Change " + strconv.Itoa(index+1)
+	if total > 1 {
+		head += " of " + strconv.Itoa(total)
+	}
+	return head + " — " + lineRange(hunk.FromA, hunk.CountA) + " in " + leftName +
+		", " + lineRange(hunk.FromB, hunk.CountB) + " in " + rightName
+}
+
+// lineRange is a hunk's span in one side, as a reader would say it.
+func lineRange(from, count int) string {
+	if count <= 0 {
+		return "after line " + strconv.Itoa(from)
+	}
+	return "lines " + strconv.Itoa(from) + "–" + strconv.Itoa(from+count-1)
+}
+
+// lineNo prints a line number, or nothing at all for a side that has no line
+// on this row.
+func lineNo(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}

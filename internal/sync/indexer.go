@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -904,8 +906,19 @@ func (ix *Indexer) writeFacts(
 	if err := store.DeleteSecretByPage(ctx, tx, pageID); err != nil {
 		return nil, err
 	}
+	// Deleted next to the other replacements and written next to writeLinks,
+	// because §8.8 evaluates a requested name against the links row and the
+	// attachments row in one statement. A row without its link, or a link
+	// without its row, is not a state that store can answer for, and it is not
+	// a state worth committing either.
+	if err := deleteAttachmentsByPage(ctx, tx, pageID); err != nil {
+		return nil, err
+	}
 	missed, err := writeLinks(ctx, tx, pageID, facts.Links, resolver, res)
 	if err != nil {
+		return nil, err
+	}
+	if err := ix.writeAttachments(ctx, tx, pageID, facts.Attachments); err != nil {
 		return nil, err
 	}
 	// Remembered rather than acted on: a reference to a page that does not exist
@@ -973,11 +986,170 @@ func writeLinks(ctx context.Context, e store.Execer, pageID int64, links []md.Li
 			BlockRef:     l.BlockRef,
 			SecretID:     l.Span.SecretID,
 			Line:         l.Line,
+			// The byte range of the target token itself, which is what a rename's
+			// bulk updater verifies before it splices anything. A link whose
+			// target could not be located has TargetEnd <= TargetStart, and
+			// store.InsertLink turns that pair into LinkByteStartUnset and a zero
+			// length — so "not recorded" is one value on the way in and out, and
+			// a caller that forgets the fields writes an unrewritable row rather
+			// than a row pointing at offset zero.
+			ByteStart: l.TargetStart,
+			ByteLen:   l.TargetEnd - l.TargetStart,
 		}); err != nil {
 			return missed, err
 		}
 	}
 	return missed, nil
+}
+
+// deleteAttachmentsByPage drops the files a page's previous content recorded.
+//
+// store deletes an attachment by row id and lists a page's files, so this is
+// the two of them in that order. The list is the number of files on one page —
+// a number of round trips nobody notices — and it is a method deliberately not
+// added: a delete keyed by page id would be a second way to say this, and the
+// second way is the one a later reindex reaches for and misses.
+func deleteAttachmentsByPage(ctx context.Context, e store.Execer, pageID int64) error {
+	rows, err := store.ListAttachmentsByPage(ctx, e, pageID)
+	if err != nil {
+		return err
+	}
+	for _, a := range rows {
+		if err := store.DeleteAttachment(ctx, e, a.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeAttachments records the files one page references, so that §8.8's serve
+// route can find a file it has just authorized.
+//
+// The reference and the row are different shapes and the gap between them is
+// the whole of this function. An md.Attachment is a name as an author wrote it,
+// with a line and a span; a store.Attachment is a file's size and content type
+// and the page it was found beside. So each name has to be turned into a file
+// before anything can be written, and there are four separate reasons to decline
+// that, each of which would otherwise leave a row the serve route cannot honour:
+//
+//   - vault.Resolve refuses the name. An attachment name is author-controlled
+//     text and is exactly the input the serve route's traversal test exists for.
+//     Resolve is the only function that establishes containment, and it refuses
+//     a ".." element, an absolute path, a drive letter, a UNC path, a control
+//     character and a homoglyph separator before the filesystem is touched. The
+//     name is resolved, never joined onto the root: a join is what turns
+//     "../../etc/passwd" into a readable path, and the recorded row is a row the
+//     route will hand bytes from.
+//   - the resolved path is not the name. store matches a request against
+//     attachments.path and links.target_raw with one string and matches it
+//     exactly, so a name Resolve had to normalise — "assets\map.png",
+//     "/assets/map.png", "assets/./map.png" — is a name no URL can carry,
+//     because the serve route refuses a backslash, a leading slash and a "."
+//     segment. Recording the normalised form instead would break the equality
+//     the store depends on, and recording the name as written would be a row the
+//     route can never look up.
+//   - vault.Ignored says the path is the app's own state. A page that embeds
+//     .semiplane/semiplane.lock names the file this process holds open.
+//   - the file is not a regular file, or is not there. See attachmentFile.
+//
+// Every one of them is a skip rather than an error, because a page's derived
+// rows are facts about the page and a file it points at is not one of them. A
+// note that embeds an image the DM has not drawn yet indexes exactly like a note
+// that embeds one they have: refusing the page would make a draft unindexable,
+// and a chmod on one PNG would take a chapter out of the index with it. The
+// proof that this is the ordinary state and not a silent failure is that the
+// name still has a links row, and the broken-links panel already lists it.
+func (ix *Indexer) writeAttachments(
+	ctx context.Context,
+	e store.Execer,
+	pageID int64,
+	refs []md.Attachment,
+) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	// One row per (page, path), so the second reference to one image inside a
+	// single page is the same row rather than a constraint violation. This is
+	// not only cosmetic: a page that embeds one image in its text and again
+	// inside a secret has two links rows and must still have one file row, or
+	// the whole page fails to index over a duplicate.
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if seen[ref.Name] {
+			continue
+		}
+		seen[ref.Name] = true
+		size, ok := attachmentFile(ix.root, ref.Name)
+		if !ok {
+			continue
+		}
+		// ref.Name and not the resolved path, because attachmentFile only
+		// accepts a name that resolves to itself, and store matches a request
+		// against this column and links.target_raw with one string.
+		if _, err := store.InsertAttachment(ctx, e, store.Attachment{
+			PageID:    &pageID,
+			Path:      ref.Name,
+			Mime:      attachmentMime(ref.Name),
+			SizeBytes: size,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attachmentFile reports the size of the file a page's reference names, or that
+// there is nothing to record. root is the vault root and name is the token as the
+// author wrote it.
+//
+// The four refusals are the four in writeAttachments, and only the last one is
+// about the file rather than the name: a missing file is a normal authoring
+// state, so it is skipped silently rather than reported, because a report per
+// reindex for an image that has not been drawn yet is noise that trains the
+// reader to ignore the panel that matters.
+func attachmentFile(root, name string) (size int64, ok bool) {
+	resolved, err := vault.Resolve(root, name)
+	if err != nil {
+		return 0, false
+	}
+	// Compared as bytes rather than as a cleaned form, so a name that needed
+	// cleaning is refused instead of recorded in a shape the serve route cannot
+	// be asked for.
+	if resolved.Rel() != name {
+		return 0, false
+	}
+	if vault.Ignored(resolved.Rel()) {
+		return 0, false
+	}
+	st, err := os.Stat(resolved.Abs())
+	if err != nil || !st.Mode().IsRegular() {
+		return 0, false
+	}
+	return st.Size(), true
+}
+
+// attachmentMime is the content type stored for a file, and therefore the one
+// the serve route puts on the response.
+//
+// The extension, not the content. A sniff would mean reading every referenced
+// file on every reindex to learn what the name already says, and Go's table
+// answers for the formats a vault holds, so the stored value is the same on
+// every machine in a LAN. An extension the table does not know becomes
+// application/octet-stream rather than whatever /etc/mime.types on one host
+// claims, which makes the common case deterministic and the rare case the
+// browser's safest default: a file it is told it cannot render is downloaded
+// instead.
+//
+// The stored value is what a client is told, so it is worth naming the
+// containment rather than trusting it: the route answers with nosniff and
+// `default-src 'none'; sandbox`, so even a .html recorded as text/html is inert
+// — an opaque origin, no scripts — and a mislabelled image costs the reader a
+// download, never execution.
+func attachmentMime(rel string) string {
+	if t := mime.TypeByExtension(path.Ext(rel)); t != "" {
+		return t
+	}
+	return "application/octet-stream"
 }
 
 // writeHeadings inserts a page's headings, each carrying the secret it lives in.

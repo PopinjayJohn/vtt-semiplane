@@ -37,14 +37,21 @@ var errorCopy = map[int]struct{ heading, detail string }{
 		heading: "Too many requests",
 		detail:  "Wait a minute and try again.",
 	},
-	// 400 and 503 are here because a route that needs them arrived before this
-	// table had them, and the fallback in writeError turns a missing entry into a
-	// 500. A 500 is a claim that the server broke; a 400 is a claim that the
-	// request was wrong. Confusing the two is how a client bug becomes an
-	// on-call question.
+	// 400, 409 and 503 are here because a route that needs them arrived before
+	// this table had them, and the fallback in writeError turns a missing entry
+	// into a 500. A 500 is a claim that the server broke; a 400 is a claim that
+	// the request was wrong, and a 409 is a claim that the file changed under a
+	// reader who can retry. Confusing the three is how a client bug becomes an
+	// on-call question, and a 409 rendered as a 500 is worse than either: the
+	// reader is told the server is broken when the only thing wrong was that
+	// somebody saved the page first.
 	http.StatusBadRequest: {
 		heading: "That request did not make sense",
 		detail:  "The address asked for something this page cannot answer. Check it and try again.",
+	},
+	http.StatusConflict: {
+		heading: "Changed while you were reading",
+		detail:  "The file changed on disk before this was written, so nothing was changed. Reload and try again.",
 	},
 	http.StatusServiceUnavailable: {
 		heading: "Not ready",

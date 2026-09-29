@@ -102,6 +102,21 @@ type matrixFixture struct {
 	// secretTokens are the secret bodies seeded above. None of them may appear
 	// in anything a principal is shown, whatever that principal may read.
 	secretTokens map[string]bool
+	// sharedAttachment is referenced from public text AND from a secret, which
+	// is the case §8.8 says must still be served to everybody.
+	sharedAttachment string
+	// dmOnlyAttachment is referenced only from a dm secret, so only a dm or an
+	// admin may be served it.
+	dmOnlyAttachment string
+	// unreferencedAttachment is recorded but referenced by nothing, and must
+	// never be served: a file no link points at is a name a guesser found.
+	unreferencedAttachment string
+	// danglingPublic is the one dangling link written in public text.
+	danglingPublic string
+	// danglingInSecrets is the target of the dangling link inside each secret, so
+	// a test can assert about the unfiltered read without repeating the fixture's
+	// own naming.
+	danglingInSecrets []string
 }
 
 func newMatrixFixture(t *testing.T) *matrixFixture {
@@ -156,6 +171,25 @@ func newMatrixFixture(t *testing.T) *matrixFixture {
 		t.Fatal(err)
 	}
 
+	// §8.8's three attachments, seeded before the links that reference them so
+	// the join in AttachmentVisibleTo has something on both sides.
+	f.sharedAttachment = "assets/shared.png"
+	f.dmOnlyAttachment = "assets/dm-only.png"
+	f.unreferencedAttachment = "assets/unreferenced.png"
+	for _, path := range []string{f.sharedAttachment, f.dmOnlyAttachment, f.unreferencedAttachment} {
+		if _, err := InsertAttachment(ctx, tx, Attachment{
+			PageID: &f.sourcePage, Path: path, Mime: "image/png", SizeBytes: 128,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := InsertLink(ctx, tx, Link{
+		SourcePageID: f.sourcePage, TargetRaw: f.sharedAttachment,
+		Kind: LinkAttachment, Line: 70,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	for i, vis := range []authz.Visibility{authz.VisibilityDM, authz.VisibilityPrivate, authz.VisibilityTable} {
 		id := "secret" + itoa(i)
 		if err := InsertSecret(ctx, tx, Secret{
@@ -174,6 +208,33 @@ func newMatrixFixture(t *testing.T) *matrixFixture {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		// A dangling reference per secret, on a line of its own so the panel's
+		// ordering cannot be confused with the resolved links above. It carries
+		// no target_page_id at all, which is what makes it a broken link rather
+		// than a link to a page that is missing from the fixture.
+		dangling := "[[Nowhere-" + id + "]]"
+		f.danglingInSecrets = append(f.danglingInSecrets, dangling)
+		if _, err := InsertLink(ctx, tx, Link{
+			SourcePageID: f.sourcePage, TargetRaw: dangling,
+			Kind: LinkWikilink, SecretID: id, Line: 50 + i,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// The two attachment references that decide §8.8's two halves: one file
+		// referenced from public text and from a private secret, one referenced
+		// only from the dm secret.
+		if vis == authz.VisibilityPrivate || vis == authz.VisibilityDM {
+			att := f.sharedAttachment
+			if vis == authz.VisibilityDM {
+				att = f.dmOnlyAttachment
+			}
+			if _, err := InsertLink(ctx, tx, Link{
+				SourcePageID: f.sourcePage, TargetRaw: att,
+				Kind: LinkAttachment, SecretID: id, Line: 60 + i,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := InsertHeading(ctx, tx, Heading{
 			PageID: f.sourcePage, Ordinal: i, Level: 2, Slug: "h" + id,
 			Text: "heading " + string(vis), SecretID: id,
@@ -183,6 +244,17 @@ func newMatrixFixture(t *testing.T) *matrixFixture {
 		tags = append(tags, PageTag{Tag: "tag-" + string(vis), Source: TagFromInline, SecretID: id})
 	}
 	if err := ReplacePageTags(ctx, tx, f.sourcePage, tags); err != nil {
+		t.Fatal(err)
+	}
+
+	// The broken-links panel needs one dangling link that is not inside a secret,
+	// or every principal's list would be empty and the count would agree with
+	// nothing.
+	f.danglingPublic = "[[Nowhere-public]]"
+	if _, err := InsertLink(ctx, tx, Link{
+		SourcePageID: f.sourcePage, TargetRaw: f.danglingPublic,
+		Kind: LinkWikilink, Line: 40,
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -361,6 +433,76 @@ func TestPredicateMatrixAgrees(t *testing.T) {
 			}
 			if vc != len(rows) {
 				t.Errorf("CountVisibleSecrets = %d but the list has %d rows", vc, len(rows))
+			}
+
+			// The broken-links panel. A dangling reference written inside a
+			// secret is a fact about that secret, so it is filtered before the
+			// row exists; the count has to move with the list or the badge says
+			// how many secrets a player cannot read.
+			wantDangling := 1
+			for _, meta := range f.secrets {
+				if expectVisible(p, meta) {
+					wantDangling++
+				}
+			}
+			dangling, err := ListVisibleUnresolvedLinks(ctx, f.db.Writer(), p)
+			if err != nil {
+				t.Fatalf("list visible unresolved links: %v", err)
+			}
+			if len(dangling) != wantDangling {
+				t.Errorf("%d visible dangling links, want %d", len(dangling), wantDangling)
+			}
+			dc, err := CountVisibleUnresolvedLinks(ctx, f.db.Writer(), p)
+			if err != nil {
+				t.Fatalf("count visible unresolved links: %v", err)
+			}
+			if dc != len(dangling) {
+				t.Errorf("CountVisibleUnresolvedLinks = %d but the list has %d rows; a badge would disagree with the list beside it",
+					dc, len(dangling))
+			}
+			for _, l := range dangling {
+				if l.SecretID == "" {
+					continue
+				}
+				m, ok := secretByID[l.SecretID]
+				if !ok {
+					t.Errorf("a dangling link carries unknown secret %q", l.SecretID)
+					continue
+				}
+				if !expectVisible(p, m) {
+					t.Errorf("the broken-links panel exposes a dangling link from a %s secret this principal may not read",
+						m.vis)
+				}
+			}
+
+			// §8.8's attachment rule, whose two halves are different answers and
+			// not one rule with a special case. A file referenced from public
+			// text stays servable even though a secret also references it, and a
+			// file referenced only from a dm secret is servable by exactly the
+			// principals who may read that secret. The unreferenced file is the
+			// third answer: nothing points at it, so guessing its name reaches
+			// nothing.
+			for _, tc := range []struct {
+				name string
+				want bool
+			}{
+				{f.sharedAttachment, true},
+				{f.dmOnlyAttachment, expectVisible(p, f.secrets[authz.VisibilityDM])},
+				{f.unreferencedAttachment, false},
+			} {
+				got, err := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, tc.name)
+				if err != nil {
+					t.Fatalf("attachment %s: %v", tc.name, err)
+				}
+				if got != tc.want {
+					t.Errorf("attachment %s visible = %v, want %v", tc.name, got, tc.want)
+				}
+			}
+			// A name that is not on this page answers the same way as one that
+			// is hidden, because a route that could tell them apart would be a
+			// route that confirms the existence of a DM's portrait.
+			if got, err := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, "assets/guessed.png"); err != nil || got {
+				t.Errorf("a guessed attachment name is visible = %v (err %v), want false", got, err)
 			}
 
 			// Tag counts, which §6.4 also names.

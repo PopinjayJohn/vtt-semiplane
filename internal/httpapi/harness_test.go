@@ -59,6 +59,11 @@ type fixture struct {
 	// concrete token in the path to fill it in.
 	inviteOnce sync.Once
 	invite     string
+	// newestRevision is the id of the most recent revision of Index.md, and
+	// revisionOnce guards producing it. It exists because the revert route's
+	// address names a revision, and a vault has none until something writes one.
+	revisionOnce   sync.Once
+	newestRevision string
 	// Secrets is a second handle on the same service the router uses. It is the
 	// same database, writer, policy and indexer, so what it reveals is what the
 	// router will read.
@@ -338,10 +343,15 @@ func (fx *fixture) accounts() {
 func (fx *fixture) accountsFor() {
 	fx.t.Helper()
 	fx.accountsForAccounts()
+	// The reindex comes first. reindexAll drops the derived index and derives it
+	// again, so a page id is only stable for the length of one index — a grant
+	// written before it names a page row that no longer exists, and IsPageOwner
+	// answers false for the owner. The grant surviving is the whole point of this
+	// fixture, so the ordering is load-bearing rather than incidental.
+	fx.reindexAll()
 	if err := fx.addOwner("Tavern.md", fx.userID(playerName)); err != nil {
 		fx.t.Fatal(err)
 	}
-	fx.reindexAll()
 }
 
 // accountsForAccounts is the account half of both entry points.
@@ -767,6 +777,48 @@ func (fx *fixture) tryAdminPrincipal() authz.Principal {
 		return authz.Principal{}
 	}
 	return authz.ForUser(u.ID, u.Username, authz.RoleAdmin, fx.cfg.AllowAnonymousRead)
+}
+
+// principalFor is an account as a Principal, read from the row so that a test
+// which disabled it or changed its role is refused rather than passing on a
+// stale id.
+func (fx *fixture) principalFor(username string) authz.Principal {
+	fx.t.Helper()
+	u, err := store.GetUserByUsername(context.Background(), fx.DB.Reader(), username)
+	if err != nil {
+		fx.t.Fatalf("look up %s: %v", username, err)
+	}
+	return authz.ForUser(u.ID, u.Username, authz.Role(u.Role), fx.cfg.AllowAnonymousRead)
+}
+
+// tryAdminSession signs in as the administrator, and reports whether it could.
+//
+// It is a helper rather than an inline asUser because the CSRF table runs in two
+// states and one of them has no administrator at all: a vault with no accounts
+// has nobody who may write a page, so a control run for a page-scoped write
+// cannot exist there and must be skipped rather than attempted. A helper that
+// says so is the difference between "this row is covered in the other state" and
+// a panic in the middle of a table.
+func (fx *fixture) tryAdminSession() (*session, bool) {
+	fx.t.Helper()
+	if fx.tryAdminPrincipal().UserID == 0 {
+		return nil, false
+	}
+	return fx.asUser(adminName, adminPass), true
+}
+
+// pageIDByPath is the index's id for a vault-relative path, read through the
+// same lookup the router does — bare first, then with the .md suffix — so that a
+// test naming a page the way a URL names it finds the same row the route does.
+func (fx *fixture) pageIDByPath(path string) (int64, bool) {
+	fx.t.Helper()
+	for _, cand := range []string{path, strings.TrimSuffix(path, ".md") + ".md"} {
+		row, err := store.GetPageByPath(context.Background(), fx.DB.Reader(), cand)
+		if err == nil {
+			return row.ID, true
+		}
+	}
+	return 0, false
 }
 
 // cookieValue is one cookie a session is holding, or "".

@@ -67,9 +67,15 @@ for arg in "$@"; do
 		done
 	fi
 	case "$arg" in
-	-fuzz)
-		FUNDUZZ=1
-		;;
+		-fuzz)
+			# The target name is this flag's value, so it has to reach EXTRA as
+			# well as setting the mode. Recording the flag alone let the target
+			# fall through to the package list, and the package path through to
+			# a second failure — so a correctly typed invocation reported
+			# "takes exactly one package" for the package it was given.
+			FUNDUZZ=1
+			EXTRA+=("$arg")
+			;;
 	-short)
 		SHORT="-short"
 		;;

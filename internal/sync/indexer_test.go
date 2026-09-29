@@ -22,9 +22,14 @@ import (
 func TestIndexIsIdempotent(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, map[string]string{
-		"Campaign.md":        "---\ntitle: The Campaign\ntags: [alpha]\n---\n# The Campaign\n\n[[Gundren]] and #beta.\n",
+		"Campaign.md":        "---\ntitle: The Campaign\ntags: [alpha]\n---\n# The Campaign\n\n[[Gundren]] and #beta.\n\n![the map](assets/map.png)\n",
 		"NPCs/Gundren.md":    "# Gundren\n\nA dwarf. See [[Campaign]] and [[Missing One]].\n",
 		"NPCs/Secret One.md": "---\ntype: npc\n---\n# Secret One\n\n```secret id=a1b2c3d4e5f6 visibility=dm author=dorn\nHidden.\n```\n\n## Public part\n\n[[Campaign]]\n",
+		// An attachment in the corpus is what makes the attachment rows part of
+		// what idempotence is asserted about: without a file, the snapshot's
+		// attachment section is empty and a pass that duplicated a row on every
+		// reindex would pass it.
+		"assets/map.png": "not a real map, and short enough to count",
 	})
 	first := h.indexAll()
 	if !first.Changed() {
@@ -51,6 +56,9 @@ func TestIndexIsIdempotent(t *testing.T) {
 	}
 	if n := h.bus.Published(); n == 0 {
 		t.Fatal("the first pass published nothing at all")
+	}
+	if got := h.mustQueryInt(`SELECT COUNT(*) FROM attachments`); got != 1 {
+		t.Fatalf("attachments = %d, want 1: the idempotence snapshot would not have covered them", got)
 	}
 }
 

@@ -88,20 +88,45 @@ These are not style preferences. Each has a test or a grep that fails the build.
    DM is already trusted with every secret in plaintext, a backup is a copy of
    what they can already read, and a reindex changes nothing. If that trust
    boundary is ever tightened, the fix is one matrix row and one route's `Perm`.
-   *See the `secret_events` audit* has **no permission constant at all**, and
-   `secrets.Service.Events(ctx, secretID)` takes no principal — so a route added
-   for it would inherit no gate. Nothing calls it and no route is mounted, so
-   nothing leaks today; the events are metadata (action, actor, target) rather
-   than bodies. Whoever adds the audit view must add the permission and pass the
+   *See the `secret_events` audit* **had** no permission constant at all, and
+   `secrets.Service.Events(ctx, secretID)` took no principal, so a route added
+   for it would have inherited no gate. **That gap is closed**: the constant is
+   `authz.PermAuditSecrets` with its own row in `authz.Policy` (DM or admin —
+   the events are metadata, but they do disclose that a secret exists and who
+   has touched it), and the method is `secrets.Service.EventsFor(ctx, actor,
+   secretID)`, which asks the policy **before** the lookup so a refused
+   principal cannot enumerate ids. No route is mounted, so nothing is served;
+   whoever adds the audit view mounts it on that constant and passes the
    principal, not just the id.
 7. **Any new route must be added to the route table in
    `internal/httpapi/routes.go` and to `TestAuthorizationMatrix`.** The `Perm`
    middleware is the only place a role is compared; a grep test fails the build
    on a `Role ==` comparison in a handler.
+   **The `Perm` column is asked with a zero `authz.Resource`, so its name is not
+   always what it grants.** `Server.permit` calls `Policy.Check` with
+   `Resource{}`, so a `PermWritePage` column is answered "is this a DM or an
+   admin" and the ownership arm of the policy is unreachable through it. The
+   page-scoped write rows are therefore `PermSession` in the table and the real
+   decision is `httpapi.mayWritePage` inside the handler, which is the one that
+   carries the page's ownership. The other direction is the trap: putting
+   `PermWritePage` on one of those rows makes §8.9's redacted editor
+   unreachable over HTTP, because a DM's hidden set is empty by definition and
+   the only principal it exists for is a page owner.
 8. **A rendered-page cache does not exist in v1, and adding one requires
    keying by `(pageID, userID, authz_generation)`.** There is deliberately no
    cache: it is a whole class of secret-leak bugs for no measurable gain on a
    local SQLite vault.
+9. **A surface that takes a page path from a request asks `vault.Ignored` on it
+   before it touches the vault.** `vault.Resolve` establishes containment and
+   nothing more: `.semiplane/semiplane.lock` is inside the vault, so a DM
+   holding `PermDeletePage` could otherwise name it and release the
+   single-instance lock the running process still believes it holds, which lets a
+   second instance open the same vault. The page-scoped read and write surfaces
+   go through `httpapi.readablePage` and `httpapi.writablePage`, which do it;
+   the raw view and the rename's own target check do it themselves, and
+   `internal/secrets` refuses the same case from the other side with
+   `ErrAppState`. Pinned by `TestPathTraversalRejected`,
+   `TestSaveRefusesTheAppsOwnState` and `TestRenameRefusesTheAppsOwnState`.
 
 ## 3. Architecture
 
@@ -122,6 +147,7 @@ internal/
   plugin/               Plugin, Descriptor, Kind, Capability, Host, registry
   systems/core/         built-in system (notes, tags, search, backlinks)
   systems/dnd5e/        reference system plugin
+  diff/                 hand-rolled line diff, change script and hunks
   httpapi/              chi router, middleware chain, handlers
   web/                  templ components, layouts, DataStar handlers
   sample/               embedded sample campaign
@@ -136,8 +162,14 @@ docs/                   ADRs and plugin authoring guide
 earlier; never later.**
 
 ```
-config < obs < authz < store < md < plugin < vault < auth < secrets < sync < search < httpapi < web
+config < obs < authz < store < md < plugin < vault < auth < secrets < sync < search < diff < httpapi < web
 ```
+
+`diff` sits immediately below `httpapi` because `httpapi` is its only consumer —
+the conflict page a save shows when it loses an optimistic-concurrency race. It
+imports nothing of ours, so its position is otherwise free, and the comment on
+its entry in `order` says why it is deliberately absent from the plugin
+boundary.
 
 `app` is exempt and imports everything — it is the composition root.
 `testutil` is exempt and imports everything — it boots the app in-process.
@@ -196,7 +228,8 @@ the ones that must exist before a phase is called done:
 - Markdown round trip: `TestRoundTripGolden` (≥40 fixtures × every write path),
   `FuzzNeverCorrupt`, `FuzzMalformedMarkdown`.
 - Vault sync: `TestIndexIsIdempotent`, `TestWatchAndReconcileAgree`,
-  `TestWatcherSuppressesSelfWrites`, `TestReconcileScanFindsMissedEvent`,
+  `TestWatcherSuppressesSelfWritesButNotExternalEdits`,
+  `TestReconcileScanFindsMissedEvent`,
   `TestConcurrentSaveSamePath`.
 - Authorisation: `authz.TestAuthorizationMatrix` (the policy table),
   `authz.TestCanReadSecretOverTheWholeMatrix` (the Go rule),
@@ -204,17 +237,41 @@ the ones that must exist before a phase is called done:
   expectation, which is the cross-check that matters), `httpapi.TestAuthorizationMatrix`
   and `httpapi.TestTheMatrixCoversEveryRoute` (the routes), `TestNoHandRolledVisibilityPredicates`,
   `TestCSRFRequiredOnAllMutations`.
-- Secret redaction: `TestSecretFixturesNeverLeak`, `TestTripwireFiresOnLeak`,
-  `TestSecretBodyNeverInErrorsOrLogs`, `TestRawViewRedactsSecrets`,
+- Secret redaction: `TestNoSecretLeaksThroughAnyPath`,
+  `TestSecretFixturesNeverLeakThroughSearch`, `TestSecretStringCarriesNoBody`,
+  `TestProblemErrorCarriesTheIdNotTheContent`,
+  `TestTheRawViewLocksWhatTheReaderMayNotRead`,
   `TestCampaignStatusIsFieldLevelAuthorized`.
 - Live push: `TestPushNeverLeaksSecret`,
   `TestPushAndFetchProduceIdenticalFragments`, `TestPushTerminatesOnRoleChange`,
   `TestPushDropsSlowConsumer`, `TestPushCoalescesBurst`,
   `TestPushRevokeSendsReloadEvent`, `TestTripwireAlsoCoversPushWrites`.
+- The editor and the write paths it added: `TestEditorRedactedRoundTrip` (the
+  `secrets` half, over a real `secrets.Service`), `TestSaveRejectsStaleHash`,
+  `TestConflictResolutionProducesExpectedBytes`,
+  `TestThePageScopedWriteGateIsARefusalAndNotADecoration`.
+  `TestRoundTripGolden` carries the byte-level claim on its own: every fixture,
+  every write path, including the redacted round trip and the link rewriter.
+- Revisions and renames: `TestRevisionRevocationIsAuthorised`,
+  `TestRevisionHistoryAndRevert`, `TestARenameCarriesThePageOwners`,
+  `TestStalePreviewIsHarmless`, `TestTheBrokenLinksPanelHidesSecretOnlyDanglingLinks`.
+- Schema changes: `store.TestMigrationsFromEveryVersion` builds each historical
+  fixture from migrations `1..V` **cumulatively**, not one file in isolation —
+  see §11. An indexer that writes new rows needs the write side pinned too, or
+  the route that reads them has nothing to read.
+- A hand-rolled algorithm needs a property suite, not a fixture suite:
+  `internal/diff`'s `TestHandRolledIsMinimal` compares the script against a
+  brute-force LCS on generated pairs, and `TestRoundTripProjection` checks the
+  two projections a consumer relies on.
 
 A test that passes vacuously — because the code path it claims to cover does
 not exist yet — is worse than no test. When a surface arrives in a later phase,
-its secret tests live in that phase, where the code is.
+its secret tests live in that phase, where the code is. **A test that passes
+because the fixture did not set up what it asserts is the same failure wearing a
+different hat**, and it is the more dangerous one: see §11. **And a list that
+names a test that does not exist reads as a gate and enforces nothing** — this
+one carried four such names until stage 4, so check a name against
+`rg "func <Name>\("` before relying on it.
 
 ## 6. Secret handling
 
@@ -239,7 +296,18 @@ Checklist, restated so it can be read without the plan:
   `‹s:<id>:<bodyLen>:<bodySHA256first8>›`. On save, each sentinel is recomputed
   from the current on-disk body; a match is spliced back byte for byte, a
   mismatch rejects the whole save. Never detect sentinels by regex over the
-  buffer — match by position against the known secret set.
+  buffer — match by position against the known secret set. The grammar and the
+  splice are `md.Redact`, `md.Sentinel`, `md.ParseSentinel` and `md.Splice` in
+  [`internal/md/sentinel.go`](internal/md/sentinel.go); `secrets.Service.Save`
+  is what calls them.
+- **A sentinel is a restore token, not a display token.** It carries the hidden
+  body's length and an eight-hex-character digest, which is a fingerprint and a
+  fixed size but is still a measurement of something the reader was refused. The
+  editor needs it because a save has to put the body back. Every surface that
+  renders a buffer to be *looked at* — the raw view, the conflict page — replaces
+  the whole fence with `secrets.LockPlaceholder` instead, and
+  `TestTheConflictPageCarriesNoBodyTheReaderWasRefused` is the gate. If you
+  reach for `secrets.EditView` outside the editor, that is the reason not to.
 - An attachment referenced only from inside a secret is served only to
   principals who may read that secret. There is deliberately no global
   `/attachments/{name}` route; the only route is page-scoped.
@@ -251,10 +319,14 @@ Checklist, restated so it can be read without the plan:
 - The `obs` handler refuses `content`, `body`, `snippet` and `raw` attributes
   and truncates anything over 256 bytes. The audit log is a separate
   allow-list handler.
-- `TestSecretFixturesNeverLeak` runs on every CI run, over every page type in
-  the sample campaign, as every role, asserting the response body, the headers
-  and the `data-signals` payload contain no fixture secret the principal may
-  not read. Never mark it skipped.
+- `TestNoSecretLeaksThroughAnyPath` runs on every CI run, over every page type
+  in the sample campaign, as every role, asserting the response body, the
+  headers and the `data-signals` payload contain no fixture secret the
+  principal may not read. Never mark it skipped, and check the name against
+  `rg "func <Name>\("` before relying on it — this line carried the name
+  `TestSecretFixturesNeverLeak` for several stages, which no test has ever
+  been called, and a list that names a test that does not exist reads as a
+  gate and enforces nothing.
 
 ## 7. Plugin development
 
@@ -381,7 +453,14 @@ unsatisfiable rather than stricter.
   not scanned, so a utility class a plugin uses that no core file uses renders
   unstyled and errors nowhere. Use core's existing tokens, or add a rule to
   `web/src/input.css`; the houserules tests assert every class it uses is one
-  core's scan surface already knows.
+  core's scan surface already knows. The same failure has one more shape now:
+  a class that *is* on the scan surface but has no rule behind it. See §11.
+- **`internal/diff` is not on the plugin import list.** It is deliberately
+  absent from `pluginBoundary`, and the comment on its entry in `order` says
+  why: a diff of two byte slices is a pure function with no reach into the
+  request path, but nothing in the plugin contract needs one either, and an
+  allow-list entry is a grant rather than a prohibition. A plugin that needs it
+  gets one line added, deliberately.
 - **A 404 comparison must be within one build and one session.** Two servers
   differ in their shell's CSRF token and in any build-fact signal, so comparing
   a preview 404 against a 404 from a second fixture compares two different shells
@@ -514,3 +593,76 @@ job, `git status --porcelain` must be empty.
   have skipped forever, silently, with no message to read. A gate's failure
   mode should be a **loud** one — a test that asserts the gate has something to
   check, and fails naming what is missing when it does not.
+- **A migration test that applies one file in isolation tests a property of the
+  current series, not of the mechanism.**
+  `TestMigrationsFromEveryVersion` used to build each historical fixture from
+  that version's own SQL and nothing earlier. It passed with one file in the
+  series and started failing the day there were two, which is the point: the
+  form only works while every migration is a complete `CREATE` script, and an
+  `ALTER` is not one. The fixture is now built from migrations `1..V`
+  **cumulatively** (`newDBAtVersion` in
+  [`internal/store/store_test.go`](internal/store/store_test.go)) and every table
+  a later migration touches is seeded first, so the delta is proved over data
+  rather than over an empty schema. A migration whose SQL only runs on an empty
+  table is a migration that loses rows.
+- **A fixture that a later step undoes is a test that cannot fail.**
+  `TestAWriterMayNotReadADMSecret` asserted the *opposite* of what the policy
+  does — that a page owner may not read another author's `private` secret on a
+  page they own — and it passed for three stages. The fixture wrote the
+  ownership grant *before* the reindex that resolves each fence's `author=` to a
+  user id, and `reindexAll` drops the derived index first, so the grant named a
+  page row that no longer existed and `IsPageOwner` answered false for the
+  duration of the test. The assertion was never exercised. The ordering is now
+  reindex-then-grant and the comment on `accountsFor` says it is load-bearing.
+  **An assertion is only as strong as the state its fixture built, and nothing
+  fails when the state was never there.**
+- **`ON DELETE CASCADE` on an ownership table turns a rename into a permission
+  change.** `page_owners.page_id` cascades, and a rename is implemented as
+  "reindex the departed path, reindex the new one", so the departed row's
+  cascade takes every owner with it. Without the carry the rename reports
+  success and silently strips the page of the people who could write it and
+  read the `private` secrets authored on it. `httpapi.RenamePage` copies the
+  owners from a read taken *before* the move, and `TestARenameCarriesThePageOwners`
+  pins it. Ask, for every `CASCADE` in the schema: what does removing the row
+  take with it, and is that right for the operation that removes the row?
+- **A gate asked with the wrong resource is a gate that means something else.**
+  `Server.permit` calls `authz.Policy.Check` with a zero `authz.Resource`, so
+  the route table's `PermWritePage` column is answered "is this a DM or an
+  admin" and the policy's ownership arm is unreachable through it. The name on
+  the row is the thing a reader trusts, and the resource is the thing that
+  decides. `PermSession` on the page-scoped write rows plus `mayWritePage`
+  inside the handler is what §8.9 needs; the reasoning is in the comment on
+  those rows in [`internal/httpapi/routes.go`](internal/httpapi/routes.go).
+- **chi v5 cannot route a suffix on a catch-all.** All three obvious spellings
+  were measured, and `TestTheCatchAllAndItsSuffixesAreUnambiguous` re-measures
+  them so a dependency bump cannot pass unnoticed: `/p/*/raw` **panics at
+  registration**, `/p/{path...}` matches one segment and returns an empty value
+  (worse than useless — it looks like it works), and `/p/{raw}` cannot span a
+  `/`. A page-scoped suffix is therefore a property of the catch-all's *value*,
+  handled by `internal/httpapi/pagedispatch.go`. Do not register a second chi
+  pattern for a page surface: `chi` silently overwrites a handler registered
+  twice for the same method and pattern.
+- **A boundary with no row behind it is a rule nobody wrote down.**
+  `secret_events` had no permission constant at all, and
+  `secrets.Service.Events(ctx, id)` took no principal, so a route mounted for
+  the audit view would have inherited no gate. Nothing leaked only because
+  nothing was mounted. It is closed — `authz.PermAuditSecrets` plus a policy
+  row, and `EventsFor` checks the policy *before* the lookup so a refused
+  principal cannot enumerate ids — and the constant is deliberately not
+  `PermDM`, because folding it in would have closed the gap by accident and left
+  the constant's name lying about what it grants. When you add a surface, ask
+  which policy row answers it; if none does, adding the row is part of the
+  change, not a follow-up.
+- **An exported class with no rule behind it renders unstyled and errors
+  nowhere.** Three components carried `class="card"` for a long time with
+  nothing in `web/src/input.css` matching it, so they rendered as unframed
+  divs and no build, no test and no lint said so — the failure mode is a
+  component that is present and legible, just not the shape its own class name
+  promises. `.card` now has a rule; the trap is that the scan surface (§7) and
+  the rule surface are different sets, and a class on the first with nothing on
+  the second is invisible from Go.
+- **The pinned golangci-lint does not run on this machine's Go toolchain.**
+  The 2.5.0 pin is built with go1.25 and refuses a module that targets 1.26, and
+  lowering `run.go` then panics in `go/types`. Do not report lint as passing;
+  `go build`, `go vet`, `gofmt -l`, `go tool templ fmt -fail` and
+  `./scripts/test.sh` are the gates that do.

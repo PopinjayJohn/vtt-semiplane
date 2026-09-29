@@ -196,6 +196,159 @@ var matrixRoutes = []matrixRoute{
 	{name: "page summary with no provider registered", method: http.MethodGet, pattern: "/plugin/{id}/summary/{pageID}", path: "/plugin/nosuchplugin/summary/1",
 		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
 
+	// The page-scoped surfaces of §9.2–§9.4. Each is one row of the route table
+	// with its own address, which is also the URL a reader types; all of them
+	// mount on the one chi catch-all and are told apart by their trailing
+	// segments, which pagedispatch.go explains and catchall_test.go measures.
+	//
+	// The three /p/*/edit rows are the coarse gate, and the middle one is the
+	// whole cost of it: PermWritePage is asked by the permit middleware with a
+	// zero Resource, so authz sees no ownership and a player who owns the page
+	// and a player who owns nothing are refused identically. That is a DM-or-
+	// admin gate wearing a page-scoped permission's name, and it is why the two
+	// write rows below are PermSession with the page-scoped decision made inside
+	// the handler.
+	//
+	// The byRole pair is the row that makes the property enforced rather than
+	// argued: a page owner is allowed to open the editor for her own page and a
+	// player who owns nothing is refused by the same handler, one page apart. It
+	// cannot be written as a single `authenticated` value, and the day somebody
+	// moves the ownership check back into the table it fails here rather than
+	// quietly narrowing the feature.
+	{name: "page raw", method: http.MethodGet, pattern: "/p/*/raw", path: "/p/Tavern.md/raw",
+		authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	{name: "page raw for a page that does not exist", method: http.MethodGet, pattern: "/p/*/raw", path: "/p/Nonexistent.md/raw",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	// An anonymous principal is answered with the login redirect rather than a
+	// 403 whatever the route's permission is: a safe request can be sent to the
+	// login form and come back, and a 403 would teach an anonymous client that
+	// the path is a real one. checkPerm decides that, in the middleware, for
+	// every route at once.
+	{name: "page editor", method: http.MethodGet, pattern: "/p/*/edit", path: "/p/Tavern.md/edit",
+		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303,
+		byRole: map[string]int{
+			"player who owns the tavern": ok200,
+			"player who owns nothing":    no403,
+		}},
+	// A page that does not exist is a 404 for a principal the gate admits and a
+	// 403 for one it does not. Which is the order the two run in: the page-scoped
+	// check is inside the handler and it is the first thing the handler does, so a
+	// player never learns whether the page is there.
+	//
+	// The two anonymous answers are 303 for a GET and 403 for a POST, which is
+	// checkPerm's rule and not this test's: a redirected POST loses its body, so
+	// only a safe request is offered the login form. The disabled player is a
+	// POST-shaped 403 for the same reason — its session is never established, so
+	// it is an unauthenticated principal, and a mutation by one is refused
+	// rather than redirected.
+	// A page that does not exist is a 404 for everybody, and that is not a
+	// compromise on the ordering. A principal who cannot write a page is refused
+	// with 403 rather than 404, because they have been let past the table's gate
+	// and already know the page is there — but a page that is not there is
+	// nobody's to own, so a player who does not own it has no more claim to it
+	// than a DM does, and the page's existence is not a secret from either:
+	// PermReadPage lets any signed-in reader open it, and it is in the file tree
+	// and every backlink. The rule that would leak is the one this row is not
+	// asserting — a 404 must not stand in for a 403 on a page that *is* there,
+	// and the editor row above is what pins that.
+	{name: "page editor for a page that does not exist", method: http.MethodGet, pattern: "/p/*/edit", path: "/p/Nonexistent.md/edit",
+		authenticated: no404, openToAnonymous: ok303, closedToAnonymous: ok303,
+		byRole: map[string]int{
+			"player who owns the tavern": no404,
+			"player who owns nothing":    no404,
+		}},
+	// A stale hash is refused with 400 and the file is unchanged, so the control
+	// state a CSRF run leaves behind is the one every refusal after it expects.
+	{name: "page save", method: http.MethodPost, pattern: "/p/*/edit", path: "/p/Tavern.md/edit",
+		form:          url.Values{"base_hash": {"not-a-hash"}},
+		authenticated: http.StatusBadRequest, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": http.StatusBadRequest,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	{name: "page history", method: http.MethodGet, pattern: "/p/*/history", path: "/p/Tavern.md/history",
+		authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+	{name: "page history for a page that does not exist", method: http.MethodGet, pattern: "/p/*/history", path: "/p/Nonexistent.md/history",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	// A revision the page has not got. The indexer records no revision at boot,
+	// so a fresh vault has none and the only answer available to a fixture is
+	// the absence — which is also the answer a revoked one is, deliberately.
+	{name: "page revision", method: http.MethodGet, pattern: "/p/*/revisions/{revID}", path: "/p/Tavern.md/revisions/999999",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	{name: "page revert", method: http.MethodPost, pattern: "/p/*/revert/{revID}", path: "/p/Tavern.md/revert/999999",
+		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": no404,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	// An attachment the index has not recorded. The fixture vault holds an
+	// image and the route still answers 404, because the name is resolved
+	// against the attachments table and not against the filesystem: a name that
+	// was never indexed is a name this route will not serve.
+	{name: "page attachment", method: http.MethodGet, pattern: "/p/*/attachment/{name...}", path: "/p/Tavern.md/attachment/tavern-map.png",
+		authenticated: no404, openToAnonymous: no404, closedToAnonymous: ok303},
+	// The broken-links panel. PermReadPage in the table, for the reason
+	// broken.go gives: every row it shows is a page a reader may already open, so
+	// it is navigation over content rather than content, and a reader who may
+	// not read the campaign is sent to the login form. The open/closed pair
+	// below is the same either way, because one policy case answers both — which
+	// is exactly why the comment has to name the table rather than the answer.
+	{name: "broken links", method: http.MethodGet, pattern: "/broken", path: "/broken",
+		authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok303},
+
+	// Renaming a page and the opt-in bulk link updater (§5.6), on the same
+	// two-layer gate as the editor. The byRole pair is the assertion that makes
+	// that gate honest: a page owner renames her own page and a player who owns
+	// nothing is refused by the same handler. Page 3 is Tavern.md, which the
+	// fixture grants thia ownership of, so the owner row is a real 200 against a
+	// page that really is owned rather than a claim about a page nobody owns.
+	//
+	// The 404 rows are the other half: a page that is not there is a 404 for a
+	// principal entitled to look and a 403 for one that is not, and the second
+	// must not be reordered into a 404 by a handler that resolves the page before
+	// it checks the principal.
+	{name: "page rename", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/3/rename",
+		form:          url.Values{"new": {"The Drowned Lantern Inn"}},
+		authenticated: ok200, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": ok200,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	{name: "page rename for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/rename", path: "/api/pages/999999/rename",
+		form:          url.Values{"new": {"Whatever"}},
+		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403},
+	// The preview is a read of the same decision and is checked per page rather
+	// than per route, so an owner's preview of a page other people refer to
+	// reports them as unwritable and still lists them.
+	{name: "rename preview", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/3/rename-preview?new=The%20Inn",
+		authenticated: ok200, openToAnonymous: ok303, closedToAnonymous: ok303,
+		byRole: map[string]int{
+			"player who owns the tavern": ok200,
+			"player who owns nothing":    no403,
+		}},
+	{name: "rename preview for a page that does not exist", method: http.MethodGet, pattern: "/api/pages/{id}/rename-preview", path: "/api/pages/999999/rename-preview?new=Whatever",
+		authenticated: no404, openToAnonymous: ok303, closedToAnonymous: ok303},
+	{name: "link updater", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/3/update-links",
+		form:          url.Values{"new": {"The Inn"}, "confirmed": {"true"}},
+		authenticated: ok200, openToAnonymous: no403, closedToAnonymous: no403,
+		byRole: map[string]int{
+			"player who owns the tavern": ok200,
+			"player who owns nothing":    no403,
+			"disabled player":            no403,
+		}},
+	{name: "link updater for a page that does not exist", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/999999/update-links",
+		form:          url.Values{"new": {"Whatever"}, "confirmed": {"true"}},
+		authenticated: no404, openToAnonymous: no403, closedToAnonymous: no403},
+	// An unconfirmed updater touches nothing and answers 400, which is the
+	// property §5.6 relies on when it says the rewrite is "always an explicit,
+	// previewed, diffed, permission-checked action".
+	{name: "link updater without confirmation", method: http.MethodPost, pattern: "/api/pages/{id}/update-links", path: "/api/pages/3/update-links",
+		form:          url.Values{"new": {"The Inn"}},
+		authenticated: http.StatusBadRequest, openToAnonymous: no403, closedToAnonymous: no403},
+
 	{name: "healthz", method: http.MethodGet, pattern: "/healthz", path: "/healthz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "readyz", method: http.MethodGet, pattern: "/readyz", path: "/readyz", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
 	{name: "stylesheet", method: http.MethodGet, pattern: "/_/assets/*", path: "/_/assets/app.css", authenticated: ok200, openToAnonymous: ok200, closedToAnonymous: ok200},
@@ -431,8 +584,19 @@ func TestTheMatrixCoversEveryRoute(t *testing.T) {
 		// read and one they may not, which have to be indistinguishable.
 		// Anything else with two rows is a duplicate that would make a coverage
 		// count a lie.
+		//
+		// The three page-scoped read surfaces are here for the same reason as
+		// "page that does not exist": a 200 with an empty body and a 404 must not
+		// be interchangeable, and the way to say that is to assert both. A raw
+		// view of a page that is not there, an editor for one and a history list
+		// for one are each two different answers to the same URL, and each pair
+		// is the surface's own version of the page row's two absences.
 		if n > 1 && key != "GET /p/*" && key != "GET /_/assets/*" &&
 			key != "GET /tag/{name}" && key != "GET /api/pages/{id}/context" &&
+			key != "GET /p/*/raw" && key != "GET /p/*/edit" && key != "GET /p/*/history" &&
+			key != "POST /api/pages/{id}/rename" &&
+			key != "GET /api/pages/{id}/rename-preview" &&
+			key != "POST /api/pages/{id}/update-links" &&
 			key != "GET /plugin/{id}/summary/{pageID}" {
 			t.Errorf("the matrix has %d rows for %s", n, key)
 		}
@@ -494,6 +658,14 @@ func TestSetupRouteDisappearsAfterBootstrap(t *testing.T) {
 // the Tavern page, so she reads the page and her own private secret, and she
 // must not read the dm secret on the very page she owns — ownership is not a key
 // that opens everything in the room.
+//
+// What ownership does buy, and what the phrase is about, is §8.4 rule 1: she may
+// not *reveal* another author's private secret to the table. That is the rule
+// this test was reaching for and it is asserted below, because a private secret
+// written by somebody else on a page she co-owns is one she may read — §8.2 says
+// so in a table, and a co-owned page is a shared room by construction. Reading it
+// and broadcasting it to the table are different permissions and the difference
+// between them is the whole content of the rule.
 func TestAWriterMayNotReadADMSecret(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
@@ -503,10 +675,22 @@ func TestAWriterMayNotReadADMSecret(t *testing.T) {
 		t.Parallel()
 		body := fx.asUser(playerName, playerPass).getOK("/p/Tavern.md")
 		assertNoToken(t, body, "DM-BODY-TOKEN-7b1e4d", "the dm secret on a page the reader owns")
-		assertNoToken(t, body, "PRIVATE-BODY-TOKEN-9f3a2c", "another user's private secret")
 		if !strings.Contains(body, "Hidden") {
 			t.Error("the owner saw no lock affordance at all for a secret she may not read")
 		}
+	})
+
+	// §8.2's page-owner column for `private`, stated as its own case because it
+	// is the one a reader of the policy is most likely to get backwards. The
+	// previous version of this test asserted the opposite, and it passed for
+	// three stages only because the fixture's ownership grant was written before
+	// the reindex that dropped it, so the assertion was never exercised: a test
+	// that cannot fail is worse than no test.
+	t.Run("the owner reads another author's private secret on the page they share", func(t *testing.T) {
+		t.Parallel()
+		body := fx.asUser(playerName, playerPass).getOK("/p/Tavern.md")
+		assertHasToken(t, body, "PRIVATE-BODY-TOKEN-9f3a2c",
+			"another author's private secret on a page the reader owns")
 	})
 
 	t.Run("the owner reads her own private secret", func(t *testing.T) {

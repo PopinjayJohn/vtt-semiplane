@@ -828,6 +828,7 @@ func Shortcuts() templ.Component {
 				{"g then t", "Go to tags"},
 				{"g then f", "Go to the file tree"},
 				{"e", "Edit the current page, when you may write it"},
+				{"Ctrl/⌘ + S", "Save the page you are editing"},
 				{"Tab", "Move through the page; the skip link comes first"},
 			}).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {

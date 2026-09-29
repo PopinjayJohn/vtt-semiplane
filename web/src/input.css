@@ -101,6 +101,17 @@
 	--color-revealed: light-dark(oklch(0.58 0.12 150), oklch(0.74 0.13 150));
 	--color-revealed-soft: light-dark(oklch(0.95 0.04 150), oklch(0.3 0.05 150));
 
+	/* The diff's three row tints. They are their own ramp and not the secret
+	 * colours reused: a removed line in red is not a locked secret, and a reader
+	 * who has learned that red means "hidden from you" reads a diff's red as a
+	 * warning about the file rather than as a line the other version does not
+	 * have. Each is a light-dark pair at the same lightness as its neighbour, so
+	 * the three tints are equally present in both themes rather than one of them
+	 * being barely visible. */
+	--color-diff-del: light-dark(oklch(0.94 0.032 25), oklch(0.30 0.05 25));
+	--color-diff-add: light-dark(oklch(0.94 0.032 150), oklch(0.30 0.05 150));
+	--color-diff-mod: light-dark(oklch(0.945 0.042 85), oklch(0.32 0.05 85));
+
 	/* The shell's own surfaces. A sticky header, a sheet and a tab bar cannot
 	 * be the body background, because content scrolls under them. */
 	--color-surface: light-dark(oklch(0.985 0.002 250), oklch(0.13 0.01 250));
@@ -387,6 +398,128 @@
 	.table td {
 		@apply border px-2 py-1 align-top;
 		border-color: var(--color-prose-rule);
+	}
+
+	/* A card is a titled box in a column, and the Card component's own contract
+	 * is that the class exists and the stylesheet owns what it means. Three
+	 * components have been carrying `class="card"` with no rule behind it — the
+	 * backlink panel, the campaign status panel and a plugin panel all render as
+	 * an unframed div, which is a box the reader has to guess the extent of. It
+	 * is written here rather than in each component because a border drawn once
+	 * from the same token is the only way three panels cannot drift apart, and
+	 * because the fieldset the diff uses borrows the same name for the same
+	 * shape.
+	 *
+	 * The border is --color-rule rather than --color-prose-rule: a card is a
+	 * surface being distinguished from the page it sits on, and §3.2's 3:1 rule
+	 * is for boundaries a control has to be found by. */
+	.card {
+		@apply rounded-md border p-3;
+		border-color: var(--color-rule);
+	}
+
+	/* A legend is a fieldset's own title and it sits on the fieldset's border,
+	 * so a card that is a fieldset has to give the legend back its background
+	 * or the rule runs through the text. */
+	fieldset.card > legend {
+		@apply px-1;
+		background-color: var(--color-surface);
+	}
+
+	/* The editor's buffer, and a read-only copy of it.
+	 *
+	 * A textarea is the one form control whose contents are a document rather
+	 * than a value, so it is styled as one: the writer's own monospace, the
+	 * line breaks the file has, and wrapping rather than a horizontal scrollbar
+	 * — a line scrolled out of sight is a line nobody checked before a save
+	 * that is checked byte for byte. The corner drag stays, because a reader
+	 * who wants more room is entitled to it.
+	 *
+	 * `tab-size` is set because the buffer is Markdown, where indentation is
+	 * syntax. A tab rendered as eight columns is a fence that looks like it
+	 * closes and does not. */
+	.editor {
+		@apply block w-full min-h-96 resize-y rounded-md border p-3 font-mono text-sm whitespace-pre-wrap break-words;
+		border-color: var(--color-rule);
+		background-color: var(--color-surface-raised);
+		color: var(--color-ink);
+		tab-size: 4;
+	}
+
+	/* A buffer nobody may type in. It is the same control with the same text,
+	 * and the difference a reader can see is that it is not theirs to change —
+	 * which is a background and never the only signal, since the sentence above
+	 * it says the same thing in words. */
+	.editor[readonly] {
+		background-color: var(--color-prose-code);
+	}
+
+	/* A whole buffer shown as text rather than as a control: a conflict page's
+	 * two sides, and a revision's content. Preformatted and escaped, so it is
+	 * the file as written rather than as this application would render it. */
+	.source {
+		@apply overflow-x-auto rounded-md border p-3 font-mono text-xs whitespace-pre-wrap break-words;
+		border-color: var(--color-prose-rule);
+		background-color: var(--color-prose-pre);
+		color: var(--color-prose);
+		tab-size: 4;
+	}
+
+	/* A side-by-side diff: the file on one side, the other version on the
+	 * other, one row per line so a reader never compares two columns by eye.
+	 *
+	 * The three tints are reinforcement and never the message. The row carries a
+	 * marker glyph as well — `.diff-mark`, written by the template and hidden
+	 * from assistive technology, because the column headers already say which
+	 * side a cell belongs to and a glyph read aloud is noise — and the row's
+	 * data-diff-op is the attribute a stylesheet or a test keys off. Colour is
+	 * the third carrier here, not the first.
+	 *
+	 * The text cells wrap and the number cells do not, so a long line breaks
+	 * instead of pushing the other column off the page, and the number stays
+	 * next to the text it belongs to. */
+	.diff {
+		@apply w-full border-collapse text-left font-mono text-xs;
+	}
+
+	.diff th,
+	.diff td {
+		@apply border-b px-2 py-0.5 align-top;
+		border-color: var(--color-prose-rule);
+	}
+
+	.diff thead th {
+		@apply py-1 font-semibold;
+	}
+
+	.diff .diff-no {
+		@apply whitespace-nowrap pe-1 text-end;
+		width: 1%;
+		color: var(--color-prose-muted);
+		user-select: none;
+	}
+
+	.diff .diff-text {
+		@apply w-1/2 whitespace-pre-wrap break-words;
+	}
+
+	.diff .diff-mark {
+		@apply me-1 font-semibold;
+	}
+
+	.diff tr[data-diff-op="removed"] .diff-text {
+		background-color: var(--color-diff-del);
+	}
+
+	.diff tr[data-diff-op="added"] .diff-text {
+		background-color: var(--color-diff-add);
+	}
+
+	/* A replaced line is tinted once, not twice: colouring both halves of the
+	 * pair with their own colours would read as two unrelated changes rather
+	 * than as one. */
+	.diff tr[data-diff-op="changed"] .diff-text {
+		background-color: var(--color-diff-mod);
 	}
 
 	/* The file tree. A roving-tabindex group, so its rows are focusable and

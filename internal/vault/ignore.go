@@ -42,6 +42,18 @@ func ignoredFileName(name string) bool {
 	return false
 }
 
+// Ignored reports whether a vault-relative path is the app's own state or
+// another tool's, and is therefore not campaign content.
+//
+// Resolve establishes containment — the path is inside the vault — and nothing
+// more. A DM who may delete a page could otherwise name .semiplane/semiplane.lock
+// and release the single-instance lock the running process still believes it
+// holds, which lets a second instance open the same vault. The rule belongs here
+// rather than in Writer because the rule is wrong at the writer: Backup
+// legitimately writes under .semiplane/backups. It is right at the boundary
+// that accepts a path from a request.
+func Ignored(rel string) bool { return ignoredRel(rel) }
+
 // ignoredRel reports whether a vault-relative path is skipped, by any element.
 // The walker consults it per entry; the watcher consults it per event. Both use
 // the whole relative path so a nested .git is skipped exactly as a root one is.

@@ -1269,18 +1269,36 @@ func TestEveryNewRouteIsInTheAuthorizationMatrix(t *testing.T) {
 	})
 }
 
-// TestNoNewRouteLeaksASecret is the tripwire over the five routes this
-// workstream added, as every role.
+// TestNoNewRouteLeaksASecret is the tripwire over every route this workstream
+// added, as every role.
 //
-// The sixth new row, /_/events, belongs to the live-push workstream and is
-// deliberately not walked here: its response is a stream that stays open, so
-// reading its body to the end is exactly the thing a test must not do. Its
-// secrets are covered by the push tests the phase lists.
+// /_/events is deliberately not walked here: its response is a stream that stays
+// open, so reading its body to the end is exactly the thing a test must not do.
+// Its secrets are covered by the push tests the phase lists.
+//
+// The page-scoped rows matter more here than the others did, and the reason is
+// the workstream's shape rather than its content. Every one of them hangs off the
+// /p/* catch-all, and the dispatcher that picks between them is new code; a
+// dispatcher that picked the wrong row would not fail any of the matrix's status
+// codes, because every row is reachable, it would just hand one principal another
+// principal's document. So the walk includes the raw view — a text/plain
+// response, which is the one surface here that no template is standing in front
+// of — the editor, the history, one revision, the attachment route and the
+// broken-links panel.
 func TestNoNewRouteLeaksASecret(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	fx.accountsFor()
 	tavern := pageID(t, fx, "Tavern.md")
+	// A revision to walk, of the page that actually holds the secrets. One is
+	// produced by a real save — the indexer records no revision at boot, so a
+	// write is the only way a page has one — and it is Tavern.md rather than
+	// Index.md, because a revision of a page with no secrets on it tests only
+	// that the route renders. The save is additive and happens before any
+	// session is created, so nothing else in this test depends on the bytes it
+	// leaves behind.
+	saveThroughTheEditor(t, fx, "/p/Tavern.md/edit")
+	revID := newestRevisionIDOf(t, fx, "Tavern.md")
 
 	steps := []step{
 		{name: "tags", method: http.MethodGet, path: "/tags"},
@@ -1291,6 +1309,14 @@ func TestNoNewRouteLeaksASecret(t *testing.T) {
 		{name: "page context", method: http.MethodGet, path: "/api/pages/" + strconv.FormatInt(tavern, 10) + "/context"},
 		{name: "commands", method: http.MethodGet, path: "/_/commands?q=lantern"},
 		{name: "commands with no term", method: http.MethodGet, path: "/_/commands"},
+		{name: "page raw", method: http.MethodGet, path: "/p/Tavern.md/raw"},
+		{name: "page raw as a fragment", method: http.MethodGet, path: "/p/Tavern.md/raw", fragment: true},
+		{name: "page editor", method: http.MethodGet, path: "/p/Tavern.md/edit"},
+		{name: "page editor as a fragment", method: http.MethodGet, path: "/p/Tavern.md/edit", fragment: true},
+		{name: "page history", method: http.MethodGet, path: "/p/Tavern.md/history"},
+		{name: "page revision", method: http.MethodGet, path: "/p/Tavern.md/revisions/" + strconv.FormatInt(revID, 10)},
+		{name: "attachment", method: http.MethodGet, path: "/p/Tavern.md/attachment/tavern-map.png"},
+		{name: "broken links", method: http.MethodGet, path: "/broken"},
 	}
 
 	cases := []leakPrincipal{

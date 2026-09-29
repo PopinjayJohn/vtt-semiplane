@@ -159,6 +159,16 @@ const (
 	// revoking invites. Admin only, and subject to the last-admin refusal
 	// below, which is the whole reason it is not just PermAdmin at the route.
 	PermManageUser Permission = "manageUser"
+	// PermAuditSecrets is reading a secret's audit trail: who created, revealed,
+	// revoked or edited it, and when.
+	//
+	// It is its own constant rather than PermDM so that the trail is a
+	// separable capability. AGENTS.md §6a records that secret_events had no
+	// permission behind it at all, which meant a route mounted for it would
+	// have inherited no gate; folding it into PermDM would have closed that gap
+	// by accident rather than by decision, and would make the constant's name
+	// lie about what it grants.
+	PermAuditSecrets Permission = "auditSecrets"
 )
 
 // Resource is the object a permission check applies to. It is a plain struct,

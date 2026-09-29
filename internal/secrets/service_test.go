@@ -40,20 +40,29 @@ const pageWithFence = "# The Page\n\nPublic before the fence.\n\n" +
 	secretBody + "\n```\n\nPublic after the fence.\n"
 
 type harness struct {
-	t     *testing.T
-	vault *testutil.Vault
-	db    *store.DB
-	ix    *sync.Indexer
-	svc   *secrets.Service
-	sw    *sync.Selfwrites
-	log   *obs.Logger
-	dmID  int64
+	t      *testing.T
+	vault  *testutil.Vault
+	db     *store.DB
+	ix     *sync.Indexer
+	svc    *secrets.Service
+	writer *vault.Writer
+	sw     *sync.Selfwrites
+	log    *obs.Logger
+	dmID   int64
 	// reindexes counts the calls the service made back into the indexer, so a
 	// test can assert the file and the index stayed in step.
 	reindexes atomic.Int64
 }
 
 func newHarness(t *testing.T, files map[string]string) *harness {
+	return newHarnessAs(t, files, false)
+}
+
+// newHarnessAs builds the same harness with --allow-anonymous-read set or not.
+// The editor and revision paths have to be exercised against an anonymous
+// principal as well, and a zero-value Policy would refuse it before any of the
+// behaviour under test ran.
+func newHarnessAs(t *testing.T, files map[string]string, allowAnonymousRead bool) *harness {
 	t.Helper()
 	v := testutil.WithVault(t, files)
 	db, err := store.Open(v.Root)
@@ -93,8 +102,9 @@ func newHarness(t *testing.T, files map[string]string) *harness {
 	w := vault.NewWriter(v.Root, h.log)
 	w.Store = h.sw
 	w.Clock = func() time.Time { return clockNow }
+	h.writer = w
 	svc, err := secrets.NewService(secrets.Options{
-		DB: db, Writer: w, Policy: authz.NewPolicy(false),
+		DB: db, Writer: w, Policy: authz.NewPolicy(allowAnonymousRead),
 		Reindexer: countingReindexer{ix: ix, calls: &h.reindexes},
 		Log:       h.log,
 		Clock:     func() time.Time { return clockNow },
@@ -262,7 +272,7 @@ func TestRevealIsAFileMutation(t *testing.T) {
 	}
 
 	// The audit trail.
-	events, err := h.svc.Events(context.Background(), secretID)
+	events, err := h.svc.EventsFor(context.Background(), h.dm(), secretID)
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -333,7 +343,7 @@ func TestRevokePurgesTheIndex(t *testing.T) {
 		t.Errorf("the authorization generation moved from %d to %d, want at least two steps", genBefore, genAfter)
 	}
 	// Both events are on the trail.
-	events, err := h.svc.Events(ctx, secretID)
+	events, err := h.svc.EventsFor(ctx, h.dm(), secretID)
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -462,7 +472,7 @@ func TestAnIdempotentRevealWritesNothing(t *testing.T) {
 	if got := h.reindexes.Load(); got != indexes {
 		t.Errorf("the second reveal re-indexed (%d then %d)", indexes, got)
 	}
-	events, err := h.svc.Events(ctx, secretID)
+	events, err := h.svc.EventsFor(ctx, h.dm(), secretID)
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}

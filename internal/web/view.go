@@ -168,6 +168,16 @@ func regionOf(v httpapi.View) (templ.Component, error) {
 		return Setup(t), nil
 	case httpapi.InviteView:
 		return Invite(t), nil
+	case httpapi.EditView:
+		return Edit(t), nil
+	case httpapi.ConflictView:
+		return ConflictPage(t), nil
+	case httpapi.HistoryView:
+		return History(t), nil
+	case httpapi.RevisionView:
+		return Revision(t), nil
+	case httpapi.BrokenLinksView:
+		return BrokenLinks(t), nil
 	case httpapi.ErrorView:
 		return ErrorPage(t), nil
 	case nil:

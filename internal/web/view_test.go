@@ -68,6 +68,16 @@ func typeName(v httpapi.View) string {
 		return "Setup"
 	case httpapi.InviteView:
 		return "Invite"
+	case httpapi.EditView:
+		return "Edit"
+	case httpapi.ConflictView:
+		return "Conflict"
+	case httpapi.HistoryView:
+		return "History"
+	case httpapi.RevisionView:
+		return "Revision"
+	case httpapi.BrokenLinksView:
+		return "BrokenLinks"
 	case httpapi.ErrorView:
 		return "Error"
 	default:

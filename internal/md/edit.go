@@ -332,10 +332,43 @@ func secretBody(src []byte, s Span) (start, end int) {
 	for lineStart > start && src[lineStart-1] != '\n' {
 		lineStart--
 	}
-	if lineStart > start {
+	if lineStart > start || closesFence(src, s, lineStart) {
+		// lineStart == start means the span's last line begins where the body
+		// would: the block has no body at all and that line is the closing
+		// fence, so the body is the empty range. Treating it as a body would
+		// hand the closing fence to a caller as the secret's text — a body of
+		// "```" whose hash is a hash of three backticks, and a redaction that
+		// replaces it destroys the fence it was supposed to leave alone.
 		end = lineStart
 	}
 	return start, end
+}
+
+// closesFence reports whether the line at off closes the secret span s. It is
+// the same test findSecretEnd applies, factored out so that the body of a fence
+// and the extent of a fence are one rule rather than two.
+func closesFence(src []byte, s Span, off int) bool {
+	if off < 0 || off >= len(src) {
+		return false
+	}
+	lineEnd, _, ok := lineBounds(src, off)
+	if !ok {
+		return false
+	}
+	g, isFence := fenceAt(src[off:lineEnd])
+	if !isFence {
+		return false
+	}
+	openEnd, _, ok := lineBounds(src, s.StartByte)
+	if !ok {
+		return false
+	}
+	f, isFence := fenceAt(src[s.StartByte:openEnd])
+	if !isFence {
+		return false
+	}
+	return g.QuoteDepth == f.QuoteDepth && g.Char == f.Char &&
+		g.Run >= f.Run && g.Info == "" && g.Indent <= f.Indent+3
 }
 
 // renderPatch turns a patch into YAML lines, sorted by key so that two runs of

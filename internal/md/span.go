@@ -1,5 +1,10 @@
 package md
 
+import (
+	"strconv"
+	"strings"
+)
+
 // SpanKind classifies a byte range of a source file.
 type SpanKind int
 
@@ -106,20 +111,43 @@ type Doc struct {
 type Problem struct {
 	// Code is a stable machine-readable identifier, e.g. "secret.unterminated".
 	Code string
-	// StartByte locates the problem in Doc.Bytes, when it has a location.
+	// StartByte locates the problem in Doc.Bytes, when it has a location. An
+	// operation over a submitted buffer rather than over the document — the
+	// redacted save, the link rewriter — locates it in what it was given, and
+	// says so in its own documentation.
 	StartByte int
 	// SecretID is set when the problem concerns a specific secret.
 	SecretID string
+	// Path is the page the problem is about, when the operation was given one.
+	// A path is not document content, so it is safe to put in a message and in
+	// a log line where a line of vault text would not be.
+	Path string
+	// Line is the 1-based line StartByte falls on, when the operation knows the
+	// file's line structure. Zero when it does not.
+	Line int
 	// Message is a human-readable, lowercase, no-punctuation description. It
 	// must never contain document content.
 	Message string
 }
 
 func (p Problem) Error() string {
-	if p.SecretID != "" {
-		return p.Code + ": " + p.SecretID + ": " + p.Message
+	var b strings.Builder
+	b.WriteString(p.Code)
+	if p.Path != "" {
+		b.WriteString(": ")
+		b.WriteString(p.Path)
 	}
-	return p.Code + ": " + p.Message
+	if p.Line > 0 {
+		b.WriteString(" line ")
+		b.WriteString(strconv.Itoa(p.Line))
+	}
+	if p.SecretID != "" {
+		b.WriteString(": ")
+		b.WriteString(p.SecretID)
+	}
+	b.WriteString(": ")
+	b.WriteString(p.Message)
+	return b.String()
 }
 
 // PublicSpans returns the spans that every reader of the page may see, in

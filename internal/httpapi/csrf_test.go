@@ -4,13 +4,19 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/config"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/vault"
 )
 
 // TestCSRFRequiredOnAllMutations is derived from the route table, not from a
@@ -79,6 +85,19 @@ func TestCSRFRequiredOnAllMutations(t *testing.T) {
 					victim := fx.newSession()
 					if state.signed {
 						victim = fx.asUser(otherName, otherPass)
+						// A page-scoped write needs a principal the route's
+						// coarse gate admits, and that is a DM or an admin:
+						// permit asks the policy with a zero Resource, so the
+						// player this test signs in as is refused before the
+						// handler runs. A control run refused by the gate
+						// measures the gate, not the token — and there is no
+						// state in which a player can be the control for
+						// these rows, so the row would otherwise be skipped
+						// in both states and the coverage assertion at the
+						// bottom would fail.
+						if admin, ok := fx.tryAdminSession(); ok && needsAWriter(rt) {
+							victim = admin
+						}
 					} else {
 						victim.prime()
 					}
@@ -197,9 +216,79 @@ func concretePath(fx *fixture, rt httpapi.Route) string {
 	switch rt.Pattern {
 	case "/invite/{token}":
 		return "/invite/" + fixtureInviteToken(fx)
+	case "/p/*/raw":
+		return "/p/Index.md/raw"
+	case "/p/*/edit":
+		return "/p/Index.md/edit"
+	case "/p/*/history":
+		return "/p/Index.md/history"
+	case "/p/*/revisions/{revID}":
+		return "/p/Index.md/revisions/1"
+	case "/p/*/revert/{revID}":
+		// A real revert needs a real revision, and a vault has none until
+		// something writes one. So the control run for this route makes one
+		// through the ordinary save path first — which is the only way a
+		// revision can come into existence — and then names the newest. A
+		// non-existent id would answer 404, and a control run that is refused
+		// measures the revision lookup rather than the token.
+		return "/p/Index.md/revert/" + fixtureNewestRevisionID(fx)
+	case "/p/*/attachment/{name...}":
+		return "/p/Index.md/attachment/tavern-map.png"
+	case "/api/pages/{id}/rename":
+		// Page 3 is Tavern.md, which the fixture makes thia a page owner of, so
+		// the control run is a rename by someone entitled to make it. needsAWriter
+		// below is what makes that sign-in happen; a path alone does not.
+		return "/api/pages/3/rename"
+	case "/api/pages/{id}/update-links":
+		return "/api/pages/3/update-links"
 	default:
 		return rt.Pattern
 	}
+}
+
+// fixtureNewestRevisionID produces one revision of the fixture's index page by
+// saving it unchanged, and returns its id.
+//
+// Saving the page's own bytes with its own hash is a real write that is also a
+// no-op as far as the campaign is concerned, which is what makes it usable as a
+// control: the refusal cases that follow must still find the page as it was, and
+// they do, because a save of identical bytes writes identical bytes.
+func fixtureNewestRevisionID(fx *fixture) string {
+	fx.t.Helper()
+	fx.revisionOnce.Do(func() {
+		fx.newestRevision = "1"
+		path := filepath.Join(fx.Root, "Index.md")
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		p, err := vault.Resolve(fx.Root, "Index.md")
+		if err != nil {
+			return
+		}
+		// The fixture's own writer, so the revision is recorded by the same
+		// mechanism the route uses and not by a test-only insert.
+		if err := fx.Vault.Save(context.Background(), vault.SaveRequest{
+			Path:            p.Rel(),
+			NewContent:      src,
+			BaseContentHash: vault.Hash(src),
+			ActorID:         fx.tryAdminPrincipal().UserID,
+			ExpectPerm:      authz.PermWritePage,
+		}); err != nil {
+			return
+		}
+		fx.reindexAll()
+		page, ok := fx.pageIDByPath("Index.md")
+		if !ok {
+			return
+		}
+		rows, err := store.ListRevisionMetaByPage(context.Background(), fx.DB.Reader(), page, 10)
+		if err != nil || len(rows) == 0 {
+			return
+		}
+		fx.newestRevision = strconv.FormatInt(rows[0].ID, 10)
+	})
+	return fx.newestRevision
 }
 
 // routeFormFor is a body that satisfies a mutating route's handler, so that a
@@ -222,6 +311,33 @@ func routeFormFor(fx *fixture, rt httpapi.Route) url.Values {
 		return url.Values{"username": {"x"}, "display_name": {"New Name"}, "passphrase": {"a passphrase long enough"}}
 	case "/invite/{token}":
 		return url.Values{"username": {"newname"}, "passphrase": {"a passphrase long enough"}}
+	case "/p/*/edit":
+		// A real save, not a refused one. The editor is the one mutating route
+		// whose refusal answers 400 and its success answers 200, and the control
+		// run has to be the success — the whole point of the row is that a bad
+		// token is refused on a route that does work with a good one. The base
+		// hash is the page's own, read from the fixture's file, and the content
+		// is the page's own bytes, so the write is a no-op as far as the campaign
+		// is concerned and the three refusals after it still find the page intact.
+		src, err := os.ReadFile(filepath.Join(fx.Root, "Index.md"))
+		if err != nil {
+			return url.Values{"content": {"# Index\n"}, "base_hash": {""}}
+		}
+		return url.Values{"content": {string(src)}, "base_hash": {vault.HashHex(src)}}
+	case "/p/*/revert/{revID}":
+		// A revert takes no fields: the revision is in the path and the token
+		// travels in the header, the way a script would send it. An empty form is
+		// the honest one rather than a placeholder a handler might read.
+		return url.Values{}
+	case "/api/pages/{id}/rename":
+		// A real rename, not a refused one: the control run has to be the
+		// success, and Tavern.md's name is free to be taken.
+		return url.Values{"new": {"The Drowned Lantern Inn"}}
+	case "/api/pages/{id}/update-links":
+		// confirmed is not a formality. Without it the route answers 400 and
+		// touches nothing, which is not an accepted response and would make the
+		// row skip in both states.
+		return url.Values{"new": {"The Inn"}, "confirmed": {"true"}}
 	default:
 		return url.Values{}
 	}
@@ -596,4 +712,30 @@ func TestConcurrentRequestsForOnePageAreIndependent(t *testing.T) {
 	for msg := range errs {
 		t.Error(msg)
 	}
+}
+
+// needsAWriter reports whether a route's gate admits only a DM or an admin.
+//
+// The answer is a property of the table's permission, not of this test, and it is
+// read from the table rather than kept as a list here: a route that gains or
+// loses a coarse gate would be picked up with no edit to this file, which is the
+// property the rest of this test is built on. Only a write permission can be
+// satisfied without a resource, so only a write can be closed to a player while
+// the table still says the route exists.
+func needsAWriter(rt httpapi.Route) bool {
+	switch rt.Perm {
+	case authz.PermWritePage, authz.PermWriteSecret, authz.PermDM, authz.PermAdmin:
+		return true
+	}
+	// The page-scoped writes are PermSession in the table — see routes.go for
+	// why — so the column says nothing about whether the route writes, and the
+	// control run has to sign in as the page owner rather than as whoever
+	// `otherName` is. Naming the patterns rather than the permission keeps every
+	// other row on the session it already used.
+	switch rt.Pattern {
+	case "/p/*/edit", "/p/*/revert/{revID}",
+		"/api/pages/{id}/rename", "/api/pages/{id}/update-links":
+		return true
+	}
+	return false
 }

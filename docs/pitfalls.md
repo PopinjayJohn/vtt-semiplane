@@ -25,6 +25,13 @@ wired into `make test`, `test-race`, `cover`, `fuzz` and all three CI test jobs.
 The link step is what bites, not the run step — that is why `-p 1` is the
 setting that matters.
 
+**A flag that takes a value has to push that value onto the extra-args list, and
+`-fuzz` did not.** It set a mode flag and discarded the target name, so the
+target fell through to the package list and the script died with "takes exactly
+one package" for the package it had been given. The fix is one line in
+`scripts/test.sh`; the reason it is written down is that a correctly typed
+invocation reported a *usage* error about an argument that was there, which reads
+as the caller's mistake and is not. The fix is in `scripts/test.sh`.
 ## A spinner is a memory leak that never reports itself
 
 Two infinite loops shipped in the Markdown pipeline, and both had the same
@@ -53,9 +60,16 @@ Tailwind's automatic source detection walks the project root looking for
 candidate class names. In this repository that walk reads
 `internal/md/testdata`, whose largest fixture is a megabyte of wikilinks on a
 single unbroken line, and a line that long is pathological for candidate
-scanning. Measured on a gamedrive checkout: **over 600 seconds, which reads as a
-hang.** The same command in `/tmp` finishes in about a second, so the cost is the
-walk over the mount, not the CSS.
+scanning.
+
+**The cost is CPU, not the filesystem, and this repository got that wrong for a
+while.** The build finished all of its reads within seconds and then sat at
+100% CPU with zero further I/O; the same symptom was recorded here as a
+`/mnt/gamedrive` mount problem, which was wrong. It reproduces identically on
+tmpfs, and the same command with `source(none)` finishes in ~70 ms both in the
+repo and in `/tmp`. A build that reads like it is stuck is this bug, not a slow
+mount — check it with `strace -c` or `/proc/<pid>/io` before looking anywhere
+else.
 
 The fix is one token:
 
@@ -68,10 +82,10 @@ The fix is one token:
 ```
 
 `source(none)` turns automatic detection off entirely and the explicit list
-supplies the candidates. `make css` then completes in **82 ms**. Narrowing the
-`@source` list alone does *not* fix it — the walk still happens, it just
-collects less. If the build ever hangs again, check that `source(none)` is still
-on the import before looking at anything else.
+supplies the candidates. Narrowing the `@source` list alone does *not* fix it —
+the walk still happens, it just collects less. If the build ever hangs again,
+check that `source(none)` is still on the import before looking at anything
+else.
 
 Two things the explicit list must keep:
 
@@ -82,6 +96,15 @@ Two things the explicit list must keep:
 - **`web/static/app.css` is the artefact of record** and is committed. Never
   hand-edit it; run `make css`. `css-check` in CI regenerates and diffs it, so
   a build that cannot run locally is a build that fails only in CI.
+
+The trap has a second shape, and it is invisible from Go: **the scan surface and
+the rule surface are different sets.** A class nothing on the `@source` list
+mentions renders unstyled; so does a class that *is* scanned but has no rule
+behind it. Three components carried `class="card"` for a long time with nothing
+in `input.css` matching it, so they rendered as unframed divs and no build, no
+test and no lint said so. `.card` has a rule now; the way to catch the next one
+is to grep the templates for a class and grep `input.css` for it, because
+nothing in the Go toolchain will.
 
 ## A background process still holds the tool call open
 
@@ -209,16 +232,26 @@ things a reader of the code would find:
   that the tag does not exist, which is a statement about the campaign they are
   not entitled to.
 
-## Tooling that has never run here
+## `make lint` cannot run on this machine's Go toolchain
 
-`make lint` runs `golangci-lint` from `$(go env GOPATH)/bin`, which is **not on
-`PATH` by default** — `make lint` fails with `command not found` on a healthy
-tree. Export the path first. With it on `PATH` the run is clean against the
-committed baseline; the working tree adds a handful of findings in test files,
-which is recorded in the stage 2 summary rather than left to be discovered.
+Two separate problems, and only the first one is worth remembering.
 
-CI runs it. The gates that do work here are `go build ./...`,
-`go vet ./...`, `gofmt -l .`, `go tool templ generate ./...` reporting
-`updates=0`, `go tool templ fmt -fail .`, and `./scripts/test.sh`. Do not report
-lint as passing when it did not run.
+The obvious one: `make lint` runs `golangci-lint` from `$(go env GOPATH)/bin`,
+which is **not on `PATH` by default**, so it fails with `command not found` on a
+healthy tree.
+
+The one that does not have a workaround: the **pinned version cannot parse this
+module at all**. `GOLANGCI_LINT_VERSION=2.5.0` in
+[`../tools/versions.env`](../tools/versions.env) is built with go1.25 and
+refuses a module whose `go` directive is 1.26 ("the Go language version used to
+build golangci-lint is lower than the targeted Go version"), and lowering
+`run.go` to get past that then panics in `go/types`. The `go` directive is 1.26
+because templ v0.3.1020 requires it, so this is a circular pin rather than a
+configuration mistake: it needs a newer golangci-lint in `tools/versions.env`,
+not a flag.
+
+CI runs it, so a red lint there is a real finding. The gates that do work here
+are `go build ./...`, `go vet ./...`, `gofmt -l .`, `go tool templ generate
+./...` reporting `updates=0`, `go tool templ fmt -fail .`, and
+`./scripts/test.sh`. **Do not report lint as passing when it did not run.**
 

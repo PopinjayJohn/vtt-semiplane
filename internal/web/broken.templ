@@ -1,0 +1,139 @@
+package web
+
+import "github.com/PopinjayJohn/vtt-semiplane/internal/httpapi"
+
+// brokenLinkWord is the human name for a reference kind, and the raw value for
+// anything this package has never heard of.
+//
+// A table of vocabularies in one place, for the reason commands.templ keeps
+// theirs: a map a template switches on is a map somebody has to remember to
+// update, and an unknown value has to render as itself rather than as a blank
+// cell that looks like a missing row.
+var brokenLinkWord = map[string]string{
+	"wikilink":   "Wiki link",
+	"markdown":   "Markdown link",
+	"embed":      "Embed",
+	"attachment": "Attachment",
+	"tag":        "Tag",
+}
+
+func brokenLinkKind(kind string) string {
+	if word, ok := brokenLinkWord[kind]; ok {
+		return word
+	}
+	return kind
+}
+
+// BrokenLinks is the campaign's dangling references, as one page.
+//
+// The number over the list and the list itself both come from the handler, from
+// the same statement and the same count, so the panel cannot show one number
+// over a different set of rows — which is the existence leak AGENTS.md §2.4 is
+// about, in the only shape this surface could produce it.
+//
+// The cap is stated rather than implied. A reader who is shown 200 of 4,000 and
+// told the cap has been reached can go and look in the files; a reader who is
+// shown 200 of 4,000 and told nothing is being told, wrongly, that the campaign
+// has 200 mistakes in it.
+templ BrokenLinks(v httpapi.BrokenLinksView) {
+	<section aria-labelledby="broken-heading">
+		<h1 id="broken-heading" data-focus-target class="text-2xl font-semibold tracking-tight">
+			Broken links
+		</h1>
+		<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+			References in this campaign that point at a page which does not exist. The link
+			as the author wrote it is what is shown: a path with no extension, a name that has
+			been renamed, a link into a folder that was deleted.
+		</p>
+		<div class="mt-4 flex flex-wrap items-center gap-2">
+			@Badge(itoa(v.Total), "bg-neutral-200 px-2 py-0.5 text-xs")
+			<span class="text-xs text-neutral-500 dark:text-neutral-400">
+				{ plural(v.Total, "reference", "references") } you may see
+			</span>
+		</div>
+		@brokenNotice(v)
+		@brokenRows(v.Rows)
+	</section>
+}
+
+templ brokenNotice(v httpapi.BrokenLinksView) {
+	if v.Truncated {
+		<p class="mt-4 text-sm text-neutral-600 dark:text-neutral-300">
+			Showing the first { itoa(len(v.Rows)) } of { itoa(v.Total) }. The panel stops at
+			{ itoa(v.ShownLimit) } because a campaign that has just been restructured can hold
+			far more than one response should carry; the rest are in the files.
+		</p>
+	}
+}
+
+templ brokenRows(rows []httpapi.BrokenLinkRow) {
+	if len(rows) == 0 {
+		<div class="mt-4">
+			@EmptyState("Nothing dangles", noBrokenLinks())
+		</div>
+	} else {
+		<div class="mt-4 overflow-x-auto">
+			<table class="table">
+				<caption class="sr-only">
+					Every reference in the campaign that does not resolve to a page
+				</caption>
+				<thead>
+					<tr>
+						<th scope="col">Written on</th>
+						<th scope="col">Points at</th>
+						<th scope="col">Line</th>
+						<th scope="col">Kind</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						@brokenRow(row)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// noBrokenLinks says the campaign is clean, which is a claim worth making
+// loudly: a panel that is empty because nothing dangles and a panel that is
+// empty because the query found nothing are the same document, and the reader
+// deserves to be told which one they are looking at.
+templ noBrokenLinks() {
+	<p>
+		Every reference in the campaign resolves to a page. This counts only the references
+		you are allowed to see, so a reference inside a secret you may not read is not
+		counted here and is not reported here.
+	</p>
+}
+
+// brokenRow is one dangling reference.
+//
+// A referring page with no title is one the index has not caught up with, and it
+// is rendered as words rather than as a link: a link to /p/ for a page whose
+// path is not known is a control that answers 404, and the reference itself is
+// still real — it is in a file on disk, and dropping the row would be claiming
+// the campaign has fewer dangling links than it has.
+templ brokenRow(row httpapi.BrokenLinkRow) {
+	<tr>
+		<td>
+			if row.Card.Title == "" {
+				<span class="text-neutral-600 dark:text-neutral-400">
+					A page the index does not have
+					if row.Card.ID != 0 {
+						{ " (" + itoa(int(row.Card.ID)) + ")" }
+					}
+				</span>
+			} else {
+				<a href={ row.Card.Href() } class="font-medium hover:underline">{ row.Card.Title }</a>
+			}
+		</td>
+		<td>
+			<code>{ row.Target }</code>
+		</td>
+		<td class="whitespace-nowrap">{ itoa(row.Line) }</td>
+		<td>
+			@Badge(brokenLinkKind(row.Kind), "bg-neutral-200 px-1.5 py-0.5 text-xs")
+		</td>
+	</tr>
+}

@@ -14,7 +14,6 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/secrets"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/vault"
-	"github.com/go-chi/chi/v5"
 )
 
 // recentLimit is how many pages the dashboard shows.
@@ -81,7 +80,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	who := PrincipalFrom(ctx)
-	path := chi.URLParam(r, "*")
+	path := selectedPath(r)
 	if path == "" {
 		s.writeError(w, r, http.StatusNotFound)
 		return
@@ -132,6 +131,20 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	}
 
 	card := cardOf(row)
+	// The edit affordance is the page's own editor URL or nothing at all.
+	// mayWritePage is the page-scoped gate the editor itself asks before it
+	// renders a form, so a viewer who may not write this page is handed no
+	// control that would be refused — a link whose activation answers 403 is a
+	// broken control wearing a permission's clothes.
+	editHref := ""
+	mayWrite, err := s.mayWritePage(ctx, who, row.ID)
+	if err != nil {
+		s.fail(w, r, "resolve the page's write permission", err)
+		return
+	}
+	if mayWrite {
+		editHref = card.Href() + "/edit"
+	}
 	// The frontmatter's `type:` selects the viewer and the panel set, and it is
 	// read from the file rather than from the URL: a registered page type and a
 	// page-type convention are different things, and both arrive the same way —
@@ -140,6 +153,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	view := PageView{
 		Shell:         s.liveShell(r, card.Title),
 		Card:          card,
+		EditHref:      editHref,
 		Body:          body,
 		Toc:           aside.toc,
 		Backlinks:     aside.backlinks,

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 )
 
 // Attachment is a non-Markdown file recorded from the index.
@@ -77,6 +79,57 @@ func ListAttachmentsByPage(ctx context.Context, q Queryer, pageID int64) ([]Atta
 		return nil, fmt.Errorf("store: list attachments of page %d: %w", pageID, err)
 	}
 	return collectAttachments(rows)
+}
+
+// attachmentVisibleSQL is §8.8's rule as one statement: an attachment is served
+// if at least one referencing links row for its page is public, or lives inside
+// a secret this principal may read.
+//
+// The join to the attachment row is not a formality. The rule is about a
+// *reference*, so a query that counted references without asking whether the
+// file is one of the page's recorded attachments would report a DM's secret-only
+// image as servable for any name the page happens to mention — and the serve
+// path resolves names against the attachments rows precisely so that a file the
+// index never recorded cannot be served at all. The `pages p` join is not
+// decorative either: the predicate's private branch names it to test ownership.
+//
+// name is the string both sides carry, and the two are the same string by
+// construction: the indexer writes target_raw and attachments.path from one
+// extraction of the same token. A caller that resolved a name to some other
+// vault-relative path is asking a different question here and gets the safe
+// answer, because this package matches exactly and never by basename.
+const attachmentVisibleSQL = `SELECT 1
+	FROM attachments a
+	JOIN links l ON l.source_page_id = a.page_id
+	JOIN pages p ON p.id = a.page_id
+	WHERE a.page_id = ? AND a.path = ? AND l.kind = ? AND l.target_raw = ?
+	  AND (l.secret_id IS NULL
+	       OR EXISTS (SELECT 1 FROM secrets s WHERE s.id = l.secret_id AND ` + authz.SecretVisibleSQL + `))`
+
+// AttachmentVisibleTo reports whether one of a page's recorded attachments may
+// be served to a principal.
+//
+// The answer is a bool and never ErrNoRows, so "you may not have it" and "there
+// is no such file" are one answer: a route that could tell them apart would be a
+// route that confirms the existence of a DM's portrait. A principal who may not
+// read public content at all is answered without a query, which is §8.2's bottom
+// row rather than a special case of the SQL.
+func AttachmentVisibleTo(ctx context.Context, q Queryer, p authz.Principal, pageID int64, name string) (bool, error) {
+	if !p.CanReadPublic() {
+		return false, nil
+	}
+	uid, isDM := p.Bind()
+	var one int
+	err := q.QueryRowContext(ctx, attachmentVisibleSQL+publicOnlySQL(p, `l.secret_id IS NULL`),
+		pageID, name, string(LinkAttachment), name,
+		sql.Named("uid", uid), sql.Named("is_dm", isDM)).Scan(&one)
+	switch {
+	case err == sql.ErrNoRows:
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("store: check attachment on page %d: %w", pageID, err)
+	}
+	return true, nil
 }
 
 func collectAttachments(rows *sql.Rows) ([]Attachment, error) {

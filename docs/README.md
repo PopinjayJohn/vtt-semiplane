@@ -27,7 +27,7 @@ this case.
 
 | Document | What is in it | Read it when |
 |---|---|---|
-| [`spec.md`](spec.md) | the data model, the Markdown pipeline, the index, the request lifecycle, what stage 1 delivers and what does not exist yet | you are changing how a file becomes a page, or a page becomes a response |
+| [`spec.md`](spec.md) | the data model, the Markdown pipeline, the index, the request lifecycle, what each stage delivered, and what does not exist yet | you are changing how a file becomes a page, or a page becomes a response |
 | [`security.md`](security.md) | the threat model, the canonical visibility predicate, the authorization matrix, the secret lifecycle, the tripwire, and what is deliberately not defended | you are touching anything that can read, write, log or render a secret |
 | [`plugins.md`](plugins.md) | the plugin contract, kinds, capabilities, the version gate, the import boundary, link previews | you are deciding **whether** to write a plugin, or what the boundary is |
 | [`PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md) | the procedure: which kind, what the host inherits, what you may not import, and the order to build in | you are writing a game system, a feature, or a route under `/plugin/` |
@@ -54,7 +54,7 @@ Every package in the module is green, from `cmd/semiplane` to `internal/web`: th
 and its migrations, the Markdown pipeline, vault I/O with an atomic writer and a
 single-instance lock, the indexer and the invalidation bus, Argon2id accounts
 with sessions and invites, the authorization policy, the router, the templ
-view layer, and the two stages built on top of them.
+view layer, and the four stages built on top of them.
 
 **Stage 1** is the data layer through to a readable page: the store and its
 migrations, the Markdown pipeline, vault I/O, the indexer and bus, accounts and
@@ -78,6 +78,18 @@ is something a build runs rather than something a document claims — together
 they exercise a nav group, mounted routes, a search resolver, a summary
 provider, and the rule that a feature plugin may not register page types.
 
+**Stage 4** is the write half, and it is the stage that made a secret legible
+to two people at once. It added the redacted editing path (`md.Redact`,
+`md.Splice`, `secrets.Service.EditView`/`Save`), the revision read paths and
+their read-time re-authorisation, the page-scoped surfaces in
+[`../internal/httpapi/pagedispatch.go`](../internal/httpapi/pagedispatch.go) —
+raw, editor, history, one revision, revert, page-scoped attachment, the
+broken-links panel — and the three §5.6 rename/link-updater routes. It also
+added `internal/diff` (hand-rolled, no dependency, argued in its own
+`doc.go`), `vault.Writer.Delete`/`Move`, the two migrations that made the
+attachment rows and the link byte offsets real, and the audit permission that
+[`../AGENTS.md`](../AGENTS.md) §2.6a had recorded as missing.
+
 Two of the three surfaces stage 3 left unwired are now wired, and one is
 deliberately still `nil`:
 
@@ -94,13 +106,11 @@ deliberately still `nil`:
   and extracting it under time pressure is the most likely way to put a secret
   where a plugin can see it.
 
-Still **not** built: the editor, the sample campaign extraction and the release
-pipeline. `spec.md` says so per section, and a consequence worth knowing is that
-there is deliberately **no edit link** anywhere: `/p/{path}/edit` does not exist,
-and an affordance for a route that answers 404 is a control that lies.
-`home.templ` records why, and `app.js` implements the `e` key by looking for an
-attribute that is therefore absent.
-
+Still **not** built: the sample campaign extraction and the release pipeline.
+`spec.md` says so per section. The editor, which was the reason the shell had
+no edit affordance, now exists: `PageView.EditHref` is filled from
+`mayWritePage`, `home.templ` renders the link when it is set, and `app.js`
+implements the `e` key against it.
 
 ## Adding a document
 

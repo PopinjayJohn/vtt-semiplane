@@ -126,10 +126,17 @@ type Options struct {
 // measurable gain on a local SQLite vault, and §2.8 is explicit that v1 has
 // none; a second request with a different principal re-renders from the file.
 type Server struct {
-	cfg      config.Config
-	db       *store.DB
-	auth     *auth.Service
-	secrets  *secrets.Service
+	cfg     config.Config
+	db      *store.DB
+	auth    *auth.Service
+	secrets *secrets.Service
+	// writer is the only way a vault file changes, and it is held rather than
+	// reached for through the secrets service so that the editor, the rename and
+	// the link updater are all pointed at the same root by construction. Options
+	// already required one — it is what the secrets service was built with — and
+	// keeping it as a field is what turns "the only way out of the app" from a
+	// rule about one package into a property of the composition root.
+	writer   *vault.Writer
 	bus      *sync.Bus
 	log      *obs.Logger
 	clock    obs.Clock
@@ -223,6 +230,7 @@ func New(opts Options) (*Server, error) {
 		db:       opts.DB,
 		auth:     accounts,
 		secrets:  secretSvc,
+		writer:   opts.Writer,
 		bus:      opts.Bus,
 		log:      log,
 		clock:    clock,

@@ -123,9 +123,9 @@ whatever the literal says.
 alone, with nothing requiring the reader to hold a session. The plan's §8.2 says
 an anonymous request sees no secret under any visibility, and
 `authz.CanReadSecret` enforces that — so **the SQL fragment and the Go check
-disagree for one case: anonymous plus `table`.** Three call sites compensate, all
-with a check on the principal rather than on a visibility value, so a
-compensation can only ever remove rows:
+disagree for one case: anonymous plus `table`.** Consumers compensate with a
+check on the principal rather than on a visibility value, so a compensation can
+only ever remove rows:
 
 - `store.publicOnlySQL` and `store.maySeeAnySecret`
   ([`../internal/store/secret.go`](../internal/store/secret.go)) — used by the
@@ -138,7 +138,11 @@ because `authz` is not that package's to change and the fragment is pinned by a
 test. **The honest statement of the current state: the fragment is not
 self-sufficient, and every consumer has to remember a rule the fragment does not
 carry.** A consumer that forgets is not caught by the grep tests, because it did
-not write a visibility comparison.
+not write a visibility comparison. Stage 4 added a new consumer — the
+broken-links panel, `store.ListVisibleUnresolvedLinks` in
+[`../internal/store/link.go`](../internal/store/link.go) — and it took the
+compensation as well as the fragment, which is the shape a new consumer is
+expected to have.
 
 ## The authorization matrix
 
@@ -165,32 +169,49 @@ actually verified by, and says so where the answer is "nothing yet".
 | Read `private` secret | ❌ | ❌ | ✅ | ✅ | ✅ | `authz` matrix, `TestPrivateSecretIsReadableByItsAuthorAndDMOnly` |
 | Read `dm` secret | ❌ | ❌ | ❌ | ✅ | ✅ | `authz` matrix, `TestAWriterMayNotReadADMSecret` |
 | Search results (authz-filtered) | ✅¹ | ✅ | ✅ | ✅ | ✅ | `httpapi` matrix (`/search`, `/api/search`); `TestSearchNeverReturnsAHiddenSecret` |
-| Backlinks / related (authz-filtered) | ✅¹ | ✅ | ✅ | ✅ | ✅ | **no route in v1**; `TestPredicateMatrixAgrees`, `TestBacklinkCountMatchesList` |
-| TOC (secret headings filtered) | ✅¹ | ✅ | ✅ | ✅ | ✅ | **no route in v1**; `TestPredicateMatrixAgrees` |
-| Open the raw view of a page | — | — | — | — | — | **not implemented**; no route and no permission |
+| Backlinks / related (authz-filtered) | ✅¹ | ✅ | ✅ | ✅ | ✅ | served inside the page view; `TestPredicateMatrixAgrees`, `TestBacklinkCountMatchesList` |
+| TOC (secret headings filtered) | ✅¹ | ✅ | ✅ | ✅ | ✅ | served inside the page view; `TestPredicateMatrixAgrees` |
+| Open the raw view of a page | ✅¹ | ✅ | ✅ | ✅ | ✅ | `httpapi` matrix (`/p/*/raw`); `TestTheRawViewLocksWhatTheReaderMayNotRead` |
 | Create a page | ❌ | ✅ | ✅ | ✅ | ✅ | `authz` matrix (`PermWriteAny`); **no route mounted in v1** |
-| Edit someone else's public page | ❌ | ❌ | ❌ | ✅ | ✅ | `authz` matrix (`PermWritePage`); no route |
-| Edit any page (incl. non-secret content) | ❌ | ✅ own | ✅ | ✅ | ✅ | `authz` matrix (`PermWritePage`); no route |
-| Edit a `dm` secret | ❌ | ❌ | ❌ | ✅ | ✅ | `authz` matrix (`PermWriteSecret`); no route |
-| Create a secret | ❌ | ✅ own | ✅ | ✅ | ✅ | `authz` matrix (`PermWriteSecret`); no route |
+| Edit a page you own, including the public parts | ❌ | ✅ own | ✅ | ✅ | ✅ | `httpapi` matrix (`/p/*/edit`); `TestThePageScopedWriteGateIsARefusalAndNotADecoration` |
+| Edit someone else's public page | ❌ | ❌ | ❌ | ✅ | ✅ | `httpapi` matrix (`/p/*/edit` by role); `authz` matrix (`PermWritePage`) |
+| Edit a `dm` secret | ❌ | ❌ | ❌ | ✅ | ✅ | `authz` matrix (`PermWriteSecret`); `TestAVisibilityChangeThroughASaveIsADMOnly` |
+| Create a secret | ❌ | ✅ own | ✅ | ✅ | ✅ | `authz` matrix (`PermWriteSecret`); `TestAuthoringANewSecretNeedsWritePermission` |
+| Rename a page, and opt in to rewriting the links that point at it | ❌ | ✅ own | ✅ | ✅ | ✅ | `httpapi` matrix (three §5.6 rows); `TestUpdaterRespectsWritePermissionPerPage`, `TestARenameCarriesThePageOwners` |
+| Read the history and one revision of a page | ✅¹ | ✅ | ✅ | ✅ | ✅ | `httpapi` matrix (`/p/*/history`, `/p/*/revisions/{revID}`); `TestRevisionRevocationIsAuthorised` |
+| Revert a page to a revision | ❌ | **not exercised** | **not exercised** | ✅ | ✅ | `TestRevisionHistoryAndRevert` (DM 303, a player who owns nothing 403); the matrix row can only reach a 404, so the owner cell is unproven |
+| Serve a page's attachment | **404 in the fixture** | ✅ | ✅ | ✅ | ✅ | `httpapi` matrix (`/p/*/attachment/{name...}`); `TestAttachmentInSecretIsNotServed`. The fixture's name is deliberately unrecorded, so the matrix's cells are 404s and prove the gate, not the grant |
+| List the campaign's broken links | ✅¹ | ✅ | ✅ | ✅ | ✅ | `httpapi` matrix (`/broken`); `TestTheBrokenLinksPanelHidesSecretOnlyDanglingLinks` |
 | Reveal to table | ❌ | ❌ | ❌ | ✅ | ✅ | `TestOnlyADMCanReveal`, `TestAPlayerOwningThePageStillCannotReveal`; **no HTTP route** |
 | Revoke | ❌ | ❌ | ❌ | ✅ | ✅ | `TestRevokeIsRevealToPrivate`, `TestAPageOwnerMayNotRevealADMSecret`; **no HTTP route** |
-| Delete a page | ❌ | ❌ | own only | ✅ | ✅ | `authz` matrix (`PermDeletePage`); no route |
+| Delete a page | ❌ | ❌ | own only | ✅ | ✅ | `authz` matrix (`PermDeletePage`); `vault.Writer.Delete` exists; **no route** |
 | Manage users / invites | ❌ | ❌ | ❌ | ❌ | ✅ | `authz` matrix (`PermAdmin`), `TestOnlyAnAdminMayCreateAnInvite`; **no admin route** |
 | Change a role | ❌ | ❌ | ❌ | ❌ | ✅ | `authz` matrix (`PermManageUser`), `TestANonAdminIsRefusedAdminSurface` |
 | Trigger reindex / backup | ❌ | ❌ | ❌ | ❌ | ✅ | **disputed — see below**; `PermDM` in `authz` matrix |
 | Trigger a restore | ❌ | ❌ | ❌ | ❌ | ✅ | **no route, no test row**; `PermAdmin` is admin-only |
-| See `secret_events` audit | ❌ | ❌ | own only | ✅ | ✅ | **not implemented and not gated** — see below |
+| See `secret_events` audit | ❌ | ❌ | ❌ | ✅ | ✅ | `authz` matrix (`PermAuditSecrets`), `secrets.TestEventsRequiresPermission`; **no HTTP route** |
 | Read the DB file / `.semiplane/` over HTTP | ❌ | ❌ | ❌ | ❌ | ❌ | no such route; `TestA404IsTheSameAnswerForEveryKindOfNothing` |
-| Plugin routes | per plugin | per plugin | per plugin | per plugin | per plugin | **not implemented**; the contract in `internal/plugin` is built, but no `internal/systems/*` package holds code and there is no `/plugin/` route |
+| Plugin routes | per plugin | per plugin | per plugin | per plugin | per plugin | mounted at `PermSession`; `TestTheMatrixCoversEveryRoute` does not read the mounted tree, so the ceiling is asserted in `mountPluginRoutes` and the plugin packages' own tests |
 | Read `/setup` after bootstrap | ❌ | ❌ | ❌ | ❌ | ❌ | `TestSetupRouteDisappearsAfterBootstrap` — 404, byte-identical to an unrouted URL |
 
 ¹ only with `--allow-anonymous-read`; the flag is off by default and the policy
 is its own authority, so a principal cannot widen itself past it
 (`TestPolicyIsTheAuthorityForAnonymousRead`).
 
-Three rows need their own paragraph, because the plan's version of them and the
-code's version do not agree.
+**The `private` row's `owner` cell is the one to read twice.** A page owner may
+read another author's `private` secret on a page they own. That is the plan's
+§8.2 table, `authz.CanReadSecret` and `authz.SecretVisibleSQL` all agree on it,
+and the "ownership grants authoring rights, not broadcast rights" line in
+[`../AGENTS.md`](../AGENTS.md) §6 governs **reveal and revoke** — a separate
+permission with a separate answer — not reading. The row was asserted the other
+way round by `TestAWriterMayNotReadADMSecret` for three stages, and it passed
+because the fixture wrote its ownership grant before a reindex that deleted the
+row it named, so `IsPageOwner` answered false throughout and the assertion was
+never exercised. The ordering is fixed and the test now says so; the general
+form of the trap is in [`../AGENTS.md`](../AGENTS.md) §11.
+
+Three more rows need their own paragraph, because the plan's version of them and
+the code's version do not agree.
 
 **Reindex and backup.** The plan puts both at admin-only. The executable matrix
 bundles them with reveal and revoke under one `PermDM` row named "reveal to
@@ -201,20 +222,31 @@ authority and this table follows it, while recording the disagreement. There is
 no route for either operation in v1, so nothing is exposed either way; a
 decision is owed before a route is added.
 
-**The audit trail.** The plan gives the page owner their own `secret_events`.
-There is no such rule in the code: `secrets.Service.Events` takes a context and a
-secret id and **no principal**, and there is no permission constant for reading
-an audit row. Nothing exposes it over HTTP, so nothing is leaking — but a route
-added for it will find no gate, and the plan's "own only" column is a claim about
-behaviour that does not exist. An audit row records *that* a secret changed
-visibility and never *what it said*, so the gate it needs is `PermDM`, not
-`PermManageUser`.
+**The audit trail.** This was a live gap and is now closed. The plan gives the
+page owner their own `secret_events`; the code does not, and never did: the
+method that reads the trail is `secrets.Service.EventsFor(ctx, actor, secretID)`,
+it takes a principal, and it asks `authz.PermAuditSecrets` **before** the
+lookup — so a refused principal gets the same answer for every id and cannot
+enumerate them. The constant is deliberately its own rather than a fold-in of
+`PermDM`, because folding it in would have closed the gap by accident and left
+the constant's name lying about what it grants. No route is mounted, so nothing
+is served. An audit row records *that* a secret changed visibility and never
+*what it said*.
 
 **`/setup` after bootstrap.** The matrix says "forbidden for everyone". The code
 answers something stronger: the route answers 404, and the body is
 byte-identical to the answer for a URL that was never routed, so an outsider
 cannot confirm that a semiplane exists here, let alone that it is set up
 (`ErrSetupClosed` is deliberately distinct from `ErrDenied` for this reason).
+
+**The route table's `Perm` column is not the whole authorization, and for the
+page-scoped write rows it is not even the interesting half.** `Server.permit`
+asks the policy with a zero `authz.Resource`, so a `PermWritePage` column is
+answered "is this a DM or an admin" and the policy's ownership arm is
+unreachable through it. Those rows are `PermSession`; the page-scoped decision
+is `httpapi.mayWritePage` inside the handler, and `secrets.Service.Save` makes
+the same check before it writes. The reasoning, and the trap in the other
+direction, is in [`../AGENTS.md`](../AGENTS.md) §2.7.
 
 **Three answers exist and only three:** 200, 403, 404. A 303 to `/login` is the
 unauthenticated variant of "no". A principal that cannot read a page gets the
@@ -330,27 +362,47 @@ which fails on a lock with an extra attribute as firmly as on an extra word.
 
 ### Revisions, attachments, the editor
 
-- **Revisions.** Revisions are re-segmented and re-authorised **at read time**,
-  so a revision from before a revoke cannot be read afterwards. The store side is
-  built (`TestRevisionsAreAppendedForEveryChangeAndPruned`,
-  `TestRevisionRetention`); the read path and its routes are **not implemented
-  in v1**. Retention is `store.AppRevisionRetention` and
-  `store.ExternalRevisionRetention`
+- **Revisions** are re-segmented and re-authorised **at read time**, so a
+  revision from before a revoke cannot be read afterwards. Both the revision's
+  own bytes and the current fence are asked, because each alone gets a case
+  wrong: authorizing only the present makes a revoke change only the present,
+  and authorizing only the bytes makes a deleted `dm` secret readable again.
+  A fence the file no longer holds falls back to its own copy, so deletion is
+  not treated as a revocation — `TestARevisionHoldingASecretTheFileNoLongerHasStillReads`
+  pins that, because it looks like a hole and is not. The read paths are
+  `secrets.Service.History`, `secrets.Service.Revision` and
+  `secrets.Service.Revise` in
+  [`../internal/secrets/revision.go`](../internal/secrets/revision.go);
+  `TestRevisionRevocationIsAuthorised` is the gate. Retention is
+  `store.AppRevisionRetention` and `store.ExternalRevisionRetention`
   ([`../internal/store/revision.go`](../internal/store/revision.go)), which also
   covers `create` and `delete` as app-made writes — a third bucket would let an
-  external tool churn a page into unbounded rows.
+  external tool churn a page into unbounded rows. The history rows carry no
+  content at all, so a list cannot leak a body; the `Visible` column on a row is
+  a metadata-only approximation that never gates one.
 - **Attachments.** Visibility is a property of the *reference*, not the file, and
-  there is deliberately no global `/attachments/{name}` route. The schema side is
-  built (`TestAttachmentScopeIsPerPage`); the page-scoped route is **not
-  implemented in v1**.
+  there is deliberately no global `/attachments/{name}` route. The row is written
+  by the indexer, one per *referencing page* rather than one per file, which is
+  why the schema's constraint is `UNIQUE(path, page_id)` — see the migration's
+  own comment. The page-scoped route resolves the requested name against that
+  page's rows and never against the filesystem, compares it exactly, answers
+  "you may not have it" and "there is no such file" as one 404, and serves the
+  bytes under `default-src 'none'; sandbox`. The whole thing is
+  [`../internal/httpapi/pageattachment.go`](../internal/httpapi/pageattachment.go).
+  An attachment referenced only from inside a secret is therefore served only
+  to a principal who may read that secret
+  (`TestAttachmentInSecretIsNotServed`).
 - **The editor and the redacted sentinel.** The sentinel grammar
-  `‹s:<id>:<bodyLen>:<bodySHA256first8>›` and its byte-splice save algorithm are
-  the plan's design for editing a page that holds a secret you may not read. **It
-  is not implemented**: no route, no sentinel parser, no splice. The string
-  appears once in the tree, in a view-model fixture. When it lands, two properties
-  are load-bearing: the sentinel must be matched **by position against the known
-  secret set, never by regex over the buffer**, and a mismatch must reject the
-  whole save rather than write a corrupted file.
+  `‹s:<id>:<bodyLen>:<bodySHA256first8>›`, its byte-splice save, and the
+  position-matching that makes a forged or stale token a refusal rather than a
+  restore, are [`../internal/md/sentinel.go`](../internal/md/sentinel.go);
+  `secrets.Service.EditView` and `secrets.Service.Save` are what decide the mode
+  and call them. **A sentinel is a restore token, not a display token** — it
+  carries a length and a digest of a body the reader was refused, which is
+  exactly what the raw view and the conflict page must not hand out, so both
+  replace the whole fence with `secrets.LockPlaceholder` instead.
+  `TestTheConflictPageCarriesNoBodyTheReaderWasRefused` is the gate, and
+  `TestEditorRedactedRoundTrip` is the byte-level one.
 
 ### Audit and generations
 
@@ -382,6 +434,18 @@ a rule is not in this table, nothing enforces it.
 | The policy answers the whole matrix | `TestAuthorizationMatrix` | [`internal/authz/policy_test.go`](../internal/authz/policy_test.go) |
 | The router answers the whole matrix | `TestAuthorizationMatrix`, `TestTheMatrixCoversEveryRoute` | [`internal/httpapi/matrix_test.go`](../internal/httpapi/matrix_test.go) |
 | A page owner may not read a `dm` secret on their own page | `TestAWriterMayNotReadADMSecret`, `TestAPageOwnerMayNotRevealADMSecret` | same |
+| A page owner **does** read another author's `private` secret on a page they own | `TestAWriterMayNotReadADMSecret`, `authz.TestCanReadSecretOverTheWholeMatrix`, `store.TestPredicateMatrixAgrees` | same, [`../internal/authz/authz_test.go`](../internal/authz/authz_test.go) |
+| The page-scoped write gate is made with the page's real ownership, not a zero `Resource` | `TestThePageScopedWriteGateIsARefusalAndNotADecoration` | [`internal/httpapi/pageedit_internal_test.go`](../internal/httpapi/pageedit_internal_test.go) |
+| A surface that takes a page path from a request asks `vault.Ignored` before writing | `TestPathTraversalRejected`, `TestSaveRefusesTheAppsOwnState`, `TestRenameRefusesTheAppsOwnState` | [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go), [`internal/secrets/editor_test.go`](../internal/secrets/editor_test.go), [`internal/httpapi/rename_test.go`](../internal/httpapi/rename_test.go) |
+| The raw view and the conflict page replace a hidden fence whole, with a fixed label | `TestTheRawViewLocksWhatTheReaderMayNotRead`, `TestTheConflictPageCarriesNoBodyTheReaderWasRefused` | [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go), [`internal/web/surfaces_test.go`](../internal/web/surfaces_test.go) |
+| A redacted save restores a body byte for byte, and refuses the whole save on a mismatch | `TestEditorRedactedRoundTrip`, `TestSaveRefusesToWriteThroughAHiddenSecret`, `TestSaveRefusesAStaleHash` | [`internal/secrets/editor_test.go`](../internal/secrets/editor_test.go), [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go) |
+| A revision from before a revoke is refused after it | `TestRevisionRevocationIsAuthorised`, `TestARevisionHoldingASecretTheFileNoLongerHasStillReads` | [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go), [`internal/secrets/revision_test.go`](../internal/secrets/revision_test.go) |
+| A rename carries the page's owners, aliases and references | `TestARenameCarriesThePageOwners`, `TestRenameMovesTheFileAndRecordsTheAlias` | [`internal/httpapi/rename_test.go`](../internal/httpapi/rename_test.go) |
+| The bulk link updater is per-page authorized, and a stale preview rewrites nothing | `TestUpdaterRespectsWritePermissionPerPage`, `TestStalePreviewIsHarmless`, `TestUpdaterSkipsLinksInsideHiddenSecretsForNonDM` | same |
+| An attachment referenced only from a secret is not served to somebody who may not read it | `TestAttachmentInSecretIsNotServed`, `sync.TestAttachmentScopeIsPerPage` | [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go), [`internal/sync/attachment_test.go`](../internal/sync/attachment_test.go) |
+| A dangling link inside a secret the reader may not read is neither listed nor counted | `TestTheBrokenLinksPanelHidesSecretOnlyDanglingLinks`, `store.TestUnresolvedLinksExcludeSecretOnlyDanglingLinks` | [`internal/httpapi/pageroutes_test.go`](../internal/httpapi/pageroutes_test.go), [`internal/store/stage4_test.go`](../internal/store/stage4_test.go) |
+| Reading a secret's audit trail needs a principal, and a refused one learns nothing | `TestEventsRequiresPermission` | [`internal/secrets/editor_test.go`](../internal/secrets/editor_test.go) |
+| A page-scoped suffix is unambiguous, and chi cannot be talked into routing one | `TestTheCatchAllAndItsSuffixesAreUnambiguous` | [`internal/httpapi/catchall_test.go`](../internal/httpapi/catchall_test.go) |
 | A disabled account has no session | `TestADisabledAccountGetsNoSession` | same |
 | No admin route exists yet, and the policy already refuses the surface | `TestANonAdminIsRefusedAdminSurface` | same |
 | Every predicate agrees, and every count matches its list | `TestPredicateMatrixAgrees`, `TestBacklinkCountMatchesList` | [`internal/store/rows_test.go`](../internal/store/rows_test.go) |
@@ -489,8 +553,12 @@ Two more that are easy to assume are covered and are not:
   The controls that exist are the import boundary, capability narrowing, and the
   fact that the `Host` interface has no method to contribute a script, a
   stylesheet or a DOM handle. See [`../AGENTS.md`](../AGENTS.md) §7 for the
-  contract, and note that the `Host` and the plugin packages are themselves
-  unbuilt — see [Not yet implemented](#not-yet-implemented).
+  contract. A plugin's own routes are mounted at `PermSession` behind
+  re-applied CSRF and permission checks
+  ([`../internal/httpapi/routes.go`](../internal/httpapi/routes.go),
+  `mountPluginRoutes`) — a deliberate ceiling, because the host has no
+  vocabulary for "the permission this route needs" and inventing one would let
+  a plugin name its own gate.
 - **A public internet deployment.** The defaults are a loopback bind, a small
   authenticated group, and rate limits sized for a LAN. An empty bind address is
   refused rather than bound to every interface (`TestAWildcardBindIsRefused`).
@@ -500,29 +568,13 @@ Two more that are easy to assume are covered and are not:
 Everything in this section is in the design and not in the tree. A claim about it
 is a claim about the future.
 
-- **Live push.** No SSE endpoint, no stream, no `authz_generation` consumer. The
-  seven coverage-gated tests the plan names for it do not exist, and
-  `authz_generation` is currently maintained for a consumer that does not exist.
-- **The campaign status panel**, and the field-level authorization for it.
-- **Plugin routes and plugin packages.** The host contract is built
-  ([`../internal/plugin/plugin.go`](../internal/plugin/plugin.go): `PluginCore`,
-  `PluginUI`, `Host`, `Descriptor`, `APILevel`, and the capability bitmask). What
-  is not built is any plugin: `internal/systems/core` and `internal/systems/dnd5e`
-  hold only a `doc.go`, and there is no `/plugin/` route. `TestNoPluginSwitchInCore`
-  currently skips, because it has no registered plugin id to look for, and
-  `internal/plugin/reserved.go` — the reserved page-type and route-segment names
-  the plan puts there — does not exist yet.
-- **The editor**, and with it the redacted sentinel and the byte-splice save.
-- **Revision read paths** and their routes. The rows and the pruning are built;
-  the read-time re-authorisation is not.
-- **The attachment route.** The schema and the per-page scope are built; the
-  page-scoped serving route is not.
-- **Write routes.** There is no create, edit, delete, reveal, revoke, export or
-  admin route. The services behind them exist and are tested directly
-  (`TestAPageOwnerMayNotRevealADMSecret` says so in its own comment); the router
-  mounts only what [`../internal/httpapi/routes.go`](../internal/httpapi/routes.go)
-  lists.
-- **The raw view**, exports, and the link-preview surface.
+- **The secret's audit view.** `secrets.Service.EventsFor` is built and gated on
+  `authz.PermAuditSecrets`; the route that would render it is not mounted.
+- **Create, delete, reveal, revoke, export, and the whole `/admin` surface
+  except the plugin boot report.** The services behind them exist and are tested
+  directly (`TestAPageOwnerMayNotRevealADMSecret` says so in its own comment);
+  the router mounts only what
+  [`../internal/httpapi/routes.go`](../internal/httpapi/routes.go) lists.
 - **The a11y and end-to-end gates**, and the CI jobs beyond the Go suite.
 
 ## Divergences from the plan
@@ -560,8 +612,15 @@ this is the durable record of where it and the code part company.
    `PermAdmin`. The table above follows the code. No route exists for either
    operation, so nothing is exposed either way; a decision is owed before a route
    is added.
-5. **The `secret_events` audit row the plan gives to page owners does not exist**,
-   and the method that reads the audit trail takes no principal at all.
+5. **The `secret_events` audit row the plan gives to page owners does not
+   exist, and the plan's gap is closed with a constant of its own.** The plan
+   gives the page owner their own audit rows; the code gives them to a DM or an
+   admin and to nobody else. `secrets.Service.Events` — which took a context and
+   an id and no principal — was removed rather than wrapped, and replaced by
+   `EventsFor`, which asks `authz.PermAuditSecrets` before the lookup. The
+   events are metadata, never a body, so a player is refused even for a secret
+   they authored: the trail still says that a secret exists and who has touched
+   it. No route is mounted, so nothing is served either way.
 6. **CSRF is presented in a header or a form field, not in `data-signals`.** §12
    S7 describes a per-session token in a `data-signals` field. The code accepts it
    in the `X-CSRF-Token` header or a `csrf` form field, and for the two forms a
@@ -582,12 +641,14 @@ this is the durable record of where it and the code part company.
    `TestPredicateMatrixAgrees`), `TestSecretFixturesNeverLeak` (the code has
    `TestNoSecretLeaksThroughAnyPath` and `TestSecretFixturesNeverLeakThroughSearch`),
    `TestRevokePurgesAllIndexes` (`TestRevokePurgesTheIndex`),
-   `TestNoSecretInErrors`, `TestOnlyPermMiddlewareIsConsulted`,
-   `TestEditorRedactedRoundTrip`, and the seven `TestPush…` tests. Where a
-   plan-named rule has no test at all, this document says so rather than
-   borrowing the name. (`TestNoOutboundNetwork` and `TestNoProcessExecution` were
-   named by the plan, absent from the tree, and have since been written under
-   those names.)
+   `TestNoSecretInErrors`, `TestOnlyPermMiddlewareIsConsulted`, and the seven
+   `TestPush…` tests — which the code *does* have, under
+   `TestPushNeverLeaksSecret` and its six siblings in
+   [`../internal/httpapi/events_test.go`](../internal/httpapi/events_test.go).
+   `TestEditorRedactedRoundTrip` arrived with stage 4. Where a plan-named rule
+   has no test at all, this document says so rather than borrowing the name.
+   (`TestNoOutboundNetwork` and `TestNoProcessExecution` were named by the plan,
+   absent from the tree, and have since been written under those names.)
 9. **Cookie `SameSite` is `Strict`, not `Lax`.** §12 S7 specifies `Lax`; the
    code uses `Strict` ([`../internal/httpapi/middleware.go`](../internal/httpapi/middleware.go)),
    and the reason is in the comment there: `Strict` is what makes the
@@ -607,3 +668,24 @@ this is the durable record of where it and the code part company.
     the single source of truth and `Resource.IsPageOwner` is always built from
     it, so a divergence between the two is not representable rather than
     impossible.
+13. **A route's `Perm` column is a coarse gate, and the page-scoped write rows
+    say so.** The plan treats the route table's permission as the decision. It
+    cannot be, for the page-scoped surfaces: the middleware asks the policy with
+    a zero `authz.Resource`, so a `PermWritePage` column is answered "DM or
+    admin" and the ownership arm is unreachable through it. Those rows are
+    `PermSession` and the real decision — the one carrying the page's ownership
+    — is `httpapi.mayWritePage` inside the handler, mirrored by the check
+    `secrets.Service.Save` makes before it writes. The other direction is the
+    trap: the plan's shape, taken literally, answers 403 to exactly the
+    principal §8.9's redacted editor exists for, because a DM's hidden set is
+    empty by definition and the only principal the redacted mode has a use for
+    is a page owner.
+14. **`attachments.path` is `UNIQUE(path, page_id)`, not `UNIQUE(path)`.** The
+    plan's §6.2 makes the row a claim about the file; §8.8's rule is about the
+    *reference*. A campaign-wide unique path means a second page referencing an
+    image the first page already recorded cannot have a row of its own, so the
+    serve route authorizes against that page's links and then has no row to serve
+    from — an image a reader can plainly see on page two is a 404 on page two.
+    The migration is
+    [`../internal/store/migrations/0003_attachment_scope.sql`](../internal/store/migrations/0003_attachment_scope.sql)
+    and its comment says the same thing at greater length.

@@ -115,6 +115,14 @@
 	// there is nothing for `e` to do.
 	const EDIT_LINK = 'a[data-edit-href]';
 
+	// The editor's form and its buffer. The save key is bound to the form and
+	// the unsaved-work guard to the buffer, and both are optional: a page
+	// carrying neither is a read-only view with nothing to save and nothing to
+	// lose, and a binding that assumed otherwise would be a control with no
+	// control behind it.
+	const EDITOR_FORM = 'form[data-editor-form]';
+	const EDITOR_BUFFER = 'textarea[name="content"]';
+
 	// A roving-tabindex group, its items, and the control that expands a tree
 	// directory. A group that marks its items says so with data-roving-item; a
 	// group that does not — the file tree, whose items *are* its links and its
@@ -479,6 +487,15 @@
 	}
 
 	/**
+	 * The editor's save key, deliberately the same shape as isPaletteKey: both
+	 * are the platform's modified chord plus one letter, and reading them
+	 * differently is how a binding ends up shadowing a chord the browser needs.
+	 */
+	function isSaveKey(event) {
+		return (event.ctrlKey || event.metaKey) && !event.altKey && String(event.key).toLowerCase() === 's';
+	}
+
+	/**
 	 * Closes the topmost overlay and hands focus back to whatever opened it.
 	 */
 	function onEscape(event) {
@@ -526,11 +543,14 @@
 			return;
 		}
 
-		if (isTypingTarget(event.target) || ownsItsKeys(event.target)) {
+		if ((isTypingTarget(event.target) || ownsItsKeys(event.target)) && !isSaveKey(event)) {
 			// The search box is the one field the map is not ignored in, and in
 			// it the only binding that is not a character is Ctrl/⌘+K. `/` is not
 			// handled here because the box already has focus, and handling it
-			// would eat the character; `?` here is a question mark.
+			// would eat the character; `?` here is a question mark. The save key
+			// is the one binding this return is not asked to swallow, because the
+			// buffer it saves is a textarea: a return here would take the key
+			// away at exactly the moment it is for.
 			if (isSearchBox(event.target) && isPaletteKey(event)) {
 				event.preventDefault();
 				openOverlay(SPEC_PALETTE);
@@ -544,15 +564,30 @@
 			return;
 		}
 
+		// The editor's save, and its position in this chain is load-bearing: the
+		// modifier early-out immediately below returns on any ctrl or meta
+		// combination, so a save binding written under it would never be reached
+		// and the editor's own caption — "Ctrl+S saves from anywhere on this
+		// page" — would be a promise this file does not keep. It is above that
+		// early-out and below the palette check, and the two are different
+		// letters, so they cannot shadow each other.
+		if (isSaveKey(event)) {
+			saveEditor(event);
+			return;
+		}
+
 		// Every remaining binding is a bare key. A modified one is the
 		// platform's or a field's, and this file does not take it.
 		if (event.ctrlKey || event.metaKey || event.altKey) {
 			return;
 		}
 
-		// Everything below acts on the page behind an overlay, so with one
-		// open the map is Esc and Ctrl/⌘+K and nothing else. `?` inside the
-		// palette would otherwise stack a second dialog on the first.
+		// Everything below acts on the page behind an overlay, so with one open
+		// the map is Esc, Ctrl/⌘+K, the editor's save and nothing else. `?`
+		// inside the palette would otherwise stack a second dialog on the first.
+		// A save is exempt because it leaves the document rather than acting on
+		// what an overlay is covering: a reader who has the shortcut list open
+		// over the editor and presses Ctrl+S meant to save.
 		if (hasOpenOverlay()) {
 			return;
 		}
@@ -623,8 +658,104 @@
 		if (!link) {
 			return;
 		}
+		// An empty attribute is not the page's own URL, and following it as
+		// though it were would reload the page the reader is on and call it an
+		// edit. The server renders the attribute only with a URL beside it, so
+		// this is the shape a stale document arrives in rather than a case the
+		// server produces — and a shortcut that reloads a page is worse than a
+		// shortcut that does nothing.
+		const href = link.getAttribute('data-edit-href') || '';
+		if (href === '') {
+			return;
+		}
 		event.preventDefault();
-		follow(link, link.getAttribute('data-edit-href'));
+		follow(link, href);
+	}
+
+	/**
+	 * Submits the editor's form, if this page has one.
+	 *
+	 * requestSubmit rather than submit, and both reasons are load-bearing. submit
+	 * is a direct call: it runs no constraint validation, and it fires no submit
+	 * event, so anything listening for one — the search form's own tidier among
+	 * them — would not hear the save.
+	 *
+	 * With no form on the page the key is left to the platform, which is the
+	 * whole of the degradation: a reader without this file, or on a page that
+	 * has no editor, gets the browser's own save dialog.
+	 */
+	function saveEditor(event) {
+		const form = document.querySelector(EDITOR_FORM);
+		if (!form) {
+			return;
+		}
+		event.preventDefault();
+		form.requestSubmit();
+	}
+
+	/**
+	 * Watches the editor's buffer, and puts a guard on leaving with unsaved work.
+	 *
+	 * A save is a navigation and an unsaved buffer is the most expensive thing
+	 * in this app to lose, so the one moment it cannot be asked about — the
+	 * browser leaving on its own — is the one it has to be warned about.
+	 * beforeunload is the only hook a browser offers for that, and the dialog
+	 * belongs to the browser: there is no wording to choose and no way to know
+	 * what the reader answered.
+	 *
+	 * Three things keep the guard from becoming a trap. It is installed only
+	 * when an editor form is on the page, so a read-only view is not guarded at
+	 * all. It is installed only while the buffer differs from the value the
+	 * server sent, and removed again when the difference is undone, so opening
+	 * an editor and looking at it arms nothing. And the submit handler removes
+	 * it before the navigation starts: a guard that outlived its own save would
+	 * ask the reader whether they wanted to leave a page they had just saved,
+	 * on the one screen where they most want to be gone from.
+	 */
+	function watchEditor() {
+		const form = document.querySelector(EDITOR_FORM);
+		if (!form) {
+			return;
+		}
+		const buffer = form.querySelector(EDITOR_BUFFER);
+		if (!buffer) {
+			return;
+		}
+		// The value the file had when the editor was built, captured once: the
+		// question the guard asks is whether the buffer is still the file, not
+		// whether the reader has pressed a key.
+		const initial = buffer.value;
+		const guard = (event) => {
+			// preventDefault is the whole API — a return value from a listener
+			// is ignored, and the message a browser shows is its own. The
+			// returnValue assignment is the older spelling of the same call and
+			// is kept because a browser honouring only that one would otherwise
+			// lose the buffer with no dialog at all.
+			event.preventDefault();
+			event.returnValue = '';
+		};
+		let armed = false;
+		const arm = () => {
+			const dirty = buffer.value !== initial;
+			if (dirty === armed) {
+				return;
+			}
+			armed = dirty;
+			if (dirty) {
+				window.addEventListener('beforeunload', guard);
+			} else {
+				window.removeEventListener('beforeunload', guard);
+			}
+		};
+		buffer.addEventListener('input', arm);
+		// On the form rather than on the submit button, so every way out of the
+		// editor disarms it: the key, the button, and a form this file never
+		// looked at.
+		form.addEventListener('submit', () => {
+			armed = false;
+			window.removeEventListener('beforeunload', guard);
+		});
+		arm();
 	}
 
 	function bindKeys() {
@@ -2016,6 +2147,7 @@
 		watchForSwaps();
 		relabelTimestamps();
 		tidySearchForm();
+		watchEditor();
 		watchTriggers();
 		watchTheme();
 		bindKeys();

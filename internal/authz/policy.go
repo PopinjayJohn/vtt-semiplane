@@ -178,6 +178,16 @@ func (p Policy) Check(who Principal, perm Permission, res Resource) error {
 		}
 		return nil
 
+	case PermAuditSecrets:
+		// A DM or an admin. The events are metadata — action, actor, target,
+		// time — and never a body, but they do disclose that a secret exists and
+		// who has touched it, which is not a player's to know even for a secret
+		// they authored.
+		if !who.IsDM() {
+			return deny("dm or admin required")
+		}
+		return nil
+
 	case PermAdmin:
 		if !who.IsAdmin() {
 			return deny("admin required")

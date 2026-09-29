@@ -160,13 +160,8 @@ func (w *Writer) Save(ctx context.Context, req SaveRequest) error {
 	unlock := w.lockPath(p.Rel())
 	defer unlock()
 
-	current, err := Read(ctx, p)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		// A create has no base content, so an empty base hash is the only
-		// acceptable one.
-		current = nil
-	case err != nil:
+	current, err := readExisting(ctx, p)
+	if err != nil {
 		return err
 	}
 
@@ -192,6 +187,23 @@ func (w *Writer) Save(ctx context.Context, req SaveRequest) error {
 	return nil
 }
 
+// readExisting returns a path's bytes for a hash comparison, or nil when the
+// path does not exist yet.
+//
+// A create has no base content, so an empty base hash is the only acceptable
+// one: that is what this nil means to every caller that compares against
+// Hash(current).
+func readExisting(ctx context.Context, p Path) ([]byte, error) {
+	current, err := Read(ctx, p)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return current, nil
+}
+
 // registerSelfwrite tells the store the exact bytes this path now holds.
 func (w *Writer) registerSelfwrite(ctx context.Context, p Path, content []byte) error {
 	if w.Store == nil {
@@ -205,11 +217,38 @@ func (w *Writer) registerSelfwrite(ctx context.Context, p Path, content []byte) 
 // Hashing the path picks the stripe, so the table is a fixed array rather than
 // a map that grows once per path the vault has ever seen.
 func (w *Writer) lockPath(rel string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(rel))
-	m := &w.locks[h.Sum32()%lockStripes]
+	m := &w.locks[stripeOf(rel)]
 	m.Lock()
 	return m.Unlock
+}
+
+// lockStripes locks the two stripes a path is hashed to and returns one release
+// for both. Acquiring a pair in a fixed order is what keeps two operations that
+// need the same two paths from taking them in opposite orders.
+func (w *Writer) lockStripes(first, second Path) func() {
+	a, b := stripeOf(first.Rel()), stripeOf(second.Rel())
+	if a > b {
+		a, b = b, a
+	}
+	w.locks[a].Lock()
+	if b != a {
+		w.locks[b].Lock()
+	}
+	return func() {
+		if b != a {
+			w.locks[b].Unlock()
+		}
+		w.locks[a].Unlock()
+	}
+}
+
+// stripeOf is the index a path's lock lives in. Every caller hashes through
+// this one function, so the acquisition order and the stripe table cannot drift
+// apart.
+func stripeOf(rel string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(rel))
+	return h.Sum32() % lockStripes
 }
 
 func (w *Writer) maxBytes() int64 {

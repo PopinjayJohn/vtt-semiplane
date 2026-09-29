@@ -112,7 +112,26 @@ type Link struct {
 	BlockRef     string
 	SecretID     string
 	Line         int
+	// ByteStart is where TargetRaw begins in the source file, in bytes, or
+	// LinkByteStartUnset when no offset was recorded. The bulk link updater
+	// re-verifies the bytes here before it splices anything, which is what makes
+	// a preview that has gone stale harmless rather than destructive.
+	ByteStart int
+	// ByteLen is the length in bytes of TargetRaw at ByteStart, and is 0
+	// whenever ByteStart is LinkByteStartUnset. It cannot be left at 0 while
+	// ByteStart is a real offset, because that pair would describe an empty span
+	// that verifies as a conflict on every run.
+	ByteLen int
 }
+
+// LinkByteStartUnset is the byte_start of a link whose offset was never
+// recorded.
+//
+// It is negative rather than zero because zero is a legitimate offset — a link
+// in the first byte of a file — and Go's zero value is the other thing a caller
+// may forget to set. A caller distinguishes the two by ByteLen: 0 means
+// unrecorded, anything positive means a recorded span.
+const LinkByteStartUnset = -1
 
 // LinkKind is the kind of reference a Link row represents.
 type LinkKind string
@@ -390,8 +409,19 @@ func RemovePageOwner(ctx context.Context, e Execer, pageID, userID int64) error 
 	return nil
 }
 
-// IsPageOwner reports whether a user owns a page.
+// IsPageOwner reports whether a user owns a page. It is the whole of the
+// per-page PermWritePage check the routes build an authz.Resource from, and
+// page_owners is the only table that may answer it: pages.owner_id records the
+// primary owner alone, so a co-owner would be denied by a query that used it.
+//
+// An anonymous principal is answered without touching the database. Its user id
+// is 0, and while no page_owners row can carry 0 today because the column
+// references users(id), a query that could return true for "nobody" is a query
+// that turns one relaxed foreign key into an anonymous write.
 func IsPageOwner(ctx context.Context, q Queryer, pageID, userID int64) (bool, error) {
+	if userID == 0 {
+		return false, nil
+	}
 	var one int
 	err := q.QueryRowContext(ctx,
 		`SELECT 1 FROM page_owners WHERE page_id = ? AND user_id = ?`, pageID, userID).Scan(&one)

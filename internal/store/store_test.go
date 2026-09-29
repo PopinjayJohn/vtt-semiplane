@@ -36,6 +36,39 @@ func newMigratedDB(t *testing.T) *DB {
 	return db
 }
 
+// newDBAtVersion opens a store and leaves it at a historical schema version, by
+// applying the migration files up to that version raw — the way an older binary
+// would have left the file, with no meta stamp and no backup hook, because
+// Migrate is not what wrote it.
+//
+// The files are applied cumulatively, and that is a correction rather than a
+// convenience. A migration is a delta from the version before it, not a whole
+// schema: 0002 is an ALTER TABLE over a table 0001 creates, so running it alone
+// against an empty database fails on a table that does not exist. A fixture that
+// applied each file in isolation would only work while every migration happens
+// to be a complete CREATE script, which is a property of the current series
+// rather than of the mechanism — and the first ALTER was the first thing to
+// expose it. The only honest fixture for version V is 1..V, and it is strictly
+// more coverage than one file, because a V fixture carries every earlier object
+// as well as the V delta.
+//
+// The version is stamped by the test rather than read out of a file's own
+// PRAGMA, because applyMigration is what writes it in production: a fixture that
+// took the version from a file would be testing the file instead of the
+// migration.
+func newDBAtVersion(t *testing.T, version int) *DB {
+	t.Helper()
+	db := newDB(t)
+	for _, m := range Migrations() {
+		if m.Version > version {
+			break
+		}
+		mustExec(t, db.Writer(), m.SQL)
+	}
+	mustExec(t, db.Writer(), setUserVersionSQL(version))
+	return db
+}
+
 // seedUser creates a user the other fixtures can reference.
 func seedUser(t *testing.T, e Execer, name, role string) int64 {
 	t.Helper()
