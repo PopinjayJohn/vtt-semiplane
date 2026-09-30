@@ -156,8 +156,18 @@ func TestResolveAcceptsRealPaths(t *testing.T) {
 			if p.Rel() != tc.want {
 				t.Errorf("Rel = %q, want %q", p.Rel(), tc.want)
 			}
-			if p.Root() != v.Root {
-				t.Errorf("Root = %q, want %q", p.Root(), v.Root)
+			// The root as Resolve reports it, which is the *resolved* one. That is
+			// the documented behaviour and not an accident: a temp dir under /var
+			// on macOS is reached through /private/var, and a root reported
+			// unresolved would make every path inside it look like it had escaped.
+			// The test was comparing against the raw temp dir, so it passed on
+			// Linux and failed on the platform the behaviour exists for.
+			wantRoot := v.Root
+			if resolved, resolveErr := filepath.EvalSymlinks(v.Root); resolveErr == nil {
+				wantRoot = resolved
+			}
+			if p.Root() != wantRoot {
+				t.Errorf("Root = %q, want %q", p.Root(), wantRoot)
 			}
 		})
 	}
