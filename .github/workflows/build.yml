@@ -163,6 +163,15 @@ jobs:
         with:
           name: cross-build
           path: dist
+      # download-artifact does not carry the exec bit. The artifact is a zip and
+      # the permission an extracted file gets comes from the tool that extracted
+      # it, so every downloaded binary arrives 0644 and the smoke test fails with
+      # "Permission denied" before it has executed anything. This is not the
+      # build being wrong — the same file is 0755 in the job that produced it —
+      # and it is not a macOS or a QEMU quirk: it is what an archive is.
+      - name: make the downloaded binaries executable
+        shell: bash
+        run: chmod +x ./dist/semiplane_* || true
       # The plan's P11 accept list asks for exactly these two commands. `vault
       # info` is the expensive one: it claims the lock, creates the vault,
       # migrates, writes a backup and rebuilds the search index, so a crash in
@@ -202,6 +211,12 @@ jobs:
         with:
           name: cross-build
           path: dist
+      # Same reason as the matrix job above, and here it matters twice over: the
+      # file is bind-mounted read-only into a container, so the mode the kernel
+      # enforces is the one on the host and there is no shell inside to change it.
+      - name: make the downloaded binaries executable
+        shell: bash
+        run: chmod +x ./dist/semiplane_* || true
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
         with:
           platforms: arm64

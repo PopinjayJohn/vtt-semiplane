@@ -49,12 +49,18 @@
 #
 # ## What this costs, stated rather than discovered
 #
+# The prefixed row is written as a prefix plus a count rather than as a real
+# token-shaped literal. trivy's secret scanner matches the *shape*, so a literal
+# here is a permanent CRITICAL finding in this repository's own security job —
+# and a file that shows a reader what a pasted credential looks like is teaching
+# them to paste one. Both reasons point the same way.
+#
 # It suppresses any finding whose extracted secret is exactly 12 lowercase hex
 # characters. So, of the six planted cases below, the one that changes is the
 # fence id and nothing else:
 #
 #   api_key = "AKIA3XQ7PLMNOPQRSTU"                       20 chars  still reported
-#   token   = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" prefixed  still reported
+#   token   = "ghp_" + 36 alphanumerics          prefixed  still reported
 #   secret  = "sk-live-9f8e7d6c5b4a39281706"              26 chars  still reported
 #   password= "9f8e7d6c5b4a3928170"                       19 chars  still reported
 #   ```secret id=ABCDEF012345 …                          uppercase  still reported

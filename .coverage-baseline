@@ -41,27 +41,27 @@
 # runner figures is reproduced here by the go1.26.6 run and not by the go1.27.1
 # one. `make coverage-check` now refuses to compare across toolchains and names
 # both, so a future mismatch reports the toolchain instead of a phantom drop.
-/cmd/semiplane 50.0
-/internal/app 74.2
-/internal/auth 83.5
-/internal/authz 86.8
-/internal/config 94.9
+/cmd/semiplane 54.3
+/internal/app 71.9
+/internal/auth 82.3
+/internal/authz 86.6
+/internal/config 94.2
 /internal/diff 100.0
-/internal/httpapi 81.4
-/internal/md 87.9
+/internal/httpapi 78.7
+/internal/md 87.4
 /internal/obs 77.6
-/internal/plugin 92.4
+/internal/plugin 91.7
 /internal/sample 80.0
-/internal/search 83.6
-/internal/secrets 88.9
-/internal/store 70.6
-/internal/sync 87.4
-/internal/systems/dnd5e 67.2
+/internal/search 82.8
+/internal/secrets 88.1
+/internal/store 70.3
+/internal/sync 85.9
+/internal/systems/dnd5e 66.7
 /internal/systems/example 88.0
-/internal/systems/houserules 74.5
-/internal/systems/linkpreview 79.6
+/internal/systems/houserules 74.1
+/internal/systems/linkpreview 77.3
 /internal/testutil 84.8
-/internal/vault 82.5
+/internal/vault 81.4
 /internal/web 64.2
 /web 75.0
 # toolchain: go1.26.6

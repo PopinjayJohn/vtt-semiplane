@@ -124,8 +124,24 @@ func TestTheCommandLineParsesTheSameWhicheverSideTheFlagsAreOn(t *testing.T) {
 			if cfg.Command != tt.command {
 				t.Errorf("command is %q, want %q", cfg.Command, tt.command)
 			}
-			if cfg.Vault != tt.want.Vault {
-				t.Errorf("vault is %q, want %q", cfg.Vault, tt.want.Vault)
+			// config.Load resolves the vault to an absolute, cleaned path, so the
+			// expectation is the absolute form of what the case asked for rather
+			// than the literal it typed. The typed form is the only part of this
+			// assertion that is platform-specific: `/tmp/v` is the same request on
+			// every runner and `D:\tmp\v` is the same answer to it, and a test that
+			// hardcoded the POSIX spelling failed on Windows while the parse was
+			// correct — which is the shape of a test asserting on the machine
+			// rather than on the contract.
+			wantVault := tt.want.Vault
+			if wantVault != "" {
+				abs, err := filepath.Abs(wantVault)
+				if err != nil {
+					t.Fatalf("resolve the expected vault %q: %v", wantVault, err)
+				}
+				wantVault = filepath.Clean(abs)
+			}
+			if cfg.Vault != wantVault {
+				t.Errorf("vault is %q, want %q", cfg.Vault, wantVault)
 			}
 			if cfg.VaultSource != tt.want.VaultSource {
 				t.Errorf("vault source is %q, want %q", cfg.VaultSource, tt.want.VaultSource)

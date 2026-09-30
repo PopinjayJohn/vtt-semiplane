@@ -236,6 +236,20 @@ func TestSecondInstanceIsRefused(t *testing.T) {
 // cannot open.
 func TestBootFailureReleasesTheLock(t *testing.T) {
 	t.Parallel()
+	// The fixture needs two paths that differ only in case, and that is a
+	// property of the filesystem rather than of this repository. macOS and
+	// Windows default to a case-insensitive volume, where `NPCs/Gundren.md` and
+	// `npcs/gundren.md` are one file: the collision cannot be created, boot
+	// succeeds, and the assertion below fails having tested nothing.
+	//
+	// So it is probed rather than assumed, and the skip says what it found. An
+	// assumed skip would be wrong on a case-insensitive Linux volume and would
+	// hide a regression there; a silent one would be the failure mode AGENTS.md
+	// §11 calls a gate that skips for a reason nobody reads.
+	if !caseSensitiveFilesystem(t) {
+		t.Skip("this volume is case-insensitive, so the two colliding paths would be one file; " +
+			"run on a case-sensitive volume to cover the boot-failure path")
+	}
 	f := newFixture(t, map[string]string{
 		"NPCs/Gundren.md": "# Gundren\n",
 		"npcs/gundren.md": "# Gundren again\n",
@@ -246,6 +260,31 @@ func TestBootFailureReleasesTheLock(t *testing.T) {
 		t.Fatalf("a vault with colliding paths booted without an error: %v", err)
 	}
 	assertVaultIsLockable(t, f.vault.Root)
+}
+
+// caseSensitiveFilesystem reports whether writing two names that differ only in
+// case produces two files, which is the question a case-collision fixture turns
+// on. It answers about the volume the test will run on, not about the OS.
+func caseSensitiveFilesystem(t *testing.T) bool {
+	t.Helper()
+	dir := t.TempDir()
+	upper := filepath.Join(dir, "Collide.md")
+	lower := filepath.Join(dir, "collide.md")
+	if err := os.WriteFile(upper, []byte("one\n"), 0o600); err != nil {
+		t.Fatalf("write the first name: %v", err)
+	}
+	if err := os.WriteFile(lower, []byte("two\n"), 0o600); err != nil {
+		// A volume that refuses the second write is case-insensitive in the
+		// stronger sense that it will not hold both at all.
+		return false
+	}
+	first, err := os.ReadFile(upper)
+	if err != nil {
+		t.Fatalf("read back the first name: %v", err)
+	}
+	// Same contents would mean the second write landed on the first name, and a
+	// different size makes that impossible to confuse with a partial write.
+	return string(first) == "one\n"
 }
 
 // assertVaultIsLockable fails unless the vault can be claimed right now, which

@@ -1,4 +1,4 @@
-version: 2
+version: "2"
 
 # Pinned action SHAs live in the workflow files, not here: zizmor fails a
 # workflow that references a tag instead of a digest.
