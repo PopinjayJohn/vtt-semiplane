@@ -379,9 +379,7 @@ func (w *Watcher) rel(abs string) (string, bool) {
 	// `semiplane --vault /tmp/vault` as an ordinary command. Every other walk in
 	// this package resolves both sides; resolve.go carries the same warning in
 	// prose, and this function was the one that forgot the other half.
-	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
-		abs = resolved
-	}
+	abs = resolveEventPath(abs)
 	r, err := filepath.Rel(real, abs)
 	if err != nil {
 		return "", false
@@ -394,6 +392,31 @@ func (w *Watcher) rel(abs string) (string, bool) {
 		return "", false
 	}
 	return rel, true
+}
+
+// resolveEventPath resolves a watch event's path, falling back to resolving its
+// parent when the path itself cannot be resolved.
+//
+// The fallback is not a nicety. EvalSymlinks fails for a path that does not
+// exist, and the events this file exists to classify are largely about paths
+// that no longer do: a deletion, and the source of a move. Resolving only the
+// path therefore fixes every create and write and breaks every delete and every
+// move-away, which is how a vault reached through a symlink loses half its
+// events — and it loses them in the direction that looks like health, because
+// the reconciliation scan keeps the index right either way.
+//
+// The parent is the right thing to resolve because it is the part that carries
+// the symlink: a symlinked component is an ancestor of the file, and the
+// directory a file was in still exists after the file leaves it.
+func resolveEventPath(abs string) string {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return abs
+	}
+	return filepath.Join(parent, filepath.Base(abs))
 }
 
 func (w *Watcher) logger() *obs.Logger {

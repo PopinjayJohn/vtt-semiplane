@@ -319,6 +319,59 @@ func readOrEmpty(t *testing.T, v *testutil.Vault, rel string) []byte {
 	return b
 }
 
+// TestTheWatcherResolvesADeletedPathThroughItsParent is the other half of that
+// gate, and it exists because fixing the first half broke this one.
+//
+// Rel resolves a watch event's path so it can be compared with a resolved root.
+// EvalSymlinks fails for a path that does not exist — and the events a watcher
+// exists to classify are largely about paths that no longer do: a deletion, and
+// the source of a move. So resolving only the path fixed every create and write
+// and silently broke every delete and every move-away, for a vault reached
+// through a symlink.
+//
+// The damage is in the direction that looks like health: the 60s reconciliation
+// scan keeps the index right regardless, so a watcher that has lost half its
+// events still produces a correct index and a page that updates in under a
+// minute. The unit tests that catch it are on macOS, where every temp directory
+// is symlinked; on Linux the root does not resolve differently, so the bug is
+// invisible there unless it is constructed — which is what this does.
+func TestTheWatcherResolvesADeletedPathThroughItsParent(t *testing.T) {
+	t.Parallel()
+	outer := t.TempDir()
+	realParent := filepath.Join(outer, "real")
+	if err := os.MkdirAll(filepath.Join(realParent, "vault", "Campaigns", "Ash"), 0o700); err != nil {
+		t.Fatalf("create the vault: %v", err)
+	}
+	page := filepath.Join(realParent, "vault", "Campaigns", "Ash", "Gundren.md")
+	if err := os.WriteFile(page, []byte("# Gundren\n"), 0o600); err != nil {
+		t.Fatalf("seed the page: %v", err)
+	}
+	linkParent := filepath.Join(outer, "link")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	viaLink := filepath.Join(linkParent, "vault", "Campaigns", "Ash", "Gundren.md")
+	if resolved, err := filepath.EvalSymlinks(viaLink); err != nil || resolved != page {
+		t.Skipf("this volume resolves %q to %q, so there is no mismatch for the defect to act on", viaLink, resolved)
+	}
+	w := &Watcher{opts: WatchOptions{Root: filepath.Join(linkParent, "vault")}}
+
+	// Present, then gone. Both are asked about through the same symlinked root,
+	// because the asymmetry between them is the whole bug.
+	if rel, ok := w.rel(viaLink); !ok || rel != "Campaigns/Ash/Gundren.md" {
+		t.Fatalf("an existing page resolves to (%q, %v), want (Campaigns/Ash/Gundren.md, true)", rel, ok)
+	}
+	if err := os.Remove(page); err != nil {
+		t.Fatalf("remove the page: %v", err)
+	}
+	rel, ok := w.rel(viaLink)
+	if !ok || rel != "Campaigns/Ash/Gundren.md" {
+		t.Errorf("a deleted page resolves to (%q, %v), want (Campaigns/Ash/Gundren.md, true): a path that no "+
+			"longer exists cannot be EvalSymlinks'd, so the resolution has to fall through to the parent or "+
+			"every deletion and every move-away is dropped for a vault reached through a symlink", rel, ok)
+	}
+}
+
 // TestTheWatcherSeesChangesThroughASymlinkedRoot is a regression gate on a
 // defect this file's subject had, and it is here so the next reader finds it
 // beside the code that caused it rather than in a CI log on a platform they do
