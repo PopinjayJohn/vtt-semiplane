@@ -115,7 +115,7 @@ func TestResolutionIsDeterministic(t *testing.T) {
 		rotated := make([]PageKey, 0, len(pages))
 		rotated = append(rotated, pages[shift:]...)
 		rotated = append(rotated, pages[:shift]...)
-		if got, ok := NewResolver(rotated).Resolve("Tavern"); !ok || got != want {
+		if got, found := NewResolver(rotated).Resolve("Tavern"); !found || got != want {
 			t.Errorf("rotating the pages by %d resolved Tavern to %d, want %d", shift, got, want)
 		}
 	}
@@ -123,7 +123,7 @@ func TestResolutionIsDeterministic(t *testing.T) {
 	for i := len(pages) - 1; i >= 0; i-- {
 		reversed = append(reversed, pages[i])
 	}
-	if got, ok := NewResolver(reversed).Resolve("Tavern"); !ok || got != want {
+	if got, found := NewResolver(reversed).Resolve("Tavern"); !found || got != want {
 		t.Errorf("reversing the pages resolved Tavern to %d, want %d", got, want)
 	}
 	// The alias tie is the same rule: the shortest path, then the smallest.

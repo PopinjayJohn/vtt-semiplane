@@ -15,5 +15,4 @@
 // ship JavaScript, a stylesheet or a DOM handle. Plugins return
 // templ.Component values and Go values; the app shell and the stylesheet are
 // core-owned.
-
 package plugin

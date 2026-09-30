@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yuin/goldmark/ast"
 	"go.abhg.dev/goldmark/hashtag"
 	"go.abhg.dev/goldmark/wikilink"
 )
@@ -373,18 +372,6 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-// extractWalk is a small helper for the tests that need to look at the AST the
-// extractor sees, rather than at its output.
-func extractWalk(t *testing.T, d *Doc, r *Renderer, fn func(ast.Node)) {
-	t.Helper()
-	_ = ast.Walk(r.ParseDoc(d), func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if entering {
-			fn(n)
-		}
-		return ast.WalkContinue, nil
-	})
 }
 
 var (

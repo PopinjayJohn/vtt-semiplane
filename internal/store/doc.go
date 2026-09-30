@@ -11,5 +11,4 @@
 //     secret into any index.
 //   - Every query that can return a row derived from a secret carries
 //     authz.SecretVisibleSQL, and uses the identical predicate for its count.
-
 package store

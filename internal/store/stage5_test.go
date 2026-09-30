@@ -359,30 +359,30 @@ func commitVisibilityChange(t *testing.T, f *stage5Secret, to authz.Visibility) 
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if to == authz.VisibilityTable {
-		if err := IndexSecretText(ctx, tx, f.secretID, to, sec.Body); err != nil {
-			t.Fatalf("index the revealed body: %v", err)
+		if indexSecretTextErr := IndexSecretText(ctx, tx, f.secretID, to, sec.Body); indexSecretTextErr != nil {
+			t.Fatalf("index the revealed body: %v", indexSecretTextErr)
 		}
-	} else if err := DeleteSecretText(ctx, tx, f.secretID); err != nil {
-		t.Fatalf("purge the revoked body: %v", err)
+	} else if deleteSecretTextErr := DeleteSecretText(ctx, tx, f.secretID); deleteSecretTextErr != nil {
+		t.Fatalf("purge the revoked body: %v", deleteSecretTextErr)
 	}
 	sec.Visibility = to
-	if err := UpdateSecret(ctx, tx, sec); err != nil {
-		t.Fatalf("update the secret row: %v", err)
+	if updateSecretErr := UpdateSecret(ctx, tx, sec); updateSecretErr != nil {
+		t.Fatalf("update the secret row: %v", updateSecretErr)
 	}
-	if _, err := AppendSecretEvent(ctx, tx, SecretEvent{
+	if _, appendSecretEventErr := AppendSecretEvent(ctx, tx, SecretEvent{
 		SecretID: f.secretID, ActorID: f.actorID, Action: action,
 		FromVis: string(from), ToVis: string(to), At: stage5At,
-	}); err != nil {
-		t.Fatalf("append the audit row: %v", err)
+	}); appendSecretEventErr != nil {
+		t.Fatalf("append the audit row: %v", appendSecretEventErr)
 	}
-	if _, err := BumpAuthzGeneration(ctx, tx); err != nil {
-		t.Fatalf("bump the generation: %v", err)
+	if _, bumpAuthzGenerationErr := BumpAuthzGeneration(ctx, tx); bumpAuthzGenerationErr != nil {
+		t.Fatalf("bump the generation: %v", bumpAuthzGenerationErr)
 	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit: %v", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatalf("commit: %v", commitErr)
 	}
 
 	// The audit row's from-visibility is read from the row the service read,
@@ -414,7 +414,7 @@ func bumpThenAppend(t *testing.T, f *stage5Secret) (int64, error) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	n, err := BumpAuthzGeneration(ctx, tx)
 	if err != nil {
 		return 0, err
@@ -619,7 +619,7 @@ func moveVisibility(t *testing.T, f *matrixFixture, secretID string, to authz.Vi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if to == authz.VisibilityTable {
 		if err := IndexSecretText(ctx, tx, secretID, to, sec.Body); err != nil {
 			t.Fatal(err)

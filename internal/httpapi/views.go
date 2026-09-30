@@ -82,6 +82,25 @@ type Shell struct {
 	// PluginNavFor has already asked the policy which entries this request's
 	// principal may see.
 	PluginNav []PluginNavItem
+	// VaultTree is the left sidebar's hierarchy of the pages this principal may
+	// read: directories as nodes, pages as leaves, links already carrying their
+	// canonical href. It is the same tree /files renders, built by the same
+	// builder from the same query, so the two cannot disagree about what the
+	// vault holds — and a second listing query would be a second thing that can.
+	//
+	// It is on the shell because it is chrome: the sidebar is on every page, and
+	// a campaign navigation that came and went with the surface would be a layout
+	// that reflows under the reader. Nil is a real state and not an unset one —
+	// it means the listing query failed, and the sidebar then renders no tree
+	// section at all rather than an empty one, which is the same degradation
+	// PluginNav's empty slice already gets.
+	VaultTree *FileNode
+	// VaultTreeOmitted is how many readable pages the sidebar's tree leaves out
+	// because it carries SidebarTreeMax of them. It is a count rather than a
+	// silent truncation, and a template that dropped it would be rendering a
+	// tree that claims to be the vault and is not. Zero means nothing was left
+	// out and no notice is rendered.
+	VaultTreeOmitted int
 }
 
 // PluginNavItem is one left-sidebar entry a plugin contributed.

@@ -11,9 +11,7 @@ func doc(spans ...Span) *Doc {
 		Bytes:       make([]byte, 100),
 		Frontmatter: []byte("---\ntitle: x\n---\n"),
 	}
-	for _, s := range spans {
-		d.Spans = append(d.Spans, s)
-	}
+	d.Spans = append(d.Spans, spans...)
 	return d
 }
 

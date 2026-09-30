@@ -40,18 +40,18 @@ func TestEveryFactCarriesTheSecretItCameFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("links: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type linkRow struct{ secret, raw, kind string }
 	var links []linkRow
 	for rows.Next() {
 		var l linkRow
-		if err := rows.Scan(&l.secret, &l.raw, &l.kind); err != nil {
-			t.Fatalf("scan link: %v", err)
+		if scanErr := rows.Scan(&l.secret, &l.raw, &l.kind); scanErr != nil {
+			t.Fatalf("scan link: %v", scanErr)
 		}
 		links = append(links, l)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("links: %v", err)
+	if errErr := rows.Err(); errErr != nil {
+		t.Fatalf("links: %v", errErr)
 	}
 	if len(links) != 3 {
 		t.Fatalf("expected three links, got %+v", links)
@@ -75,17 +75,17 @@ func TestEveryFactCarriesTheSecretItCameFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("headings: %v", err)
 	}
-	defer hrows.Close()
+	defer func() { _ = hrows.Close() }()
 	headings := map[string]string{}
 	for hrows.Next() {
 		var text, secret string
-		if err := hrows.Scan(&text, &secret); err != nil {
-			t.Fatalf("scan heading: %v", err)
+		if scanErr := hrows.Scan(&text, &secret); scanErr != nil {
+			t.Fatalf("scan heading: %v", scanErr)
 		}
 		headings[text] = secret
 	}
-	if err := hrows.Err(); err != nil {
-		t.Fatalf("headings: %v", err)
+	if errErr := hrows.Err(); errErr != nil {
+		t.Fatalf("headings: %v", errErr)
 	}
 	if headings["Inside"] != id {
 		t.Errorf("the heading inside the fence is attributed to %q", headings["Inside"])
@@ -100,7 +100,7 @@ func TestEveryFactCarriesTheSecretItCameFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tags: %v", err)
 	}
-	defer trows.Close()
+	defer func() { _ = trows.Close() }()
 	type tagRow struct{ tag, source, secret string }
 	var tags []tagRow
 	for trows.Next() {
@@ -152,7 +152,7 @@ func TestFrontmatterTagsAreDistinguishedFromInlineOnes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tags: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	got := map[string]string{}
 	for rows.Next() {
 		var tag, source string
@@ -569,7 +569,7 @@ func TestEveryLinkKindIsClassified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("links: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	kinds := map[string]int{}
 	for rows.Next() {
 		var kind, raw string

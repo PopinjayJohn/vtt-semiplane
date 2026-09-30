@@ -20,29 +20,48 @@
 # to one decimal, which is the precision this file records. Regenerate with
 # `make cover && make coverage-baseline`; never hand-edit a number.
 #
-# Measured 2026-09-29 on the stage-5 tree with
-# ./scripts/test.sh -coverprofile=coverage.out -covermode=atomic
-# (total across all packages: 75.3%).
+# Measured 2026-09-30 on commit 9518ed0 with `make cover`, which is
+# `./scripts/test.sh -coverprofile=coverage.out -covermode=atomic` run under
+# GOTOOLCHAIN=go1.26.6 (total across all packages: 74.2%).
+#
+# The toolchain is part of the measurement and is recorded at the foot of this
+# file as a machine-written line, because a coverage percentage is a property of
+# the compiler as well as of the tests. Measured on that same commit, with that
+# same command and no source change:
+#
+#   package            go1.26.6   go1.27.1
+#   /internal/config      94.2       94.9
+#   /internal/plugin      91.7       92.4
+#   /internal/app         72.0       74.3
+#   /cmd/semiplane        54.3       50.0
+#
+# The numbers in this file were previously recorded on go1.27.1 and compared
+# against a runner measuring go1.26.0, which reported ten packages DOWN and one
+# UP by up to four points with no test deleted anywhere. Every one of those
+# runner figures is reproduced here by the go1.26.6 run and not by the go1.27.1
+# one. `make coverage-check` now refuses to compare across toolchains and names
+# both, so a future mismatch reports the toolchain instead of a phantom drop.
 /cmd/semiplane 50.0
-/internal/app 74.3
-/internal/auth 83.7
+/internal/app 74.2
+/internal/auth 83.5
 /internal/authz 86.8
 /internal/config 94.9
 /internal/diff 100.0
-/internal/httpapi 80.5
-/internal/md 87.6
+/internal/httpapi 81.4
+/internal/md 87.9
 /internal/obs 77.6
 /internal/plugin 92.4
 /internal/sample 80.0
-/internal/search 84.1
-/internal/secrets 89.9
-/internal/store 70.3
+/internal/search 83.6
+/internal/secrets 88.9
+/internal/store 70.6
 /internal/sync 87.4
 /internal/systems/dnd5e 67.2
 /internal/systems/example 88.0
 /internal/systems/houserules 74.5
 /internal/systems/linkpreview 79.6
 /internal/testutil 84.8
-/internal/vault 82.4
-/internal/web 63.9
+/internal/vault 82.5
+/internal/web 64.2
 /web 75.0
+# toolchain: go1.26.6

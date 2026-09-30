@@ -125,7 +125,7 @@ templ brokenRow(row httpapi.BrokenLinkRow) {
 					}
 				</span>
 			} else {
-				<a href={ row.Card.Href() } class="font-medium hover:underline">{ row.Card.Title }</a>
+				<a href={ row.Card.Href() } { Wikilink(row.Card.ID)... } class="font-medium hover:underline">{ row.Card.Title }</a>
 			}
 		</td>
 		<td>

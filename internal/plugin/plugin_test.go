@@ -76,7 +76,7 @@ func TestCapabilityNarrowing(t *testing.T) {
 	narrow := all.With(CapMaps)
 	_ = narrow
 	mapsOnly := All()
-	mapsOnly = mapsOnly &^ Capabilities(0)
+	mapsOnly &^= Capabilities(0)
 	if len(mapsOnly.List()) != len(AllCapabilities) {
 		t.Errorf("List returned %d capabilities, want %d", len(mapsOnly.List()), len(AllCapabilities))
 	}

@@ -98,8 +98,8 @@ func Backup(ctx context.Context, root, dbPath string, at time.Time) (string, err
 		ContainsSecrets: true,
 		Note:            backupNote,
 	}
-	if err := copyDatabase(dbPath, dir, &meta); err != nil {
-		return "", err
+	if copyDatabaseErr := copyDatabase(dbPath, dir, &meta); copyDatabaseErr != nil {
+		return "", copyDatabaseErr
 	}
 
 	manifest, bytes, err := buildManifest(ctx, root, dir)
@@ -376,7 +376,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", filepath.Base(src), err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {

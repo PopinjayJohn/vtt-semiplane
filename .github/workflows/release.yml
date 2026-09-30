@@ -44,7 +44,14 @@ env:
   GOFLAGS: -mod=readonly
   # The same version tools/versions.env pins, so a release cannot be built
   # with a toolchain ci.yml has never exercised.
-  GO_VERSION: "1.26.0"
+  #
+  # 1.26.6, because that is the lowest toolchain security.yml's govulncheck job
+  # is clean at: at 1.26.0 it reports 16 standard-library vulnerabilities, all
+  # fixed in 1.26.x patches. A release signed with keyless cosign and shipped to
+  # third parties should not be built with the toolchain this repository's own
+  # security gate calls vulnerable. go.mod's `go 1.26.0` directive is a language
+  # version and is correct as it stands.
+  GO_VERSION: "1.26.6"
 
 # The grants live on the job, not on the workflow, even though there is only
 # one job here. zizmor is right that a workflow-level `contents: write` is

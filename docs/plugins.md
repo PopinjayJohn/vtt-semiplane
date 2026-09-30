@@ -301,11 +301,24 @@ deleted the *evidence* the gates run on, not that the gates went quiet.
 ## 7. Link previews
 
 **The division of labour: the plugin supplies content, core owns behaviour.**
-Core renders every internal link carrying `data-wikilink="{pageID}"` — the
-attribute is `plugin.WikiLinkAttr`, and `plugin.WikiLink(pageID)` builds the
-attribute map. The value is an integer page id, never a title, a path, or any
-content; `TestWikiLinkCarriesOnlyThePageID` pins that. A plugin that wants its
-links previewable emits the attribute and never emits its own hover behaviour.
+An internal link previews because it carries `data-wikilink="{pageID}"`. The
+attribute is `plugin.WikiLinkAttr` and `plugin.WikiLink(pageID)` builds the
+attribute map; the value is an integer page id, never a title, a path, or any
+content, and `TestWikiLinkCarriesOnlyThePageID` pins that. A plugin that wants
+its links previewable emits the attribute and never emits its own hover
+behaviour.
+
+**Core attaches it in two places, and a plugin has to know which of them it is
+in.** The shell's own links carry it because the templates say so: the file
+tree, the dashboard and tag lists, search hits, the backlink chips, the
+broken-links panel and the campaign-status panels all render
+`web.Wikilink(card.ID)`, so hovering any of them previews. A link inside a
+**rendered page body** is a different mechanism — the body came out of the
+Markdown renderer, and
+[`../internal/httpapi/page.go`](../internal/httpapi/page.go) rewrites the
+finished anchors afterwards, mapping each href to a page id through the `links`
+table. **Nothing decorates a `templ.Component` you return.** Your links carry
+the attribute only if you put it there, and no plugin in the tree does.
 
 Core then owns hover, keyboard focus, the transient card, the pin toggle, the
 floating pane, `Esc`, and the ARIA wiring — once, for every link. The plugin

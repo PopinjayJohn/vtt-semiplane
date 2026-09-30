@@ -163,7 +163,7 @@ internal/
   httpapi/              chi router, middleware chain, handlers
   web/                  templ components, layouts, DataStar handlers
   sample/               embedded sample campaign
-  testutil/             temp vaults, fixtures, in-process harness
+  testutil/             temp vaults, a deterministic clock, small fixtures
 web/src/input.css       Tailwind v4 entry
 web/static/             generated css, app shell js, vendored datastar
 tools/                  Makefile, goreleaser, pinned versions
@@ -184,7 +184,9 @@ its entry in `order` says why it is deliberately absent from the plugin
 boundary.
 
 `app` is exempt and imports everything — it is the composition root.
-`testutil` is exempt and imports everything — it boots the app in-process.
+`testutil` is exempt and *may* import everything, which is the permission rather
+than a report: it imports nothing of ours, and the app-booting harnesses are
+per-package test files rather than a shared one.
 `sample` imports nothing internal. `internal/systems/**` and
 `internal/plugins/**` are plugins and are held to the plugin boundary below.
 
@@ -774,8 +776,34 @@ job, `git status --porcelain` must be empty.
   promises. `.card` now has a rule; the trap is that the scan surface (§7) and
   the rule surface are different sets, and a class on the first with nothing on
   the second is invisible from Go.
-- **The pinned golangci-lint does not run on this machine's Go toolchain.**
-  The 2.5.0 pin is built with go1.25 and refuses a module that targets 1.26, and
-  lowering `run.go` then panics in `go/types`. Do not report lint as passing;
-  `go build`, `go vet`, `gofmt -l`, `go tool templ fmt -fail` and
-  `./scripts/test.sh` are the gates that do.
+- **Two linters whose requirements conflict, and the one shape that satisfies
+  both.** `errcheck` wants a checked close, so the obvious fix is
+  `defer func() { _ = resp.Body.Close() }()`. That satisfies `errcheck` and makes
+  `bodyclose` *worse*: `bodyclose` builds its interprocedural summary from the
+  shape of the close inside the callee, and a func literal is invisible to it, so
+  `internal/httpapi` went from 20 findings to 86. The shape that satisfies both is
+  a bare `defer resp.Body.Close() //nolint:errcheck` with the reason written
+  beside it. The generalisable part is worth more than the instance: **`bodyclose`
+  summarises methods but not free functions, and it summarises the *shape* of the
+  close, not the fact of it** — so a helper that closes correctly and completely
+  still reports every call site that used it. Nothing in Go tells you that; the
+  only way to find it is to run both linters.
+- **A rule the code owns twice is a rule that disagrees.** `internal/httpapi`
+  re-derived `md`'s link-URL rule as `internalHref` so it could match rendered
+  hrefs, and the two copies drifted twice, both silently: a link with a heading
+  never previewed, because the renderer percent-encodes the fragment and the
+  mirror did not; and a link naming a file never previewed, because the renderer
+  had by then started routing that href at the attachment route. Neither failure
+  threw, neither logged, and both looked exactly like "the preview is not
+  configured". The fix was to export `md.LinkHref` so the rule has one owner, and
+  to compare the two sides decoding-insensitively rather than byte for byte. Same
+  family as the `EditView.BaseHash` entry above and the same lesson: when a
+  document *or a function* restates a fact another package owns, the restatement
+  is a second answer waiting to become a second opinion.
+- **`golangci-lint` runs, and it is green at 0 issues.** The entry that used to
+  say otherwise is gone: the tool now builds against this module's Go, and
+  `golangci-lint run` reports `0 issues` over the whole tree with
+  `max-issues-per-linter: 0` and `max-same-issues: 0`, so nothing is being
+  hidden by a cap. It is part of `make check`. Do not report lint as passing
+  without running it — the two entries above are enforced by it and by nothing
+  else, which is what makes them rules rather than advice.

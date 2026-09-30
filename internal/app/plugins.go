@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -88,10 +89,19 @@ func (a *App) pluginDeps(ctx context.Context) plugin.PluginDeps {
 		// "valid" means for a shape the host invented the storage for.
 		Config: func(pluginID string) (plugin.Config, error) {
 			raw, err := store.MetaGet(ctx, a.db.Reader(), keyPluginConfig+"."+pluginID)
-			if err != nil || raw == "" {
-				// Absent configuration is the normal case for a plugin shipping
-				// without defaults, so it is not an error.
+			// errors.Is, and only for ErrNoRows. store.MetaGet never returns
+			// ("", nil) — a missing key comes back as a wrapped ErrNoRows — so
+			// `err != nil || raw == ""` answered the same thing for "this plugin
+			// has no stored configuration" and for "the read failed", and the
+			// second one silently booted a plugin with defaults it would then
+			// write over the settings it failed to read. A read that fails is
+			// reported; the lifecycle turns this error into a refusal the boot
+			// report names, which is the outcome a broken index should have.
+			if errors.Is(err, store.ErrNoRows) {
 				return plugin.Config{ID: pluginID, Values: map[string]any{}}, nil
+			}
+			if err != nil {
+				return plugin.Config{}, fmt.Errorf("read stored configuration for plugin %s: %w", pluginID, err)
 			}
 			return plugin.Config{ID: pluginID, Values: parseConfigBlob(raw)}, nil
 		},

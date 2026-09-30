@@ -51,7 +51,7 @@ func ForEach(rows *sql.Rows, fn func(Rows) error) error {
 	if rows == nil {
 		return errors.New("store: ForEach called with no rows")
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		if err := fn(rows); err != nil {
 			return err

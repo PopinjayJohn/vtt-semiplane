@@ -248,6 +248,25 @@ DRIVER_STATUS=$?
 # The report is checked before it is believed, by a script that knows which pages
 # were asked for. A row that lands somewhere else is a row that audited a
 # different page, and no exit code from the engine can see that.
+#
+# …but only if there is a report. The driver dies before writing one when the
+# browser will not start, and handing the checker a path that does not exist
+# turns the real failure — Chromium's own "No usable sandbox!" on stderr, ten
+# lines up — into an `ENOENT: no such file or directory, open '…/pa11y.json'`
+# and a stack trace through pa11y-report.js. That is how the runner's browser
+# launch presented: a launcher error, then an unrelated-looking file error that
+# named the wrong file. The check runs when it can say something, and the
+# driver's own status is what is reported when it cannot.
+if [[ ! -f "$REPORT" ]]; then
+	set -e
+	echo
+	echo "==> pa11y: the walk wrote no report at all, so there is nothing to compare." >&2
+	echo "    The driver exited $DRIVER_STATUS. The line above is the reason: a" >&2
+	echo "    driver that cannot launch its browser never gets as far as a verdict." >&2
+	echo "    This is a harness failure, not an accessibility result, and it is NOT" >&2
+	echo "    a pass. --keep re-runs with the work directory intact for a closer read." >&2
+	exit 1
+fi
 node scripts/pa11y-report.js "$REPORT"
 STATUS=$?
 set -e

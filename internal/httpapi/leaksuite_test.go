@@ -965,7 +965,7 @@ func TestSecretBodyNeverInErrorsOrLogs(t *testing.T) {
 		// a test to hand the router a failing store, and chmod would fail
 		// differently for a privileged reader than for an unprivileged one,
 		// which is a test whose result depends on who is running it.
-		if _, err := fx.DB.Writer().Exec(`DROP TABLE secrets`); err != nil {
+		if _, err := fx.DB.Writer().ExecContext(context.Background(), `DROP TABLE secrets`); err != nil {
 			t.Fatalf("break the store so the page view fails: %v", err)
 		}
 
@@ -1320,7 +1320,7 @@ func TestExportNeverLeaks(t *testing.T) {
 			if refused.StatusCode != http.StatusNotFound {
 				t.Errorf("the export of a page whose name carries a backslash: status %d, want 404", refused.StatusCode)
 			}
-			missing := s.do(s.get("/p/There-is-no-such-page.md/export"))
+			missing := s.do(s.get("/p/There-is-no-such-page.md/export")) //nolint:bodyclose // s.read closes the body it is handed
 			if got := s.read(missing); got != refusedBody {
 				t.Errorf("a refused page name answers differently from a page that does not exist (%d bytes against %d)",
 					len(refusedBody), len(got))

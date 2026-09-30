@@ -114,13 +114,13 @@ func newEventFixture(t *testing.T, files map[string]string, mutate ...func(*conf
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if err := store.Migrate(context.Background(), db.Writer(), func(context.Context) error {
+	if migrateErr := store.Migrate(context.Background(), db.Writer(), func(context.Context) error {
 		return nil
-	}); err != nil {
-		t.Fatalf("migrate the index: %v", err)
+	}); migrateErr != nil {
+		t.Fatalf("migrate the index: %v", migrateErr)
 	}
-	if err := store.MetaSet(context.Background(), db.Writer(), store.KeyBootState, store.BootStateReady); err != nil {
-		t.Fatalf("record the boot state: %v", err)
+	if metaSetErr := store.MetaSet(context.Background(), db.Writer(), store.KeyBootState, store.BootStateReady); metaSetErr != nil {
+		t.Fatalf("record the boot state: %v", metaSetErr)
 	}
 
 	// The bus is the only difference from the harness, and it is wired into both
@@ -135,8 +135,8 @@ func newEventFixture(t *testing.T, files map[string]string, mutate ...func(*conf
 	if err != nil {
 		t.Fatalf("walk the vault: %v", err)
 	}
-	if _, err := indexer.IndexBatch(context.Background(), res.Files); err != nil {
-		t.Fatalf("index the vault: %v", err)
+	if _, indexBatchErr := indexer.IndexBatch(context.Background(), res.Files); indexBatchErr != nil {
+		t.Fatalf("index the vault: %v", indexBatchErr)
 	}
 
 	writer := vault.NewWriter(dir, log)
@@ -884,13 +884,13 @@ func TestPushCoalescesBurst(t *testing.T) {
 		for i := 0; i < 40; i++ {
 			fx.announce("Tavern.md", isync.ChangeUpdated)
 		}
-		text := es.waitFor(t, "the coalesced render", func(string) bool {
+		es.waitFor(t, "the coalesced render", func(string) bool {
 			return countEvents(parseSSE(es.text()), httpapi.EventFragment) >= 1
 		})
 		// Long enough that a second render would have happened, had the window not
 		// collapsed the burst.
 		time.Sleep(4 * testWindow)
-		text = es.text()
+		text := es.text()
 
 		if got := countEvents(parseSSE(text), httpapi.EventFragment); got != 1 {
 			t.Errorf("a burst of forty changes produced %d fragments, want 1", got)
@@ -1165,14 +1165,14 @@ func TestPushSendsOnlyTriggers(t *testing.T) {
 	waitUntil(t, "the stream to be registered", func() bool { return fx.hub.Subscribers() == 1 })
 
 	fx.save(t, "Tavern.md", "Trigger-only assertions.")
-	text := es.waitFor(t, "the pushed fragment", func(s string) bool {
+	es.waitFor(t, "the pushed fragment", func(s string) bool {
 		return strings.Contains(s, "Trigger-only assertions.")
 	})
 	// A reload too, so both trigger shapes are on the wire at once.
 	if _, err := store.BumpAuthzGeneration(context.Background(), fx.DB.Writer()); err != nil {
 		t.Fatalf("bump the authorization generation: %v", err)
 	}
-	text = es.waitClosed(t, "the stream to end on the generation bump")
+	text := es.waitClosed(t, "the stream to end on the generation bump")
 
 	evs := parseSSE(text)
 	if len(evs) == 0 {
@@ -1401,7 +1401,7 @@ func (s scannedWriter) Unwrap() http.ResponseWriter { return s.w }
 
 // readAndClose reads a body for a failure message and closes it.
 func readAndClose(resp *http.Response) string {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil {
 		return "could not read the body: " + err.Error()

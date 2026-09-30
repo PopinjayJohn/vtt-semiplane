@@ -59,16 +59,16 @@ func (s *Service) mutateAccount(ctx context.Context, actor authz.Principal, user
 	if err != nil {
 		return fmt.Errorf("auth: begin %s: %w", action, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	if _, err := store.GetUserByID(ctx, tx, userID); err != nil {
-		return fmt.Errorf("auth: load account: %w", err)
+	if _, getUserByIDErr := store.GetUserByID(ctx, tx, userID); getUserByIDErr != nil {
+		return fmt.Errorf("auth: load account: %w", getUserByIDErr)
 	}
-	if err := apply(tx); err != nil {
-		return err
+	if applyErr := apply(tx); applyErr != nil {
+		return applyErr
 	}
-	if _, err := store.DeleteUserSessions(ctx, tx, userID); err != nil {
-		return err
+	if _, deleteUserSessionsErr := store.DeleteUserSessions(ctx, tx, userID); deleteUserSessionsErr != nil {
+		return deleteUserSessionsErr
 	}
 	generation, err := store.BumpAuthzGeneration(ctx, tx)
 	if err != nil {

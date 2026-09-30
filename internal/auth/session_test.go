@@ -309,8 +309,8 @@ func TestRoleChangeInvalidatesOldSessions(t *testing.T) {
 	}
 	genBefore := before.AuthzGeneration
 
-	if err := h.svc.SetRole(ctx, h.principal(adminID, "the-admin", "admin"), userID, authz.RoleDM); err != nil {
-		t.Fatalf("set role: %v", err)
+	if setRoleErr := h.svc.SetRole(ctx, h.principal(adminID, "the-admin", "admin"), userID, authz.RoleDM); setRoleErr != nil {
+		t.Fatalf("set role: %v", setRoleErr)
 	}
 
 	who, err := h.svc.Session(ctx, raw)
@@ -603,13 +603,13 @@ func (h *harness) sessionRows(ctx context.Context) []store.Session {
 			lastSeen  string
 			userAgent sql.NullString
 		)
-		if err := r.Scan(&sess.ID, &sess.UserID, &created, &expires, &lastSeen, &userAgent); err != nil {
-			return err
+		if scanErr := r.Scan(&sess.ID, &sess.UserID, &created, &expires, &lastSeen, &userAgent); scanErr != nil {
+			return scanErr
 		}
 		sess.UserAgent = userAgent.String
-		var err error
-		if sess.CreatedAt, err = store.ParseTime(created); err != nil {
-			return err
+		var createdErr error
+		if sess.CreatedAt, createdErr = store.ParseTime(created); createdErr != nil {
+			return createdErr
 		}
 		if sess.ExpiresAt, err = store.ParseTime(expires); err != nil {
 			return err

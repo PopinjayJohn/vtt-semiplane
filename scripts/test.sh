@@ -105,7 +105,7 @@ if [[ -n "$FUNDUZZ" ]]; then
 		echo "test.sh: -fuzz takes exactly one package" >&2
 		exit 2
 	}
-	exec go test "${PACKAGES[0]}" -run=XXX "${EXTRA[@]}" -timeout 10m
+	exec go test "${PACKAGES[0]}" -run=XXX ${EXTRA[@]+"${EXTRA[@]}"} -timeout 10m
 fi
 
 if [[ ${#PACKAGES[@]} -eq 0 ]]; then
@@ -115,11 +115,17 @@ fi
 echo "==> test ${PACKAGES[*]} (p=1 parallel=${PARALLEL} GOMEMLIMIT=${GOMEMLIMIT} timeout=${TIMEOUT})"
 
 # -p 1 is the important one. -parallel bounds subtests inside a binary.
+#
+# ${EXTRA[@]+"${EXTRA[@]}"} rather than "${EXTRA[@]}": under `set -u` an empty
+# array expansion is an error on bash 3.2, which is what macOS ships, and legal
+# only from bash 4.4. Every macOS unit job failed on exactly that, on a tree
+# whose Go tests all passed — the +test form expands to nothing when the array
+# is empty and to the elements when it is not, on every bash this is run under.
 exec go test \
 	-p 1 \
 	-parallel "${PARALLEL}" \
 	-timeout "${TIMEOUT}" \
 	${SHORT} ${RACE} \
-	"${EXTRA[@]}" \
+	${EXTRA[@]+"${EXTRA[@]}"} \
 	-count=1 \
 	"${PACKAGES[@]}"

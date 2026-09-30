@@ -830,6 +830,18 @@ func (sub *subscriber) serve(r *http.Request, w http.ResponseWriter) {
 	case <-sub.aborted:
 	case <-time.After(streamCloseGrace):
 	}
+	// Known, and not fixed here: the grace is a bound on this handler, not a
+	// join, so sub.write may still be inside Write when serve returns. The
+	// recorder's own state is safe — statusRecorder holds a mutex across the
+	// forwarded call and refuses to write once the handler has returned — which
+	// is what the race detector was reporting, and that is fixed. What remains is
+	// the lifetime: a socket nobody is reading has no deadline set, so a write
+	// parked in the kernel outlives the response. Joining needs a write
+	// deadline, and adding one here stopped TestPushDropsSlowConsumer reaching
+	// its event bound — a slow consumer began failing its writes before the
+	// bound could count it, which is a different eviction rule and not one to
+	// change while fixing something else. It belongs to whoever owns the stream's
+	// backpressure.
 }
 
 // wrapper reads the tripwire seam under the lock.

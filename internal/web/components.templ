@@ -256,7 +256,7 @@ templ PageList(cards []httpapi.PageCard, empty string) {
 		<ul class="divide-y divide-neutral-200 rounded border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
 			for _, card := range cards {
 				<li class="flex items-baseline gap-3 px-3 py-2">
-					<a href={ card.Href() } class="font-medium hover:underline">{ card.Title }</a>
+					<a href={ card.Href() } { Wikilink(card.ID)... } class="font-medium hover:underline">{ card.Title }</a>
 					<code class="text-xs text-neutral-500 dark:text-neutral-400">{ card.Path }</code>
 					if !card.UpdatedAt.IsZero() {
 						<time
@@ -308,18 +308,86 @@ templ SecretLock(secret httpapi.SecretView) {
 
 // SecretRevealed is a secret this reader may read.
 //
+// **Two shapes, not one, and the branch is `Revealed` rather than the
+// visibility.** "I can read this" and "the table can read this" are different
+// facts; this component used to render both as the second, so a DM's own
+// `private` note appeared in a green box captioned "Shared with the table" with
+// a "Reveal to the table" button directly beneath it. The caption is now
+// `Revealed`, which the handler filled from secrets.Secret.IsOpen, because a
+// component that compared Visibility against a literal would be a second place
+// answering a question authz owns — the same rule SecretControls' two directions
+// already follow.
+//
 // The body is shown as preformatted text rather than as rendered Markdown: a
-// revealed secret is a block the author wrote for the table, and rendering its
-// contents as page content would put the page's own link resolution and heading
-// structure inside a box the author did not ask to be part of them.
+// secret is a block the author wrote, and rendering its contents as page content
+// would put the page's own link resolution, heading structure and attachment
+// rules inside a box the author did not ask to be part of them. It is also the
+// difference between two renderers and one: the page's renderer is built once at
+// boot over a vault-aware resolver, and there is no second instance of it to hand
+// a fragment of one page to.
 templ SecretRevealed(secret httpapi.SecretView) {
-	<details class="secret-revealed" open>
+	// One details element for both shapes, so the two cannot drift in structure
+	// or in what a reader can do with them. `open` rather than collapsed: a DM
+	// reading a page is looking for what is in the secret, and a closed box per
+	// fence is a click per fence before anything is read.
+	<details class={ secretBoxClass(secret.Revealed) } open>
 		<summary class="cursor-pointer select-none font-semibold">
-			@Icon("i-unlock", "mr-1 inline h-4 w-4")
-			Shared with the table
+			@Icon(secretIcon(secret.Revealed), "mr-1 inline h-4 w-4")
+			@secretCaption(secret.Revealed)
 		</summary>
-		<pre class="mt-2 overflow-x-auto whitespace-pre-wrap text-sm text-neutral-800 dark:text-neutral-200">{ secret.Body }</pre>
+		if strings.TrimSpace(secret.Body) == "" {
+			// A fence with no body is a real state — an empty ```secret block is
+			// what a DM writes before they have written anything — and an empty
+			// <pre> under a caption reads as a rendering failure rather than as
+			// "there is nothing here yet". Whitespace counts as nothing, because a
+			// body of one blank line renders identically and would put the reader
+			// back in the same position.
+			<p class="mt-2 text-sm opacity-90">This secret has no text yet.</p>
+		} else {
+			<pre class="mt-2 overflow-x-auto whitespace-pre-wrap text-sm text-neutral-800 dark:text-neutral-200">{ secret.Body }</pre>
+		}
 	</details>
+}
+
+// secretCaption is the sentence over a readable secret's body.
+//
+// "A secret you can read" rather than a claim about who else can, because the
+// truthful strong claim is not always available: a `private` secret on a page
+// every player owns is readable by the whole table, so "not shared with the
+// table" would be false, and a false label on this page is worse than a vague one
+// — the reader's next question is answered by the control underneath, which is
+// filled by the policy rather than by this file.
+templ secretCaption(revealed bool) {
+	if revealed {
+		<span>Shared with the table</span>
+	} else {
+		<span>A secret you can read</span>
+	}
+}
+
+// secretIcon is the glyph beside the caption.
+// The unlocked padlock for a shared secret and the closed one for the rest, so
+// the icon agrees with the words instead of contradicting them. It is the same
+// glyph SecretLock uses and the two are told apart by their captions: one is a
+// box the reader may not open, the other is a box they may.
+func secretIcon(revealed bool) string {
+	if revealed {
+		return "i-unlock"
+	}
+	return "i-lock"
+}
+
+// secretBoxClass is the box's own styling, and the difference between the two
+// shapes is a colour rather than a word.
+//
+// `.secret-revealed` is the "published" tint. A secret nobody but the author and
+// the DMs can read wearing the published tint is the same lie as the caption
+// was, in the one channel a skimming reader uses.
+func secretBoxClass(revealed bool) string {
+	if revealed {
+		return "secret-revealed"
+	}
+	return "secret-readable"
 }
 
 // BacklinkChip is one referring page in the aside.
@@ -327,6 +395,7 @@ templ BacklinkChip(chip httpapi.BacklinkChip) {
 	<li>
 		<a
 			href={ chip.Card.Href() }
+			{ Wikilink(chip.Card.ID)... }
 			class="inline-flex items-center gap-1 text-sm hover:underline"
 		>
 			@Icon("i-backlink", "h-3 w-3 shrink-0 opacity-70")

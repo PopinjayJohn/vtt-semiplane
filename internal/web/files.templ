@@ -15,9 +15,44 @@ import (
 //
 // One signal per directory rather than one for the whole tree is what lets a
 // reader open two directories and leave them open across a page render.
+//
+// It is keyed on the path alone and not on which tree is asking, and that is
+// deliberate: the sidebar and the /files page are the same vault, so a reader
+// who opened Guild in the sidebar arrives at /files with Guild open. One
+// directory, one piece of state, and no way for the two surfaces to answer
+// differently about the same directory.
 func dirSignal(path string) string {
 	return "$_open_" + hex.EncodeToString([]byte(path))
 }
+
+// dirID is the element id a directory's button controls, and the id on the list
+// it controls.
+//
+// It carries the tree's own prefix as well as the path, and the reason is a
+// duplicate id rather than an aesthetic one: on /files the sidebar's tree and
+// the page's tree render the same directories at the same moment, and two
+// elements answering to one id make aria-controls point at whichever the
+// browser happened to find. A disclosure whose control names the wrong element
+// is a disclosure that lies.
+func dirID(prefix, path string) string {
+	return prefix + "-children-" + hex.EncodeToString([]byte(path))
+}
+
+// treeHeadingText is the sidebar section's heading.
+const treeHeadingText = "Pages"
+
+// sidebarEmptyTitle and sidebarEmptyNote are what an empty vault gets in place
+// of a tree.
+//
+// A section is named, never left as a heading over nothing and never rendered as
+// an empty panel. AGENTS.md §7 makes the absence of a thing a first-class state
+// for plugins, and the same rule is the only one that works here: a reader who
+// sees "Pages" over blank space concludes the application is broken, and a
+// reader who is told the vault holds no Markdown yet knows what to do next.
+const (
+	sidebarEmptyTitle = "No pages in this vault"
+	sidebarEmptyNote  = "Add a Markdown file to the vault and it appears here as soon as the indexer has read it."
+)
 
 // Files is the vault as a tree, at /files.
 templ Files(v httpapi.FilesView) {
@@ -30,15 +65,135 @@ templ Files(v httpapi.FilesView) {
 	</section>
 }
 
-// FileTree is the whole vault as a nested list of links.
+// SidebarTree is the left sidebar's section: the vault as a navigable hierarchy.
+//
+// It is on the shell, so it is on every page, and it is the same tree /files
+// renders from the same query — not a second listing, which would be a second
+// thing that can disagree with the first about what the vault holds.
+//
+// Three absences are three states, not one, and each renders differently:
+//
+//   - No tree at all (VaultTree nil) is a listing that failed. The section is not
+//     rendered, so the sidebar is the navigation it was before this existed
+//     rather than a panel that says nothing.
+//   - A tree with nothing in it is an empty vault, and it gets the named empty
+//     state. A heading over an empty list is a promise with nothing behind it.
+//   - A tree carrying fewer pages than the vault holds gets its omission named,
+//     with the count and a link to the full tree. Truncating a navigation
+//     silently would make it a map of a vault that does not exist.
+//
+// The heading and the list are separate elements rather than a labelled list so
+// that the plugin group below can be a heading and a list in the same shape, and
+// so the two groups read as siblings rather than as a section and a caption.
+templ SidebarTree(shell httpapi.Shell) {
+	if shell.VaultTree != nil {
+		if len(shell.VaultTree.Children) == 0 && len(shell.VaultTree.Pages) == 0 {
+			@EmptyState(sidebarEmptyTitle, Text(sidebarEmptyNote))
+		} else {
+			<h2
+				id="left-tree-heading"
+				class="mt-6 px-2 text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400"
+			>
+				{ treeHeadingText }
+			</h2>
+			@VaultTree(*shell.VaultTree)
+			if shell.VaultTreeOmitted > 0 {
+				@treeOmissionNotice(shell.VaultTreeOmitted)
+			}
+		}
+	}
+}
+
+// treeOmissionNotice names what the sidebar left out, and where the rest is.
+//
+// The count is the one the handler computed from the same page list the tree was
+// built from, so the notice cannot claim a number the tree disagrees with: a
+// reader who counts the links and compares them to the notice is checking two
+// values that came from one list.
+//
+// The link is the /files surface that already exists and already shows the whole
+// vault. An omission the reader can see is a truncated list; one they cannot is a
+// claim that this is the campaign.
+//
+// data-tree-omitted carries the count as a value as well as in the sentence,
+// because a test that has to match English prose to check a number breaks the
+// first time somebody rewords it — and it is the number, not the wording, that
+// the claim is about. The attribute is not a styling hook and nothing reads it
+// but a test.
+templ treeOmissionNotice(omitted int) {
+	<p class="mt-2 px-2 text-xs text-neutral-500 dark:text-neutral-400" data-tree-omitted={ itoa(omitted) }>
+		{ itoa(omitted) } more { plural(omitted, "page", "pages") } in this vault.
+		<a href="/files" class="underline">Open the full tree</a>
+	</p>
+}
+
+// FileTree is the whole vault as a nested list of links, at /files.
+templ FileTree(node httpapi.FileNode) {
+	@treeList(pageTreeAttrs(), "page-tree", node)
+}
+
+// VaultTree is the left sidebar's list, which is the same rows under a different
+// identity.
+//
+// Both lists share one row implementation — fileDirectory, filePage and
+// fileEntries — and differ only in the element id, the accessible name and the
+// prefix their child-list ids are built from. Two copies of a navigation would
+// be two things to keep in step, and the drift would be invisible until the day
+// one of them gained a control the other did not.
+templ VaultTree(node httpapi.FileNode) {
+	@treeList(vaultTreeAttrs(), "left-tree", node)
+}
+
+// pageTreeAttrs names the /files list by itself, because on that page it is the
+// page's content and the h1 above it is not a caption for it.
+func pageTreeAttrs() templ.Attributes {
+	return treeAttrs("page-tree", "Files", "")
+}
+
+// vaultTreeAttrs names the sidebar's list by the heading above it, so that the
+// section reads as "Pages" in a landmark list rather than as a second thing
+// called Files.
+func vaultTreeAttrs() templ.Attributes {
+	return treeAttrs("left-tree", "", "left-tree-heading")
+}
+
+// treeAttrs is the attribute set both trees' root lists carry.
+//
+// Exactly one of label and labelledBy is ever set, and that is why they are
+// arguments rather than one string: an aria-labelledby pointing at an element
+// that is not on the page names nothing at all, which is worse than no name
+// attribute, and an aria-label on the page's own list competes with its heading.
+//
+// It is a map rather than inline attributes because templ only spreads a
+// templ.Attributes *value* it is handed, not a call, and a fourth parameter at
+// each of the two call sites would be one more thing that could be filled in
+// from the wrong tree.
+func treeAttrs(id, label, labelledBy string) templ.Attributes {
+	out := templ.Attributes{"id": id, "class": "file-tree", "data-roving": true}
+	if label != "" {
+		out["aria-label"] = label
+	}
+	if labelledBy != "" {
+		out["aria-labelledby"] = labelledBy
+	}
+	return out
+}
+
+// treeList is the shared root of both trees.
 //
 // Every page is an ordinary anchor and every directory is an ordinary button
 // over an ordinary list, so with JavaScript blocked the tree is a fully expanded
 // list of links and the reader loses nothing but the collapsing. Collapsing is
 // the enhancement; the tree is the document.
-templ FileTree(node httpapi.FileNode) {
-	<ul id="page-tree" data-roving class="file-tree" aria-label="Files">
-		@fileEntries(node)
+//
+// prefix is the tree's own identity, and the rows' child-list ids are built from
+// it because on /files the sidebar's tree and this one render the same
+// directories at the same moment: two elements answering to one id make a
+// button's aria-controls point at whichever the browser found first, and a
+// disclosure that names the wrong element is a disclosure that lies.
+templ treeList(attrs templ.Attributes, prefix string, node httpapi.FileNode) {
+	<ul { attrs... }>
+		@fileEntries(node, prefix)
 	</ul>
 }
 
@@ -46,9 +201,24 @@ templ FileTree(node httpapi.FileNode) {
 // node holds itself. A node that is a directory may also hold pages directly,
 // and rendering both is what stops a page at the root of the vault from
 // disappearing.
-templ fileEntries(node httpapi.FileNode) {
+//
+// The recursion is an ordinary Go call — templ compiles a component reference
+// into a method on a generated type, so fileDirectory calling fileEntries is the
+// same call a hand-written recursive render would make. It needs no depth cap
+// of its own because the node count is bounded upstream: the sidebar's tree
+// carries at most httpapi.SidebarTreeMax pages, so the nesting is bounded by the
+// same number, and a second limit could only be a second figure that disagreed
+// with the first.
+//
+// Both loops are unconditional. A skip written as `continue` in a loop whose body
+// contains markup is compiled by templ v0.3.1020 into the literal text
+// "continue", so it would print the word on the page and skip nothing — the
+// second of the two hangs AGENTS.md §11 records, in a different costume. A
+// future skip belongs in an `if` around the call, which is what
+// pluginPanels in context.templ does.
+templ fileEntries(node httpapi.FileNode, prefix string) {
 	for _, child := range node.Children {
-		@fileDirectory(child)
+		@fileDirectory(child, prefix)
 	}
 	for _, page := range node.Pages {
 		@filePage(page)
@@ -57,36 +227,47 @@ templ fileEntries(node httpapi.FileNode) {
 
 // fileDirectory is one folder, collapsed by a client signal.
 //
-// aria-expanded is bound to the same signal as the visibility, so the state a
-// screen reader is told and the state on the screen cannot disagree.
-//
-// A directory carries no count and no timestamp. FileNode has no field for
-// either, on purpose: a count in a sidebar is a number whose derivation a reader
-// cannot check, and a count that disagrees with a list somewhere else is an
-// existence leak wearing a number. Inventing one here from the rendered list
-// would reintroduce exactly that.
-templ fileDirectory(node httpapi.FileNode) {
+// The disclosure is a real button with three states kept in one place:
+// aria-expanded is bound to the same signal that shows the children, and
+// aria-controls names the list that signal is hiding. A screen reader is told
+// the same thing the reader sees, and a state the attribute could drift from
+// the panel does not exist because both read the one signal.
+templ fileDirectory(node httpapi.FileNode, prefix string) {
 	<li class="file-dir" data-dir={ node.Path }>
 		<button
 			type="button"
 			class="file-dir-toggle"
 			aria-expanded="false"
+			aria-controls={ dirID(prefix, node.Path) }
 			data-attr:aria-expanded={ dirSignal(node.Path) + " ? 'true' : 'false'" }
 			data-on:click={ dirSignal(node.Path) + " = !" + dirSignal(node.Path) }
 		>
 			@Icon("i-chevron-right", "h-3 w-3 shrink-0 opacity-70")
 			<span class="file-dir-name">{ node.Name }</span>
 		</button>
-		<ul class="file-children" data-show={ dirSignal(node.Path) }>
-			@fileEntries(node)
+		// The id comes before data-show and the class stays first, so the element
+		// opens with the class this file's own tests and the stylesheet key off.
+		<ul class="file-children" id={ dirID(prefix, node.Path) } data-show={ dirSignal(node.Path) }>
+			@fileEntries(node, prefix)
 		</ul>
 	</li>
 }
 
 // filePage is one page, as a link.
+//
+// The href is PageCard.Href, the one URL the router serves a page at and the one
+// every other link in the shell uses. A tree that built its own href would be a
+// second encoding of the same path, and the two would disagree the first time a
+// path needed escaping.
+//
+// Wikilink is on it because the link-preview agent binds to that attribute and
+// to nothing else: a tree row without it is a row a reader can hover for a
+// minute and get nothing, which is the shape of a control with nothing behind
+// it. Its value is the page id and never the path, so it says nothing the href
+// beside it has not already said.
 templ filePage(page httpapi.PageCard) {
 	<li class="file-page">
-		<a href={ page.Href() } data-page={ page.Path } class="file-page-link">
+		<a href={ page.Href() } { Wikilink(page.ID)... } data-page={ page.Path } class="file-page-link">
 			@Icon("i-book", "h-3 w-3 shrink-0 opacity-70")
 			<span>{ page.Title }</span>
 		</a>

@@ -112,8 +112,11 @@ func (s *Scanner) Scan(ctx context.Context, root string) ([]string, error) {
 		if err != nil {
 			// The entry exists but cannot be stat'd: report it, because a file
 			// the indexer has never seen is better surfaced than dropped.
+			// Returning nil is the WalkDirFunc contract — the walk continues and
+			// the scan stays whole — and `changed` is where this entry is
+			// reported, so the error is consumed rather than dropped.
 			changed = append(changed, rel)
-			return nil
+			return nil //nolint:nilerr // recorded in changed, and the walk must continue
 		}
 		// A symlink is marked seen but never compared: its own mtime is the
 		// link's rather than its target's, so statting it would report a change

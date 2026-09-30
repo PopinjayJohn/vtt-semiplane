@@ -74,8 +74,13 @@ of a phrase.
 
 **A sixth key makes the whole directive unreadable**, and an unreadable
 directive is not a formatting problem to shrug at. It is treated as *this fence
-claims to be secret and could not be proven to say what it claims*, and the
-fence is hidden from **everyone**. The bundled campaign carries one, broken on
+claims to be secret and could not be proven to say what it claims*: the app does
+not widen it to what the file asked for, and it does not serve it as public
+either. It is held at `private` — the narrowest setting a fence can be read at
+that a game master can still open — and the page says why, in the **Problems**
+list, to everybody who can open the page. So a broken fence is not a secret that
+vanished and it is not one that leaked; it is a secret the app refuses to
+widen, with the reason written down. The bundled campaign carries one, broken on
 purpose, with the two mistakes that break a fence spelled out beside it — see
 *What the bundled sample campaign demonstrates* below.
 
@@ -90,7 +95,8 @@ title=The bell was rung by the town
 That is not a title with spaces. The value of `title` ends at the first space,
 so the parser reads `title=The`, then `bell`, then `was`, then `rung`, then
 `by`, then `the`, then `town` as seven more keys it does not recognise. The
-directive is unreadable and the fence goes dark.
+directive is unreadable, and the fence is read at `private` whatever the file
+claimed — including a file that claimed `table`.
 
 **Quote every value that contains a space.** Either kind of quote works:
 
@@ -112,9 +118,13 @@ the app now fails closed rather than open.
 Do not write the triple backticks around a sample `secret` directive, even
 inside a longer code block. The scanner that finds secret fences reads **every
 line in a file**, not only the lines inside a Markdown fence, so a sample
-spelled with real backticks becomes a real, empty secret on the page —
-invisible, and reported as a directive with no body. Show the directive line on
-its own, as in the example above.
+spelled with real backticks becomes a real secret with a real id, taking up a box
+in the page's **Secrets on this page** section: a lock for a reader who may not
+read it, and for a reader who may, a box saying it has no text yet. Nobody is
+shown a sample's text — there is none — but the page is permanently one fence
+longer than you meant it to be, and once its `author=` names an account, a reveal
+control that acts on an id you made up while writing documentation. Show the
+directive line on its own, as in the example above.
 
 ## The three visibilities
 
@@ -147,15 +157,28 @@ particular secret exists.
 
 **`author` is a username, and the username has to belong to an account that
 actually exists.** It is not a label and it is not remembered anywhere else. A
-fence whose author cannot be resolved is not indexed at all, and a secret that
-is not in the index is shown to nobody.
+fence whose author cannot be resolved is not indexed, and an unindexed fence is
+absent from search, from backlinks and from the campaign status panel.
 
-**So on a brand-new vault, where no account exists yet, every secret you have
-written is hidden from everybody — the table and you alike.** That is the first
-thing that will confuse you, and it is deliberate. A secret whose author cannot
-be resolved is a secret nobody can be shown to be entitled to, and the only safe
-answer to *who is entitled to read this?* when the answer is *nobody knows* is
-*nobody*.
+**On a brand-new vault, where no account exists yet, what one of your secrets
+lacks is an author — and an author is what only one of the three visibilities
+needs.** The rule that reads a fence is asked "may this reader have it", and
+`author` answers exactly one arm of that: *is the reader the person who wrote
+it*. An unresolved name matches nobody, so what changes is that one arm, and
+only that one:
+
+- a **`private`** secret is still readable by a game master, an administrator
+  and the owners of the page it sits on — and by nobody as *its author*;
+- a **`dm`** secret is readable by a game master or administrator, exactly as
+  it would be once the account exists;
+- a **`table`** secret is readable by every signed-in account, exactly as it
+  would be once the account exists. `table` never asked who wrote it.
+
+So the honest description of the failure is not "nobody sees it". It is **you
+cannot be its author, and the app cannot offer you the reveal control**, because
+a reveal names a secret's id in the index and this fence has no row. What you
+get instead is a note on the page, to somebody entitled to read it — see *What
+a reader sees* below.
 
 What to do about it:
 
@@ -166,7 +189,7 @@ What to do about it:
 2. **Create the other usernames your fences name**, as accounts of their own. An
    invite carries the *role* and not the username: the person redeeming it picks
    their own username on the form, so tell them which one to pick, or a fence
-   naming `thia` stays hidden until somebody's account is actually called
+   naming `thia` gets no row at all until somebody's account is actually called
    `thia`.
 3. **The fences come back on their own.** The application re-checks the fences
    whose author was not yet an account at the moment an account is created and
@@ -178,13 +201,66 @@ What to do about it:
 is not an oversight in the campaign; it is a demonstration of exactly this rule,
 on a vault where nobody has claimed an account. The campaign's own pages say so
 and name the three usernames to create. A fence whose author is never created
-stays hidden and is reported on the page as an unattributable secret — it does
-not become public.
+does not become public, and it is not left unexplained either: it is reported on
+the page, to the one kind of reader who can do something about it.
+
+**Which reader that is, is narrower than "the page", and the narrowing is the
+point.** A fence the index could not accept still gets a box, because the page's
+list of fences is read out of **your file** and not out of the index — a page
+that listed its secrets from the index would have shown nothing at all for this
+one, and that is the bug this behaviour was written to close. So, on one page:
+
+- **Somebody entitled to read that fence** gets the box with the secret in it,
+  and one extra line in the page's **Problems** list naming the fence's id and
+  saying its `author=` is not a known account. That is the reader who can fix
+  it, and the line is written for them.
+- **Somebody refused that fence** gets the lock and nothing else. The line is
+  about the fence's directive, and a directive is not shown to a reader the box
+  has just refused — otherwise the note would enumerate the secrets on a page
+  you are not allowed to read, which is the disclosure the lock exists to
+  prevent.
+
+A fence that failed for some *other* reason — no `id=`, or a sixth key — is
+reported by the Markdown parser instead, and the parser's problems go to
+everybody who can open the page. Both kinds of line land in the same
+**Problems** list, because one list beats two.
+
+**The editor will not tell you this one.** Its problem list is the parser's
+list, and only the parser's: the indexer's refusal is a return value and a note
+the indexer keeps to itself while it waits for the account, and nothing in the
+database records it, so there is nothing for a page load to read. The fence
+itself is in the editor — the buffer is the file — but if you are chasing an
+unresolvable `author=`, the **Problems** list on the page is where it is.
 
 ## What a reader sees when they cannot read a secret
 
-A locked box, in the place the secret was. It carries a lock icon, the word
-**Hidden**, and the secret's id. That is all.
+**Not in the place the secret was: in a section at the foot of the page.** The
+page view takes every fence out of the body before it renders anything, so the
+body you read has a gap where each one stood. What it renders instead is a
+**Secrets on this page** section below the article — **one box per fence, in the
+order your file writes them** — and every fence on the page gets one, whether
+you may read it or not. That is deliberate in both directions: a box you may not
+open still tells you the page has a secret on it, which is the honest answer,
+and a section over nothing would be a heading promising a destination and
+offering none.
+
+A box you may read holds the secret, as the text you wrote — shown
+preformatted, not as page content, so that the page's own link resolution and
+heading structure stay outside a block the author did not ask to be part of
+them. A box you may not read carries a lock icon, the word **Hidden**, and the
+secret's id. That is all.
+
+**Putting the boxes back where the fences stood is not done, and it is not a
+small piece of work.** The bytes of a secret are *removed* from the body rather
+than replaced by a placeholder, so the rendered page carries no trace of where
+one stood, and a box knows its fence's number among the page's fences and
+nothing else. Splicing a lock back at each one means a second pass over the
+rendered body — and the rendered body is HTML, so it means a second renderer
+rather than a second template. The reason that is not cheap is the same reason
+a secret's body is preformatted: the page's renderer is built once at boot over
+a vault-aware resolver, and there is no second instance of it to hand a fragment
+of one page to. So expect a page whose secrets are interleaved with its prose
+to read as prose with gaps, and then a list.
 
 There is no length, no author, no title and no excerpt, deliberately: each of
 those is a fact about a secret this reader was refused, and a response whose
@@ -192,11 +268,11 @@ those is a fact about a secret this reader was refused, and a response whose
 no view anywhere in the app that shows a reader a secret's title while
 withholding its body, because that is how a secret's existence leaks.
 
-Hiding is not deleting. The bytes are still in the file and still in the index;
-the app refuses to render a body it may not show. Hiding also covers search,
-backlinks, the table of contents and the campaign status panel — a hidden secret
-is **absent** from them, not greyed out, and any count beside it counts the same
-set its list would return.
+Hiding is not deleting. The bytes are still in the file; the app refuses to
+render a body it may not show. Hiding also covers search, backlinks, the table
+of contents and the campaign status panel — a hidden secret is **absent** from
+them, not greyed out, and any count beside it counts the same set its list
+would return.
 
 **In the editor only**, a secret you may not read appears as a restore token
 instead — a short bracketed string carrying the secret's id, the length of its
@@ -260,7 +336,9 @@ One honest caveat. The indexer currently records a page row for every file in
 the vault, including images, and a page has no visibility — so a file referenced
 only from inside a secret can have its **filename** appear in the campaign
 status panel, which is a small metadata disclosure rather than a broken control.
-The file itself is not served, and the reference renders as the hidden box. This
+The file itself is not served. A reader refused the secret sees only its box, and
+a reader entitled to it sees the reference as the plain text of the secret's
+body, because a secret's body is shown preformatted rather than rendered. This
 is a known, recorded, unfixed finding rather than an accepted design, and it is
 written up in [`spec.md`](spec.md)'s divergences; the test that will fire when
 it is fixed is named there.
@@ -270,17 +348,21 @@ it is fixed is named there.
 You can edit a fence's directive line in Obsidian, in a text editor, or through
 the app's own editor. Two rules, both of which are the same rule twice:
 
-1. **Keep the five keys.** A sixth hides the fence from everyone, the game
-   master included — which is the worst possible outcome for a document you were
-   trying to hide from somebody else.
+1. **Keep the five keys.** A sixth is read as *I cannot tell what this fence
+   claims*, so the fence is read at `private` and the page complains about it. A
+   fence you meant to be `table` and wrote as `dm` is the one to look for: a
+   player who should have read it is refused, and the reason is on the page.
 2. **Keep the quoting.** An unquoted value with a space is the same failure
    wearing a different hat.
 
 **When a fence breaks, the page tells you.** The page's **Problems** list names
 each fence whose directive could not be read and says in a plain sentence what
-was wrong with it, and the editor shows the same list. That list is why the
+was wrong with it, and the editor shows that same list. That list is why the
 failure is survivable: you find out immediately, on the page, rather than by
-wondering next Thursday why a secret you wrote last month is not there.
+wondering next Thursday why a secret you wrote last month is not there. The one
+thing on that page the editor does not carry is the note about an `author=` that
+is not an account — see *The accounts rule* above for why it is the page's to
+give and not the editor's.
 
 The bundled sample campaign ships with a deliberately broken fence so you can
 see exactly what this looks like — see below.
@@ -312,8 +394,9 @@ demonstrates:
   does, in the vault itself, where you will actually look.
 
 Every secret in it names an author that does not exist yet, so every one of them
-is hidden until you create the accounts the campaign names. That is the accounts
-rule, demonstrated rather than described.
+is missing its reveal control and its note in the **Problems** list until you
+create the accounts the campaign names. That is the accounts rule, demonstrated
+rather than described.
 
 ## Where the answers live
 

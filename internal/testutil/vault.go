@@ -208,7 +208,7 @@ func RoleUser(id int64, username, role string) User {
 	return User{ID: id, Username: username, DisplayName: username, Role: role}
 }
 
-// NoFixtureSecret is the assertion helper for the leak suite. A test that seeds
+// AssertNoSecret is the assertion helper for the leak suite. A test that seeds
 // a secret body calls AssertNoSecret, so a leak fails with a message that names
 // the fixture rather than printing a wall of HTML.
 func AssertNoSecret(t *testing.T, body string, forbidden ...string) {

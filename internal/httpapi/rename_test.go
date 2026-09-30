@@ -207,11 +207,11 @@ func TestRenameMovesTheFileAndRecordsTheAlias(t *testing.T) {
 	// two. The assertion is on the path rather than on the old id, because SQLite
 	// hands back the highest freed rowid and the vacated id may be reused by the
 	// row the rename creates.
-	if _, err := store.GetPageByPath(ctx, fx.DB.Reader(), "Tavern.md"); !errors.Is(err, store.ErrNoRows) {
-		t.Errorf("the departed path still has a page row: %v", err)
+	if _, getPageByPathErr := store.GetPageByPath(ctx, fx.DB.Reader(), "Tavern.md"); !errors.Is(getPageByPathErr, store.ErrNoRows) {
+		t.Errorf("the departed path still has a page row: %v", getPageByPathErr)
 	}
-	if row, err := store.GetPageByPath(ctx, fx.DB.Reader(), result.NewPath); err != nil || row.ID != result.PageID {
-		t.Errorf("the rename reported the page as %d, but the new path's row is %+v (err %v)", result.PageID, row, err)
+	if row, getPageByPathErr := store.GetPageByPath(ctx, fx.DB.Reader(), result.NewPath); getPageByPathErr != nil || row.ID != result.PageID {
+		t.Errorf("the rename reported the page as %d, but the new path's row is %+v (getPageByPathErr %v)", result.PageID, row, getPageByPathErr)
 	}
 	if result.Updater.Preview == "" || result.Updater.Update == "" {
 		t.Errorf("the rename returned no pointer to the updater: %+v", result.Updater)

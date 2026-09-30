@@ -70,7 +70,7 @@ func (s *Service) Setup(ctx context.Context, username, displayName, passphrase s
 	if err != nil {
 		return authz.Principal{}, fmt.Errorf("auth: begin setup: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	count, err := store.CountUsers(ctx, tx)
 	if err != nil {

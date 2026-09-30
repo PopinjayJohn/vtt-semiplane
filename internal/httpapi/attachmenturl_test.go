@@ -216,7 +216,7 @@ func TestThePagePointsAtTheAttachmentItServes(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("GET %s: status %d, want 404\n%s", want, resp.StatusCode, got)
 		}
-		missing := player.do(player.get("/p/" + attachmentURLPage + "/attachment/no-such-file.png"))
+		missing := player.do(player.get("/p/" + attachmentURLPage + "/attachment/no-such-file.png")) //nolint:bodyclose // player.read closes the body it is handed
 		if absent := player.read(missing); absent != got {
 			t.Errorf("a refused attachment and a file that does not exist answer differently:\n attachment: %q\n missing:   %q", got, absent)
 		}

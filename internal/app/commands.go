@@ -54,7 +54,7 @@ func Reindex(ctx context.Context, opts Options, out io.Writer, full bool) error 
 	a.refreshStatus(ctx)
 	a.setIndexedAt()
 	st := a.Status()
-	fmt.Fprintf(out, "reindexed %d pages from %d files (%d indexed, %d already current)\n",
+	_, _ = fmt.Fprintf(out, "reindexed %d pages from %d files (%d indexed, %d already current)\n",
 		st.PageCount, a.IndexFileCount(), len(res.Indexed), res.Unchanged)
 	printReport(out, st, a.PluginReport())
 	return nil
@@ -86,15 +86,15 @@ func Backup(ctx context.Context, opts Options, out io.Writer, to string) error {
 	if err := a.stampBackup(ctx, a.backupAt); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "backup written to %s\n", dir)
+	_, _ = fmt.Fprintf(out, "backup written to %s\n", dir)
 	if to != "" {
 		placed, err := copyBackupTo(ctx, dir, to)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "copied to %s\n", placed)
+		_, _ = fmt.Fprintf(out, "copied to %s\n", placed)
 	}
-	fmt.Fprintln(out, "this backup contains every DM secret in plaintext; treat it as you treat the vault")
+	_, _ = fmt.Fprintln(out, "this backup contains every DM secret in plaintext; treat it as you treat the vault")
 	return nil
 }
 
@@ -180,7 +180,7 @@ func readRegularFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	opened, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -212,7 +212,7 @@ func Restore(ctx context.Context, opts Options, out io.Writer, from string, forc
 		return fmt.Errorf("reindex after the restore: %w", err)
 	}
 	st := a.Status()
-	fmt.Fprintf(out, "restored from %s and reindexed %d pages from %d files\n",
+	_, _ = fmt.Fprintf(out, "restored from %s and reindexed %d pages from %d files\n",
 		from, st.PageCount, a.IndexFileCount())
 	printReport(out, st, a.PluginReport())
 	return nil
@@ -236,19 +236,19 @@ func VaultInfo(ctx context.Context, opts Options, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("list the backups: %w", err)
 	}
-	fmt.Fprintf(out, "%s\n", Info().String())
+	_, _ = fmt.Fprintf(out, "%s\n", Info().String())
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	printAddress(tw, st)
-	fmt.Fprintf(tw, "files:\t%d indexed\n", a.IndexFileCount())
+	_, _ = fmt.Fprintf(tw, "files:\t%d indexed\n", a.IndexFileCount())
 	if size, err := fileSize(a.db.Path()); err == nil {
-		fmt.Fprintf(tw, "database:\t%s (%s)\n", a.db.Path(), size)
+		_, _ = fmt.Fprintf(tw, "database:\t%s (%s)\n", a.db.Path(), size)
 	} else {
-		fmt.Fprintf(tw, "database:\t%s\n", a.db.Path())
+		_, _ = fmt.Fprintf(tw, "database:\t%s\n", a.db.Path())
 	}
 	if len(backups) == 0 {
-		fmt.Fprintln(tw, "backups:\tnone")
+		_, _ = fmt.Fprintln(tw, "backups:\tnone")
 	} else {
-		fmt.Fprintf(tw, "backups:\t%d, newest %s\n", len(backups), backups[0])
+		_, _ = fmt.Fprintf(tw, "backups:\t%d, newest %s\n", len(backups), backups[0])
 	}
 	printReport(tw, st, a.PluginReport())
 	return tw.Flush()

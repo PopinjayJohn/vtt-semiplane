@@ -70,21 +70,21 @@ func newHarnessAs(t *testing.T, files map[string]string, allowAnonymousRead bool
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
 		}
 	})
-	if err := store.Migrate(context.Background(), db.Writer(), func(context.Context) error { return nil }); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if migrateErr := store.Migrate(context.Background(), db.Writer(), func(context.Context) error { return nil }); migrateErr != nil {
+		t.Fatalf("migrate: %v", migrateErr)
 	}
 	h := &harness{t: t, vault: v, db: db, log: obs.Discard()}
 	ctx := context.Background()
 	for _, u := range []struct{ name, role string }{{"mara", "admin"}, {"dorn", "dm"}, {"pia", "player"}} {
-		if _, err := store.InsertUser(ctx, db.Writer(), store.User{
+		if _, insertUserErr := store.InsertUser(ctx, db.Writer(), store.User{
 			Username: u.name, DisplayName: u.name, Role: u.role,
 			PWSalt: []byte("salt"), CreatedAt: clockNow,
-		}); err != nil {
-			t.Fatalf("seed %s: %v", u.name, err)
+		}); insertUserErr != nil {
+			t.Fatalf("seed %s: %v", u.name, insertUserErr)
 		}
 		if u.name == "dorn" {
 			h.dmID = h.userID(u.name)
@@ -197,7 +197,7 @@ func TestNewServiceRefusesToStartHalfConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	w := vault.NewWriter(t.TempDir(), obs.Discard())
 	ok := countingReindexer{ix: nil, calls: &atomic.Int64{}}
 	for name, opts := range map[string]secrets.Options{
@@ -612,17 +612,17 @@ func TestALostRaceIsSafe(t *testing.T) {
 	}()
 	var conflicts int
 	for range 40 {
-		err := h.svc.Reveal(context.Background(), h.dm(), secretID)
+		revealErr := h.svc.Reveal(context.Background(), h.dm(), secretID)
 		switch {
-		case err == nil:
-		case errors.Is(err, vault.ErrConflict):
+		case revealErr == nil:
+		case errors.Is(revealErr, vault.ErrConflict):
 			conflicts++
-		case errors.Is(err, secrets.ErrNotInFile), errors.Is(err, store.ErrNoRows):
+		case errors.Is(revealErr, secrets.ErrNotInFile), errors.Is(revealErr, store.ErrNoRows):
 			// The flipper can remove the fence, which is the other correct
 			// answer: the file is canonical.
 		default:
 			close(stop)
-			t.Fatalf("a lost race produced %v", err)
+			t.Fatalf("a lost race produced %v", revealErr)
 		}
 		select {
 		case <-flipper:
@@ -786,7 +786,7 @@ func (h *harness) snapshotOther() string {
 			}
 			b.WriteString("\n")
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	return b.String()
 }

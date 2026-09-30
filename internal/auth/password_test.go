@@ -209,8 +209,8 @@ func TestTheDummyVerifierIsNoAccountsVerifier(t *testing.T) {
 	if string(h.userVerifier("impostor")) == dummy {
 		t.Fatal("an account stores the dummy verifier; a login for any username would then depend on the passphrase only")
 	}
-	if _, err := h.svc.Create(ctx, LoginRequest{Username: "no-such-person", Passphrase: dummyPassphrase}); !errors.Is(err, ErrBadCredentials) {
-		t.Errorf("a login for an account that does not exist returned %v", err)
+	if _, createErr := h.svc.Create(ctx, LoginRequest{Username: "no-such-person", Passphrase: dummyPassphrase}); !errors.Is(createErr, ErrBadCredentials) {
+		t.Errorf("a login for an account that does not exist returned %v", createErr)
 	}
 	// And the real account still works, so the two salts really are different
 	// rather than both paths being broken.

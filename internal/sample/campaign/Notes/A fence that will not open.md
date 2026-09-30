@@ -11,9 +11,10 @@ This page ships a **deliberately broken** secret block, at the bottom, on
 purpose, so that the failure mode described in [[Writing secrets]] is something
 you can look at rather than something you have to imagine.
 
-When you first boot this vault, everything on this page is dark. When you have
-created the three accounts and reindexed, everything here except the broken
-fence is dark — and the broken fence stays dark, and this page tells you why.
+When you first boot this vault, every fence on this page is closed, because no
+account exists yet and a fence names an author who is not there. Create the three
+accounts and reindex, and the healthy fences open. The broken one does not, and
+this page tells you why.
 
 > [!tip] How to read what follows
 > The directive is shown here as a **plain line**, not as a fenced block. That is
@@ -34,11 +35,17 @@ Count the keys: `id`, `visibility`, `author`, `created`, `title`, and then
 **`expires`**. The key set is closed. `expires` is not one of the five, so the
 directive cannot be read, and a directive that cannot be read is not treated as
 public. It is treated as a fence that *claims* secrecy and cannot prove it says
-what it claims, and it is hidden from **everybody**:
+what it claims, and its body is withheld from **everybody**:
 
 - not from the table — the point of it;
 - not from the page's owners;
 - not from the game master.
+
+What you *can* see is that a fence is there: the page shows a locked box in its
+place, because a lock has to be visible for "there is a secret here" to mean
+anything. That is the whole of it — the body is not rendered to anyone, and it is
+not in the page's HTML, so there is nothing to read out of the page source
+either.
 
 The author name is still in the file, and the id is still in the file, and the
 body is still in the file. Nothing has been deleted or moved. The fence is
@@ -74,11 +81,14 @@ and have not touched in three weeks. The failure is not a crash and it is not a
 leak. It is *nothing happening*, and nothing happening is the hardest kind of
 bug to notice from the inside.
 
-The app's answer to it is the **Problems** list on the page. Every fence whose
-directive cannot be read is reported there, naming the fence and saying in a
-plain sentence what was wrong with the directive. The list is on the page itself
-rather than in a log file because the person who needs it is the person looking
-at the page.
+The app's answer to it is the **Problems** list at the top of the **editor** for
+this page. Every fence whose directive cannot be read is reported there, naming
+the fence and saying in a plain sentence what was wrong with the directive. It
+is in the editor rather than on the rendered page because a problem is a
+statement about a file, and everyone who can open this page can already see that
+there is a locked box on it — while the editor is the place a person goes
+precisely to change what is wrong with a file, and a report they have to go
+somewhere else to read is a report they will not have seen.
 
 > [!note] One fence, two faults
 > A fence may be unreadable for more than one reason at once. The one at the

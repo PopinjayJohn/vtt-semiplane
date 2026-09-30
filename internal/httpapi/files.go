@@ -36,6 +36,76 @@ func (s *Server) filesPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SidebarTreeMax is how many pages the left sidebar's tree carries.
+//
+// The sidebar is chrome: it is rendered on every page, and a tree that grew with
+// the vault would put a link per page into the document a reader loads in order
+// to read one of them. The 2000-page corpus the load test and the accessibility
+// walk share is the case this exists for — a sidebar carrying all of it would
+// add two thousand list items to every response and bind two thousand DataStar
+// effects to a page whose reader is looking at the other column.
+//
+// It is a count and not a depth, and that is deliberate. A count bounds the node
+// total and therefore bounds the nesting, so a second limit on depth could only
+// be a second number that disagreed with this one. The pages left out are named
+// in the sidebar, with the count and a link to the full tree, rather than
+// dropped: an omission a reader can see is a truncated list, and one they cannot
+// is a lie about the vault.
+//
+// The number is measured rather than guessed, and the worst shape is the one it
+// was measured on: 200 pages in 200 directories renders 174 KiB of sidebar
+// markup, which is a page row at about 190 bytes and a directory row at about
+// 330. A vault that keeps its pages in folders rather than one per directory is
+// well under half that, and either way the figure does not grow with the
+// campaign. The test that renders 500 rows asserts a 200 KiB ceiling on the
+// column, so a change to the row markup has to argue for itself rather than
+// arriving as a surprise on somebody's page load.
+const SidebarTreeMax = 200
+
+// vaultTree is the sidebar's hierarchy, and how many readable pages it leaves
+// out. A nil tree with a zero count means the query failed.
+//
+// The failure is not returned. The sidebar is chrome, and chrome that refuses to
+// render takes the page with it: a reader who cannot open a page because a
+// sidebar listing failed has been given a worse answer than one that has no
+// tree. So the tree is nil, the sidebar's tree section is not rendered at all,
+// and the reason goes to the log where nobody has to read it to get their page.
+func (s *Server) vaultTree(r *http.Request) (*FileNode, int) {
+	who := PrincipalFrom(r.Context())
+	// A principal that may not read public content gets no tree at all, and the
+	// query is not run.
+	//
+	// The sidebar is rendered on every page, and the login page is a page. With
+	// --allow-anonymous-read off, a reader who cannot open a page is shown a
+	// login form, and a list of every page title beside it would be handing over
+	// the campaign's contents to someone the policy has just refused — the one
+	// surface where the shell must say nothing at all. It is also the query's
+	// answer, not an extra check beside it: CanReadPublic is the same predicate
+	// PermReadPage is answered with, which is why this is a method on the
+	// principal rather than a role comparison here.
+	if !who.CanReadPublic() {
+		return nil, 0
+	}
+	pages, err := store.ListAllPages(r.Context(), s.db.Reader(), who)
+	if err != nil {
+		s.log.Warn("the sidebar's page listing failed",
+			"action", "http.nav_tree", "err", logRecord(err).String())
+		return nil, 0
+	}
+	omitted := 0
+	if len(pages) > SidebarTreeMax {
+		// The prefix is the first SidebarTreeMax in path order, and the ordering
+		// is ListAllPages' contract rather than a sort applied here, so the same
+		// vault always leaves out the same tail and a reader who opens the full
+		// tree sees a superset of what the sidebar showed rather than a different
+		// selection of it.
+		omitted = len(pages) - SidebarTreeMax
+		pages = pages[:SidebarTreeMax]
+	}
+	tree := buildFileTree(s.campaign, pages)
+	return &tree, omitted
+}
+
 // treeNode is the mutable form of a FileNode, used only while the tree is being
 // assembled.
 //

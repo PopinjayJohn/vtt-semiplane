@@ -78,13 +78,13 @@ func TestScanFindsEveryKindOfDivergence(t *testing.T) {
 	// then quiet, which is what makes a 60 second loop affordable.
 	for _, rel := range got {
 		p := New(v.Root, rel)
-		if _, err := os.Stat(p.Abs()); err != nil {
+		if _, statErr := os.Stat(p.Abs()); statErr != nil {
 			s.Forget(rel)
 			continue
 		}
-		st, err := os.Stat(p.Abs())
-		if err != nil {
-			t.Fatalf("stat: %v", err)
+		st, statErr := os.Stat(p.Abs())
+		if statErr != nil {
+			t.Fatalf("stat: %v", statErr)
 		}
 		s.Observe(rel, FileState{Size: st.Size(), ModTime: st.ModTime()})
 	}

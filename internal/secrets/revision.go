@@ -123,9 +123,9 @@ func (s *Service) Revision(ctx context.Context, actor authz.Principal, pageID, r
 	}
 	out := RevisionView{ID: rev.ID, At: rev.At, Source: string(rev.Source)}
 	if rev.AuthorID != nil {
-		name, err := s.username(ctx, *rev.AuthorID)
-		if err != nil {
-			return RevisionView{}, err
+		name, usernameErr := s.username(ctx, *rev.AuthorID)
+		if usernameErr != nil {
+			return RevisionView{}, usernameErr
 		}
 		out.Author = &name
 	}
@@ -154,9 +154,9 @@ func (s *Service) Revision(ctx context.Context, actor authz.Principal, pageID, r
 		now[f.ID] = f
 	}
 	for _, f := range fences(md.Parse(page.Path, revisionBytes)) {
-		ok, err := s.mayServeRevisionFence(ctx, actor, owner, f, now)
-		if err != nil {
-			return RevisionView{}, err
+		ok, mayServeRevisionFenceErr := s.mayServeRevisionFence(ctx, actor, owner, f, now)
+		if mayServeRevisionFenceErr != nil {
+			return RevisionView{}, mayServeRevisionFenceErr
 		}
 		if !ok {
 			// One fence is enough, and the answer names none of them: the existence

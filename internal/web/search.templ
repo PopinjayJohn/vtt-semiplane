@@ -84,7 +84,7 @@ templ searchResults(v httpapi.SearchView) {
 			<ul data-roving class="mt-3 space-y-3">
 				for _, hit := range v.Hits {
 					<li class="rounded border border-neutral-200 p-3 dark:border-neutral-800">
-						<a href={ hit.Card.Href() } data-roving-item class="font-medium hover:underline">{ hit.Card.Title }</a>
+						<a href={ hit.Card.Href() } { Wikilink(hit.Card.ID)... } data-roving-item class="font-medium hover:underline">{ hit.Card.Title }</a>
 						if hit.Kind == "secret" {
 							<span class="ml-2 rounded bg-revealed-soft px-1.5 py-0.5 text-xs text-revealed">
 								from a shared secret

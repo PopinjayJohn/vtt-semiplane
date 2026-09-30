@@ -244,25 +244,25 @@ func (s *Service) SetVisibility(ctx context.Context, actor authz.Principal, secr
 	if err != nil {
 		return fmt.Errorf("secrets: begin the %s of %s: %w", reason, secretID, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if action == store.SecretActionRevoke {
 		// The FTS content is gone rather than hidden. A revoked secret whose
 		// body is still in secret_text would keep answering MATCH for the terms
 		// it contained, which is a search-visible existence leak the
 		// authorization predicate never sees.
-		if err := store.DeleteSecretText(ctx, tx, secretID); err != nil {
-			return err
+		if deleteSecretTextErr := store.DeleteSecretText(ctx, tx, secretID); deleteSecretTextErr != nil {
+			return deleteSecretTextErr
 		}
 	}
-	if _, err := store.AppendSecretEvent(ctx, tx, store.SecretEvent{
+	if _, appendSecretEventErr := store.AppendSecretEvent(ctx, tx, store.SecretEvent{
 		SecretID: secretID,
 		ActorID:  actor.UserID,
 		Action:   action,
 		FromVis:  string(sec.Visibility),
 		ToVis:    string(to),
 		At:       s.clock(),
-	}); err != nil {
-		return err
+	}); appendSecretEventErr != nil {
+		return appendSecretEventErr
 	}
 	generation, err := store.BumpAuthzGeneration(ctx, tx)
 	if err != nil {

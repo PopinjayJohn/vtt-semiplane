@@ -360,7 +360,7 @@ func (h *harness) dump(query string) string {
 	if err != nil {
 		h.t.Fatalf("query %q: %v", query, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	cols, err := rows.Columns()
 	if err != nil {
 		h.t.Fatalf("columns %q: %v", query, err)
@@ -424,7 +424,7 @@ func (h *harness) ftsHits(table, term string) []int64 {
 	if err != nil {
 		h.t.Fatalf("fts match on %s: %v", table, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []int64
 	for rows.Next() {
 		var id int64
@@ -437,16 +437,6 @@ func (h *harness) ftsHits(table, term string) []int64 {
 		h.t.Fatalf("fts rows: %v", err)
 	}
 	return out
-}
-
-// secretEventRows returns a secret's audit trail.
-func (h *harness) secretEventRows(secretID string) []store.SecretEvent {
-	h.t.Helper()
-	events, err := store.ListSecretEventsBySecret(context.Background(), h.db.Reader(), secretID)
-	if err != nil {
-		h.t.Fatalf("list events for %s: %v", secretID, err)
-	}
-	return events
 }
 
 var _ = sql.ErrNoRows

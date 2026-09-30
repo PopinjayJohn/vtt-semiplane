@@ -151,7 +151,7 @@ func TestWatchAndReconcileAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Written after the watcher is running, so the events are real.
 	h.vault.WriteFile(t, "NPCs/Gundren.md", "# Gundren\n\nA dwarf, in [[Campaign]].\n")
@@ -211,7 +211,7 @@ func TestReconcileScanFindsMissedEvent(t *testing.T) {
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("start watcher: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	h.indexAll()
 	h.settle()
 
@@ -259,7 +259,7 @@ func TestWatcherSuppressesSelfWritesButNotExternalEdits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	wr := h.writer()
 	onDisk := h.vault.ReadFile(t, "Page.md")

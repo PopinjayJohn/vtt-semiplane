@@ -5,5 +5,4 @@
 // A raw user string never reaches the MATCH operator. Results are filtered in
 // SQL with authz.SecretVisibleSQL, not in Go, so a bug in post-processing cannot
 // widen the result set.
-
 package search

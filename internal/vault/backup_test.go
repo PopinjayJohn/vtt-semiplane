@@ -119,9 +119,9 @@ func TestBackupIsPrivateAndSaysItHoldsSecrets(t *testing.T) {
 		t.Fatalf("read backup: %v", err)
 	}
 	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			t.Fatalf("stat %s: %v", e.Name(), err)
+		info, infoErr := e.Info()
+		if infoErr != nil {
+			t.Fatalf("stat %s: %v", e.Name(), infoErr)
 		}
 		want := os.FileMode(0o600)
 		if info.IsDir() {
@@ -138,9 +138,9 @@ func TestBackupIsPrivateAndSaysItHoldsSecrets(t *testing.T) {
 		t.Fatalf("read backup content: %v", err)
 	}
 	for _, e := range content {
-		info, err := e.Info()
-		if err != nil {
-			t.Fatalf("stat %s: %v", e.Name(), err)
+		info, infoErr := e.Info()
+		if infoErr != nil {
+			t.Fatalf("stat %s: %v", e.Name(), infoErr)
 		}
 		want := os.FileMode(0o600)
 		if info.IsDir() {

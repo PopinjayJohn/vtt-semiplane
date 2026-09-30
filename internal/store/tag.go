@@ -73,8 +73,8 @@ func ListTags(ctx context.Context, q Queryer, p authz.Principal) ([]TagCount, er
 	var out []TagCount
 	err = ForEach(rows, func(r Rows) error {
 		var t TagCount
-		if err := r.Scan(&t.Name, &t.PageCount); err != nil {
-			return fmt.Errorf("store: scan tag: %w", err)
+		if scanErr := r.Scan(&t.Name, &t.PageCount); scanErr != nil {
+			return fmt.Errorf("store: scan tag: %w", scanErr)
 		}
 		out = append(out, t)
 		return nil
@@ -85,7 +85,7 @@ func ListTags(ctx context.Context, q Queryer, p authz.Principal) ([]TagCount, er
 	return out, nil
 }
 
-// TagCount returns the number of pages a principal may see carrying a tag.
+// TagCountFor returns the number of pages a principal may see carrying a tag.
 func TagCountFor(ctx context.Context, q Queryer, p authz.Principal, tag string) (int, error) {
 	uid, isDM := p.Bind()
 	var n int
@@ -116,8 +116,8 @@ func ListTagsForPage(ctx context.Context, q Queryer, pageID int64) ([]PageTag, e
 	var out []PageTag
 	err = ForEach(rows, func(r Rows) error {
 		var pt PageTag
-		if err := r.Scan(&pt.PageID, &pt.Tag, &pt.Source, &pt.SecretID); err != nil {
-			return fmt.Errorf("store: scan page tag: %w", err)
+		if scanErr := r.Scan(&pt.PageID, &pt.Tag, &pt.Source, &pt.SecretID); scanErr != nil {
+			return fmt.Errorf("store: scan page tag: %w", scanErr)
 		}
 		out = append(out, pt)
 		return nil

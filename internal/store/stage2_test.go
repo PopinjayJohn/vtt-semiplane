@@ -50,7 +50,7 @@ func newStage2Fixture(t *testing.T) *stage2Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	f := &stage2Fixture{db: db, ids: map[string]int64{}}
 	f.dm = stage2Account(t, tx, "dm_the_keeper", "The Keeper", "dm")

@@ -166,12 +166,12 @@ func TestAliasResolutionSurvivesARename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("links: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var targets []string
 	for rows.Next() {
 		var raw, alias string
-		if err := rows.Scan(&raw, &alias); err != nil {
-			t.Fatalf("scan: %v", err)
+		if scanErr := rows.Scan(&raw, &alias); scanErr != nil {
+			t.Fatalf("scan: %v", scanErr)
 		}
 		targets = append(targets, raw+"|"+alias)
 	}
@@ -275,11 +275,11 @@ func TestRenameAcrossARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
-	if _, err := fresh.IndexBatch(context.Background(), walk.Files); err != nil {
-		t.Fatalf("index batch: %v", err)
+	if _, indexBatchErr := fresh.IndexBatch(context.Background(), walk.Files); indexBatchErr != nil {
+		t.Fatalf("index batch: %v", indexBatchErr)
 	}
-	if _, err := fresh.RemoveMissing(context.Background(), walk.Files); err != nil {
-		t.Fatalf("remove missing: %v", err)
+	if _, removeMissingErr := fresh.RemoveMissing(context.Background(), walk.Files); removeMissingErr != nil {
+		t.Fatalf("remove missing: %v", removeMissingErr)
 	}
 	pages, err := store.ListPagesByAlias(context.Background(), h.db.Reader(), "Old Name")
 	if err != nil {
@@ -399,7 +399,7 @@ func TestRenameIsDetectedOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aliases: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var alias string
 		var n int

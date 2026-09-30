@@ -71,9 +71,6 @@ type previewRegistry struct {
 	sub *chi.Mux
 	// pluginID is the id the registry claims ownership of.
 	pluginID string
-	// mounted is a handler the sub-router serves, so a test can tell a mounted
-	// route from a 404 produced by core.
-	mounted http.HandlerFunc
 }
 
 func (r previewRegistry) Report() plugin.Report { return plugin.Report{} }

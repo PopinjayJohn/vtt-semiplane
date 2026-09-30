@@ -42,10 +42,33 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.26.0"
+          go-version: "1.26.6"
+      # 1.26.6 rather than 1.26.0, and that is the whole fix.
+      #
+      # The scan reported "Your code is affected by 16 vulnerabilities from the
+      # Go standard library" — every one of them in the toolchain, none of them
+      # in a dependency and none of them in this repository's code:
+      #
+      #   GO-2026-6090  crypto/tls, net/http, encoding/asn1   fixed in go1.26.6
+      #   GO-2026-6089  net/http (ReadHeaderTimeout, h2)     fixed in go1.26.6
+      #   GO-2026-5972  encoding/asn1 (recursion depth)       fixed in go1.26.6
+      #   GO-2026-5856  crypto/tls (Encrypted Client Hello)   fixed in go1.26.5
+      #   GO-2026-5039  net/textproto                          fixed in go1.26.4
+      #   … and eleven more, every one fixed in go1.26.1 through go1.26.4
+      #
+      # A toolchain below go1.26.6 cannot produce a clean scan of this module no
+      # matter what the source says, because the vulnerable code is the Go
+      # distribution's own standard library. go.mod's `go 1.26.0` directive is a
+      # language version, not a toolchain pin, and it is correct where it is.
+      #
+      # The example traces the scan prints alongside them read as nonsense
+      # ("auth.NewCSRFToken calls rand.Read, which eventually calls
+      # tls.Conn.Read") and are worth ignoring: they are govulncheck's
+      # symbol-level approximation, not a call graph. What is not noise is the
+      # count, and the count is a statement about the toolchain.
       - uses: golang/govulncheck-action@dd3ead030e4f2cf713062f7a3395191802364e13 # v1.0.0
         with:
-          go-version-input: "1.26.0"
+          go-version-input: "1.26.6"
           go-package: ./...
 
   gosec:
@@ -60,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.26.0"
+          go-version: "1.26.6" # the toolchain govulncheck above is clean at, and only at or above, this
       # Pinned. This used to be `@latest`, which is the one place in this
       # repository where the SHA-pinning discipline did not hold: a scanner
       # that decides what counts as a finding changed underneath a green build
@@ -101,11 +124,58 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: google/osv-scanner-action@e69cc6c86b31f1e7e23935bbe7031b50e51082de # v2.0.2
+      # The sub-directory, and that is the whole fix.
+      #
+      # This job failed in "Set up job" — before the action ran, before a scanner
+      # started, before anything was scanned — with:
+      #
+      #   Top level 'runs:' section is required for
+      #   google/osv-scanner-action/e69cc6c…/action.yml
+      #
+      # The pin is a real commit ("Merge pull request #73 from
+      # google/update-to-v2.0.2") and the file is there. It is a metadata file:
+      # name, description, branding, and no `runs:`. Upstream restructured the
+      # repository at v2.0.2 into `osv-scanner-action/` and
+      # `osv-reporter-action/` sub-directories, each with its own runnable
+      # action.yml, and the root file is not one of them. A `uses:` that points
+      # at a repository root is a reference to a *directory*, so the fix is the
+      # path, not the version.
+      #
+      # Verified at the pinned commit: osv-scanner-action/action.yml carries
+      # `runs: using: docker`, `image: docker://ghcr.io/google/osv-scanner-action:v2.6.0`
+      # and the same `scan-args` input this job already passes.
+      - uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
+          # These args are the v2 CLI, and they had to change with the version.
+          # The old ones were `-r --skip-git .`, and v2.6.0 answers them with
+          # `Incorrect Usage: flag provided but not defined: -skip-git` and exit
+          # 127: v2 is subcommand-shaped (`osv-scanner scan source [dirs]`) and
+          # --skip-git is gone.
+          #
+          # --skip-git was there to keep the scan off git history, and that
+          # intent is now the default rather than a flag: v2's directory plugin
+          # honours .gitignore, so .kilo, dist, .tools and coverage.out are
+          # skipped without being named. `--no-ignore` would turn that off, and
+          # `--include-git-root` would re-add the repository root's own history.
+          # Neither is passed, deliberately.
+          #
+          # The whole chain was checked rather than assumed: the image's
+          # entrypoint is `bash /root/exit_code_redirect.sh`, that script runs
+          # `osv-scanner $args "${split_args[@]}"` and exits with its code, so
+          # these three words reach the binary verbatim. Run by hand against this
+          # repository: "Scanned …/go.mod file and found 37 packages / Total 0
+          # packages affected by 0 known vulnerabilities … " and exit 0.
+          #
+          # `--allow-no-lockfiles` is deliberately absent. The image's wrapper
+          # rewrites osv-scanner's exit 128 ("nothing found to scan") to 0 with
+          # a deprecation warning unless that flag is present, so passing it
+          # would be opting in to a green job with nothing scanned. For a Go
+          # module it is unreachable — go.mod is always there — and the 128
+          # would still be swallowed upstream, which is the one hole in this
+          # gate that this repository cannot close from the workflow file.
           scan-args: |-
-            -r
-            --skip-git
+            scan source
+            --recursive
             .
 
   # CRITICAL,HIGH, and that is a decision rather than a default. The other two
@@ -147,6 +217,25 @@ jobs:
           scan-ref: .
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
+          # v0.74.0, stated rather than inherited, and kept in step with
+          # tools/versions.env. The action's own default is `version: v0.65.0`,
+          # a value baked in when the action was released, and that release no
+          # longer has any assets: the install step died with
+          # `found version: 0.65.0 for v0.65.0/Linux/64bit` and then exit 1,
+          # because trivy's own install script fetches
+          # get.trivy.dev/trivy?version=0.65.0, which redirects to
+          # github.com/aquasecurity/trivy/releases/download/v0.65.0/trivy_0.65.0_Linux-64bit.tar.gz
+          # and that URL is a 404. The script runs under `set -e` and curl's
+          # non-200 is its only error, so the whole scanner died before
+          # scanning anything and the job reported a scanner failure.
+          #
+          # A default that is a version string frozen in someone else's release
+          # is the same unpinned download the `gosec` comment below is about,
+          # wearing a different hat: it rots silently. Pin it here, and the
+          # failure mode becomes "that version has gone" rather than a mystery
+          # exit 1. Verified: the v0.74.0 asset exists and get.trivy.dev serves
+          # it (HTTP 200, 50 MB).
+          version: v0.74.0
           # Advisories with no upstream patch can only be answered by dropping
           # a dependency this project does not control, and a gate that can
           # only be answered that way is a gate that gets switched off.
@@ -190,7 +279,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.26.0"
+          go-version: "1.26.6" # one toolchain everywhere; see the govulncheck job
           cache: true
       - uses: github/codeql-action/init@60168efe1c415ce0f5521ea06d5c2062adbeed1b # v3.28.17
         with:
@@ -237,7 +326,28 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@ff5dd8929f96a8a4dc67d13f32b8c75057829621 # v2.4.0
+      # v2.4.4 rather than v2.4.0, and the reason is the registry, not the
+      # action. The job died in "Pull down action image" with:
+      #
+      #   denied: This API method requires billing to be enabled. Please enable
+      #   billing on project #367732848534
+      #
+      # v2.4.0's action.yaml says `image: docker://gcr.io/ossf/scorecard-action:v2.4.0`,
+      # and that image lives in a Google Container Registry project that now
+      # requires billing to pull from. Nothing about this repository is wrong
+      # and no token or permission fixes it: the image cannot be fetched.
+      #
+      # v2.4.4's action.yaml says `docker://ghcr.io/ossf/scorecard-action:v2.4.4`,
+      # and ghcr.io has no such gate. Verified by asking the registry directly
+      # with a pull token: ghcr.io manifest v2.4.4 -> 200, v2.4.0 -> 404 (that
+      # tag was never published to ghcr.io, which is why the migration is the
+      # fix rather than a registry mirror).
+      #
+      # A Docker action's image tag is a mutable string that this repository does
+      # not control and cannot pin, which is the same class of problem as an
+      # unpinned `uses:` — so the version here is the pin, and it moves when the
+      # image does.
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif

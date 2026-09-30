@@ -149,7 +149,7 @@ func schemaSnapshot(t *testing.T, q Queryer) []schemaEntry {
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []schemaEntry
 	for rows.Next() {
 		var e schemaEntry

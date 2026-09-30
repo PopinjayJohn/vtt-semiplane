@@ -3,6 +3,7 @@ package authz
 import (
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 )
 
 // SecretVisibleSQL is the ONLY secret-visibility predicate in the codebase.
@@ -72,7 +73,7 @@ func IsOwnerRow(q Queryer, pageID, userID int64) (bool, error) {
 	err := q.QueryRow(`SELECT 1 FROM page_owners WHERE page_id = ? AND user_id = ?`,
 		pageID, userID).Scan(&one)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, err

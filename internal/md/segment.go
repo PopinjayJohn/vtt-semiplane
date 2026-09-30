@@ -1,6 +1,7 @@
 package md
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -40,7 +41,12 @@ func Parse(pagePath string, src []byte) *Doc {
 		d.BOM = src[:n]
 	}
 	if err != nil {
-		if p, ok := err.(Problem); ok {
+		// errors.As, not a type assertion: SplitFrontmatter returns a bare
+		// Problem today, and a Problem that arrived wrapped would otherwise be
+		// reported as "frontmatter could not be located" — a different code for
+		// a failure that is the same failure.
+		var p Problem
+		if errors.As(err, &p) {
 			d.Problems = append(d.Problems, p)
 		} else {
 			d.Problems = append(d.Problems, Problem{

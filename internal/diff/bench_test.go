@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -40,9 +41,15 @@ func BenchmarkLines(b *testing.B) {
 			a, bb := []byte(in.a), []byte(in.b)
 			b.ReportAllocs()
 			b.SetBytes(int64(len(in.a)))
+			// Held in a local rather than a package sink: a benchmark is not
+			// parallel today, and a shared global is a data race the moment one
+			// is, or the moment a test shares the symbol. KeepAlive is as
+			// un-elidable as writing to package state and is not shared.
+			var kept []Edit
 			for i := 0; i < b.N; i++ {
-				sink = Lines(a, bb)
+				kept = Lines(a, bb)
 			}
+			runtime.KeepAlive(kept)
 		})
 	}
 }
@@ -82,16 +89,18 @@ func TestWallClockAt400KiB(t *testing.T) {
 			t.Parallel()
 			a, b := []byte(in.a), []byte(in.b)
 			edits := Lines(a, b) // warm-up: the first call pays for a 400 KiB allocation
+			// Per subtest, so parallel subtests do not share it. See the note on
+			// the same pattern in BenchmarkLines.
+			var kept []Edit
 			best := time.Hour
 			for i := 0; i < 5; i++ {
 				t0 := time.Now()
-				sink = Lines(a, b)
+				kept = Lines(a, b)
 				if el := time.Since(t0); el < best {
 					best = el
 				}
 			}
-			// Counted before the loop, not after: sink is package state and
-			// these subtests run in parallel.
+			runtime.KeepAlive(kept)
 			t.Logf("%-30s %7d bytes, %5d lines, %5d edits: %v",
 				in.name, len(in.a), len(Split(a)), len(edits), best.Round(time.Microsecond))
 			if best > budget {

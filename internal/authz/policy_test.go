@@ -98,7 +98,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			},
 			// The page owner is not enough. This row is the one an OR-chain
 			// gets wrong.
-			allow: func(r role) bool { return isDMFor(r) },
+			allow: isDMFor,
 		},
 		{
 			name:  "write a secret the principal authored",
@@ -112,7 +112,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			res: func(o bool) Resource {
 				return Resource{HasSecret: true, Visibility: VisibilityPrivate, IsPageOwner: o, AuthorID: 99}
 			},
-			allow: func(r role) bool { return isDMFor(r) },
+			allow: isDMFor,
 		},
 		{
 			name: "write a dm secret as its author",
@@ -120,7 +120,7 @@ func TestAuthorizationMatrix(t *testing.T) {
 			res: func(o bool) Resource {
 				return Resource{HasSecret: true, Visibility: VisibilityDM, IsPageOwner: o, AuthorID: 3}
 			},
-			allow: func(r role) bool { return isDMFor(r) },
+			allow: isDMFor,
 		},
 		{
 			name:  "reveal to table, revoke, trigger a reindex or backup",
@@ -265,6 +265,9 @@ func TestUnknownPermissionFailsClosed(t *testing.T) {
 	t.Parallel()
 	pol := NewPolicy(true)
 	// A typo in the route table must not accidentally grant a route.
+	//nolint:misspell // the misspelling is the input under test: the realistic
+	// mistake is a hand-written string that is nearly a real permission, not a
+	// permission that was deleted and left no gap.
 	if err := pol.Check(admin(1), Permission("adminstrator"), Resource{}); err == nil {
 		t.Fatal("an unknown permission was allowed")
 	}

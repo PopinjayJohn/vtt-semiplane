@@ -279,9 +279,12 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 		// A boot that failed halfway still holds whatever it managed to take.
 		// Releasing it here is what keeps the error path and the exit path on
 		// the same route to the lock.
-		ctx, cancel := boundedContext()
+		// Named apart from the boot's ctx on purpose: the boot's context is
+		// cancelled by whatever asked for the boot, and a shutdown that inherited
+		// it would be cancelled by the same thing and release nothing.
+		shutdownCtx, cancel := boundedContext()
 		defer cancel()
-		_ = a.Shutdown(ctx)
+		_ = a.Shutdown(shutdownCtx)
 	}()
 
 	// 1. The vault path, and the directories that hold everything else.
@@ -294,8 +297,8 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 	for _, w := range choice.Warnings {
 		a.addWarning(w)
 	}
-	if err := ensureVault(a.root); err != nil {
-		return a, fmt.Errorf("boot: prepare the vault: %w", err)
+	if ensureVaultErr := ensureVault(a.root); ensureVaultErr != nil {
+		return a, fmt.Errorf("boot: prepare the vault: %w", ensureVaultErr)
 	}
 	a.setVaultFacts()
 	a.step(stepVault)
@@ -403,7 +406,7 @@ func Boot(ctx context.Context, opts Options) (a *App, err error) {
 	// name the address a client can actually reach — with --port 0 the port is
 	// the kernel's choice — and printing before Serve is what keeps the report
 	// ahead of the first request.
-	if err = a.bind(); err != nil {
+	if err = a.bind(ctx); err != nil {
 		return a, err
 	}
 	a.step(stepBind)
@@ -479,7 +482,7 @@ func (a *App) openDatabase(ctx context.Context) error {
 		return nil
 	}
 	if qerr := a.quarantineDatabase(ctx, err); qerr != nil {
-		return fmt.Errorf("boot: open the index database: %w (and the unreadable file could not be set aside: %v)", err, qerr)
+		return fmt.Errorf("boot: open the index database: %w (and the unreadable file could not be set aside: %w)", err, qerr)
 	}
 	db, err = store.Open(a.root)
 	if err != nil {
@@ -642,7 +645,10 @@ func (a *App) backupDue(ctx context.Context) (bool, string, error) {
 	lastAt, lastErr := store.ParseTime(last)
 	changedAt, changedErr := store.ParseTime(changed)
 	if lastErr != nil || changedErr != nil || changedAt.After(lastAt) {
-		return true, "the vault changed since the last backup", nil
+		// A parse error is a fact about the stored timestamp, not about this
+		// check, and neither is actionable here: both are the "cannot tell, so
+		// take the backup" case the comment above describes.
+		return true, "the vault changed since the last backup", nil //nolint:nilerr // unparseable means "assume changed"
 	}
 	return false, "the vault has not changed since the last backup", nil
 }
@@ -709,7 +715,7 @@ func (a *App) rebuildFTS(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := store.RebuildPageFTS(ctx, tx); err != nil {
 		return err
 	}
@@ -858,8 +864,8 @@ func (a *App) enforceSecretIndexInvariant(ctx context.Context) error {
 	// RebuildSecretFTS drops every non-table body from secret_text and
 	// repopulates it from the secrets table, so a rebuild is a real repair and
 	// not a gesture.
-	if err := a.rebuildFTS(ctx, true); err != nil {
-		return err
+	if rebuildFTSErr := a.rebuildFTS(ctx, true); rebuildFTSErr != nil {
+		return rebuildFTSErr
 	}
 	still, err := store.CheckSecretIndexInvariant(ctx, a.db.Reader())
 	if err != nil {
@@ -944,14 +950,19 @@ func (a *App) reconcileLoop(ctx context.Context, done chan<- struct{}) {
 
 // bind opens the listening socket. Serving is a separate step so that the
 // banner can be written in between.
-func (a *App) bind() error {
+//
+// The socket is opened through a ListenConfig rather than net.Listen so the
+// call carries the boot context: a ListenConfig with nothing configured is
+// net.Listen, and a context that is cancelled mid-boot stops the dial instead of
+// leaving a socket this process will never serve.
+func (a *App) bind(ctx context.Context) error {
 	if a.cfg.Host == "" {
 		// An empty host binds every interface, and this process holds plaintext
 		// DM secrets. config.Load defaults it to loopback; a hand-built Config
 		// that omits it gets a refusal rather than a LAN listener.
 		return errors.New("boot: a handler was supplied but no bind address is configured: set Host and Port")
 	}
-	ln, err := net.Listen("tcp", a.cfg.Addr())
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", a.cfg.Addr())
 	if err != nil {
 		return fmt.Errorf("boot: listen on %s: %w", a.cfg.Addr(), err)
 	}

@@ -21,10 +21,6 @@ linters:
     - unconvert
     - usestdlibvars
     - wastedassign
-  disable:
-    # Generated templ output is not ours to lint.
-    - staticcheck # re-enabled below with the generated paths excluded
-
   settings:
     godot:
       # Comments end in a period, except top-level declaration comments that
@@ -42,17 +38,27 @@ linters:
     govet:
       enable:
         - shadow
+    # staticcheck's QF* checks are quick-fix *suggestions* about how to write the
+    # same thing, and several of them want this codebase's conditions made less
+    # plain: De Morgan's law across a security predicate, and dropping the
+    # embedded field name off a selector that reads better with it. The S1* and
+    # ST1* checks — the ones that name a defect rather than a preference — stay
+    # on, and they are the ones with teeth.
+    staticcheck:
+      checks:
+        - all
+        - -QF*
   exclusions:
-    generated: lax
-    rules:
-      - path: _templ\.go$
-        linters:
-          - revive
-          - gocritic
-          - godot
-      - path: internal/store/migrations/
-        linters:
-          - errcheck
+      generated: lax
+      rules:
+        - path: _templ\.go$
+          linters:
+            - revive
+            - gocritic
+            - godot
+        - path: internal/store/migrations/
+          linters:
+            - errcheck
 
 issues:
   max-issues-per-linter: 0

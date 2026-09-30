@@ -277,11 +277,11 @@ func TestNewerSchemaRefusesToStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if _, err := older.Writer().ExecContext(context.Background(),
-		"PRAGMA user_version = "+strconv.Itoa(head+1)); err != nil {
-		t.Fatalf("set user_version: %v", err)
+	if _, writerErr := older.Writer().ExecContext(context.Background(),
+		"PRAGMA user_version = "+strconv.Itoa(head+1)); writerErr != nil {
+		t.Fatalf("set user_version: %v", writerErr)
 	}
-	older.Close()
+	_ = older.Close()
 
 	_, err = Boot(context.Background(), f.opts)
 	switch {
@@ -299,7 +299,7 @@ func TestNewerSchemaRefusesToStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after the refusal: %v", err)
 	}
-	defer after.Close()
+	defer func() { _ = after.Close() }()
 	version, err := store.UserVersion(context.Background(), after.Reader())
 	if err != nil {
 		t.Fatalf("read user_version: %v", err)
@@ -530,15 +530,19 @@ func TestTheMountedHandlerIsTheOneServed(t *testing.T) {
 	const body = "the handler that was mounted"
 	opts := f.opts
 	opts.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	})
 	a := f.boot(t, opts)
 
-	resp, err := http.Get("http://" + a.Status().Addr + "/")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+a.Status().Addr+"/", nil)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read: %v", err)

@@ -562,10 +562,10 @@ func TestAuthorizationMatrix(t *testing.T) {
 					// question than the one they ask.
 					before := raw
 					row := fx.sessionFor(before)
-					rt := resolveMatrixPage(t, fx, rt)
-					got, want := performMatrixRow(t, row, rt, role)
+					asked := resolveMatrixPage(t, fx, rt)
+					got, want := performMatrixRow(t, row, asked, role)
 					if got != want {
-						t.Errorf("%s %s as %s: status %d, want %d", rt.method, rt.path, role.name, got, want)
+						t.Errorf("%s %s as %s: status %d, want %d", asked.method, asked.path, role.name, got, want)
 					}
 					// A row that signed in again minted a new session and retired
 					// the old one, so the next row has to arrive with the new token.
@@ -648,7 +648,7 @@ func resolveMatrixPage(t *testing.T, fx *fixture, rt matrixRoute) matrixRoute {
 func absentPageID(t *testing.T, fx *fixture) int64 {
 	t.Helper()
 	var max int64
-	if err := fx.DB.Reader().QueryRow(`SELECT COALESCE(MAX(id), 0) FROM pages`).Scan(&max); err != nil {
+	if err := fx.DB.Reader().QueryRowContext(context.Background(), `SELECT COALESCE(MAX(id), 0) FROM pages`).Scan(&max); err != nil {
 		t.Fatalf("read the highest page id: %v", err)
 	}
 	return max + 1

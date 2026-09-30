@@ -203,8 +203,8 @@ func TestRevisionListDoesNotCarryContent(t *testing.T) {
 
 	// The count comes from the same FROM and WHERE as the list, so a badge cannot
 	// disagree with the list beside it.
-	if n, err := CountRevisionsByPage(ctx, db.Writer(), page); err != nil || n != len(meta) {
-		t.Errorf("CountRevisionsByPage = %d (err %v) but the list has %d rows", n, err, len(meta))
+	if n, countRevisionsByPageErr := CountRevisionsByPage(ctx, db.Writer(), page); countRevisionsByPageErr != nil || n != len(meta) {
+		t.Errorf("CountRevisionsByPage = %d (countRevisionsByPageErr %v) but the list has %d rows", n, countRevisionsByPageErr, len(meta))
 	}
 	// The bytes are still reachable, and only through the single-revision read.
 	// This is not vacuity: a test that only proved the list carries no body would
@@ -457,18 +457,18 @@ func TestLinkByteOffsetsDefaultToUnset(t *testing.T) {
 	// A recorded span round-trips, and the Go zero value does not become a
 	// plausible offset on the way in: a caller who forgets to set it writes
 	// "unrecorded", not "the top of the file".
-	if _, err := InsertLink(ctx, db.Writer(), Link{
+	if _, insertLinkErr := InsertLink(ctx, db.Writer(), Link{
 		SourcePageID: page, TargetRaw: "Gundren", Kind: LinkWikilink, Line: 4,
 		ByteStart: 0, ByteLen: 0,
-	}); err != nil {
-		t.Fatal(err)
+	}); insertLinkErr != nil {
+		t.Fatal(insertLinkErr)
 	}
 	recorded := 41
-	if _, err := InsertLink(ctx, db.Writer(), Link{
+	if _, insertLinkErr := InsertLink(ctx, db.Writer(), Link{
 		SourcePageID: page, TargetRaw: "Sildar", Kind: LinkWikilink, Line: 5,
 		ByteStart: recorded, ByteLen: 6,
-	}); err != nil {
-		t.Fatal(err)
+	}); insertLinkErr != nil {
+		t.Fatal(insertLinkErr)
 	}
 	byLine, err := ListLinksByPage(ctx, db.Writer(), page)
 	if err != nil {
@@ -488,11 +488,11 @@ func TestLinkByteOffsetsDefaultToUnset(t *testing.T) {
 	// The same span travels with the query the bulk updater uses to find the
 	// affected pages, so it does not have to re-derive it from the file.
 	target := page
-	if _, err := InsertLink(ctx, db.Writer(), Link{
+	if _, insertLinkErr := InsertLink(ctx, db.Writer(), Link{
 		SourcePageID: page, TargetPageID: &target, TargetRaw: "Gundren",
 		Kind: LinkWikilink, Line: 6, ByteStart: 120, ByteLen: 7,
-	}); err != nil {
-		t.Fatal(err)
+	}); insertLinkErr != nil {
+		t.Fatal(insertLinkErr)
 	}
 	incoming, err := ListLinksToPage(ctx, db.Writer(), page)
 	if err != nil {

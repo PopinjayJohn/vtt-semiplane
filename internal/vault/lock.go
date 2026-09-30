@@ -97,7 +97,7 @@ func heldError(f *os.File, path string, cause error) error {
 	if pid > 0 {
 		return fmt.Errorf("%w (pid %d in %s)", ErrAlreadyLocked, pid, path)
 	}
-	return fmt.Errorf("%w (lock file %s could not be claimed: %v)", ErrAlreadyLocked, path, cause)
+	return fmt.Errorf("%w (lock file %s could not be claimed: %w)", ErrAlreadyLocked, path, cause)
 }
 
 // readPid reads the holder's pid from the lock file without disturbing the

@@ -15,11 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// assetPrefix is where every asset is served from. There is exactly one prefix
-// and no other route returns a file from the binary, so a request for something
-// that looks like an asset has exactly one place it can come from.
-const assetPrefix = "/_/assets/"
-
 // assetContentTypes is the whole content-type table, as a constant map.
 //
 // It is a map rather than a switch on the extension because the set of files is

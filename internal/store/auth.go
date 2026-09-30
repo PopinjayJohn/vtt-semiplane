@@ -69,7 +69,6 @@ func scanUser(s RowScanner) (User, error) {
 	return u, nil
 }
 
-// InsertUser creates an account and returns its id.
 // ErrUsernameTaken is returned when a username collides with the case-insensitive
 // unique index. It is a sentinel rather than something a caller has to recognise
 // by matching the driver's message: the driver exports no typed error, and a
@@ -78,6 +77,7 @@ func scanUser(s RowScanner) (User, error) {
 // translated exactly once, here, in the package that owns the schema.
 var ErrUsernameTaken = errors.New("store: username is already taken")
 
+// InsertUser creates an account and returns its id.
 func InsertUser(ctx context.Context, e Execer, u User) (int64, error) {
 	var id int64
 	err := e.QueryRowContext(ctx,
@@ -191,8 +191,8 @@ func GetUserIDsByUsernames(ctx context.Context, q Queryer, usernames []string) (
 		err = ForEach(rows, func(r Rows) error {
 			var id int64
 			var username string
-			if err := r.Scan(&id, &username); err != nil {
-				return fmt.Errorf("store: scan user: %w", err)
+			if scanErr := r.Scan(&id, &username); scanErr != nil {
+				return fmt.Errorf("store: scan user: %w", scanErr)
 			}
 			out[strings.ToLower(username)] = id
 			return nil
@@ -221,9 +221,9 @@ func ListUsers(ctx context.Context, q Queryer) ([]User, error) {
 	}
 	var out []User
 	err = ForEach(rows, func(r Rows) error {
-		u, err := scanUser(r)
-		if err != nil {
-			return fmt.Errorf("store: scan user: %w", err)
+		u, scanUserErr := scanUser(r)
+		if scanUserErr != nil {
+			return fmt.Errorf("store: scan user: %w", scanUserErr)
 		}
 		out = append(out, u)
 		return nil
@@ -473,9 +473,9 @@ func ListInvites(ctx context.Context, q Queryer) ([]Invite, error) {
 	}
 	var out []Invite
 	err = ForEach(rows, func(r Rows) error {
-		i, err := scanInvite(r)
-		if err != nil {
-			return fmt.Errorf("store: scan invite: %w", err)
+		i, scanInviteErr := scanInvite(r)
+		if scanInviteErr != nil {
+			return fmt.Errorf("store: scan invite: %w", scanInviteErr)
 		}
 		out = append(out, i)
 		return nil
@@ -497,9 +497,9 @@ func ListPendingInvites(ctx context.Context, q Queryer, now time.Time) ([]Invite
 	}
 	var out []Invite
 	err = ForEach(rows, func(r Rows) error {
-		i, err := scanInvite(r)
-		if err != nil {
-			return fmt.Errorf("store: scan invite: %w", err)
+		i, scanInviteErr := scanInvite(r)
+		if scanInviteErr != nil {
+			return fmt.Errorf("store: scan invite: %w", scanInviteErr)
 		}
 		out = append(out, i)
 		return nil

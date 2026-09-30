@@ -302,6 +302,15 @@ func TestSecretFixturesNeverLeakThroughSearch(t *testing.T) {
 // cases — a request id, the path that was asked for, a page title — would make
 // this fail, and all three are absent because the error model has no field to
 // put them in.
+// lastSegment is the final element of a URL path, or "" when there is not one.
+func lastSegment(p string) string {
+	trimmed := strings.TrimSuffix(p, "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		return trimmed[i+1:]
+	}
+	return trimmed
+}
+
 func TestA404IsTheSameAnswerForEveryKindOfNothing(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
@@ -335,8 +344,21 @@ func TestA404IsTheSameAnswerForEveryKindOfNothing(t *testing.T) {
 	}
 	// The body must not carry the thing that was asked for, or the equality above
 	// would be an accident of these particular paths.
+	//
+	// The needle is the requested path's last segment and not the path itself,
+	// because the whole path is not a needle for a path that is a prefix. `/p/`
+	// is the directory probe, and `p/` is a substring of every href the shell's
+	// own navigation contains — so the original form of this check reported a
+	// leak on any 404 page that had a page link anywhere in it, and it only ever
+	// passed because the error page used to have none. A segment shorter than
+	// four bytes is not a needle either: it is a prefix of a common word, and an
+	// assertion that fires on a coincidence teaches its reader to argue it away.
 	for _, k := range kinds {
-		if strings.Contains(firstBody, strings.TrimPrefix(k.path, "/")) {
+		needle := lastSegment(k.path)
+		if len(needle) < 4 {
+			continue
+		}
+		if strings.Contains(firstBody, needle) {
 			t.Errorf("the 404 body echoes the path %q", k.path)
 		}
 	}
@@ -515,7 +537,9 @@ func goFilesUnder(t *testing.T, dir string) []string {
 	var out []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			// An entry that cannot be listed is not a .go file to lint, and the
+			// walk's own error is checked and fatal below.
+			return nil //nolint:nilerr // an unlistable entry is not a source file
 		}
 		if d.IsDir() {
 			if skipDir(d.Name()) {

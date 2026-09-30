@@ -530,15 +530,6 @@ func trimmedStrings(in []string) []string {
 	return out
 }
 
-func containsString(list []string, v string) bool {
-	for _, s := range list {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
 func isMarkdownExt(name string) bool {
 	return strings.EqualFold(path.Ext(name), ".md")
 }

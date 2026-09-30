@@ -115,6 +115,29 @@ func pageLinksIn(body string) []string {
 	return out
 }
 
+// contextColumn is the rendered aside, which is where every page-derived panel
+// lives.
+//
+// It is a substring of the document rather than a parse, and the end is found by
+// the next section header instead of by the matching </aside>: the panels inside
+// it are sections of their own, so a naive close tag would stop at the first one
+// and quietly turn an assertion about the whole column into one about its first
+// panel. Anything the assertion must see is between the aside and the next
+// top-level section.
+func contextColumn(body string) (string, bool) {
+	const open = `<aside id="context"`
+	i := strings.Index(body, open)
+	if i < 0 {
+		return "", false
+	}
+	rest := body[i:]
+	j := strings.Index(rest[1:], "</aside>")
+	if j < 0 {
+		return rest, true
+	}
+	return rest[:j], true
+}
+
 // The JSON shapes, re-declared here on purpose.
 //
 // A test that unmarshalled into the handler's own type would be asserting that
@@ -884,14 +907,26 @@ func TestLastActivityExcludesTheOpenPage(t *testing.T) {
 		t.Errorf("the Tavern's panel does not list the Index, so nothing was excluded:\n%+v", other.Status.LastActivity)
 	}
 
-	// And the rendered page does not link to itself, which is the same fact
-	// through the view layer. The Index links to the Tavern and the Ruin and
-	// nothing links to the Index, so a self-link anywhere in the document can
-	// only be the panel listing the page the reader is on.
+	// And the context column does not link to itself, which is the same fact
+	// through the view layer.
+	//
+	// The scan is over the context column and not over the document, and the
+	// distinction is the whole claim. The column is the thing under test: the
+	// question is whether the last-activity list offers the page the reader is
+	// already on. The left sidebar is a different thing entirely — it is a
+	// navigation over the vault, so it links to every page this principal may
+	// read, the open one included, and a self-link there is the feature working
+	// rather than a panel that forgot to exclude anything. The original comment
+	// said "nothing links to the Index", which was true of a sidebar that held
+	// no pages and stopped being true when it began to.
 	body := s.getOK("/p/Index.md")
-	for _, path := range pageLinksIn(body) {
+	column, ok := contextColumn(body)
+	if !ok {
+		t.Fatalf("the page view has no context column to check:\n%s", snippet(body))
+	}
+	for _, path := range pageLinksIn(column) {
 		if path == "Index.md" {
-			t.Errorf("the page view links to itself from its own context column:\n%s", snippet(body))
+			t.Errorf("the page view links to itself from its own context column:\n%s", snippet(column))
 		}
 	}
 }

@@ -141,16 +141,16 @@ func Migrate(ctx context.Context, db *sql.DB, backup func(context.Context) error
 	if current > head {
 		return &SchemaTooNewError{Found: current, Supports: head}
 	}
-	if err := backup(ctx); err != nil {
-		return fmt.Errorf("store: backup before migration: %w", err)
+	if backupErr := backup(ctx); backupErr != nil {
+		return fmt.Errorf("store: backup before migration: %w", backupErr)
 	}
 
 	for _, m := range Migrations() {
 		if m.Version <= current {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
-			return err
+		if applyMigrationErr := applyMigration(ctx, db, m); applyMigrationErr != nil {
+			return applyMigrationErr
 		}
 	}
 	// Re-read rather than trusting the writes: a version that did not land is a
@@ -177,7 +177,7 @@ func stampMeta(ctx context.Context, db *sql.DB, version int) error {
 	if err != nil {
 		return fmt.Errorf("store: begin meta stamp: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := MetaSet(ctx, tx, KeySchemaVersion, strconv.Itoa(version)); err != nil {
 		return err
@@ -208,7 +208,7 @@ func applyMigration(ctx context.Context, db *sql.DB, m Migration) error {
 	if err != nil {
 		return fmt.Errorf("store: begin migration %04d_%s: %w", m.Version, m.Name, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
 		return fmt.Errorf("store: apply migration %04d_%s: %w", m.Version, m.Name, err)

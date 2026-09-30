@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/obs"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/plugin"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/secrets"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/store"
 	"github.com/PopinjayJohn/vtt-semiplane/internal/vault"
@@ -74,9 +76,10 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 // Every query it makes is filtered in SQL by the canonical predicate, so a row
 // that must not be seen never leaves the database. The secret list is the one
 // place the decision is made in Go, and it is made by authz.CanReadSecret — the
-// same rule the predicate implements — with the body then read through
-// secrets.Service.Load, which applies the predicate again. Two independent
-// gates, neither of them a re-statement of the other's logic.
+// same rule the predicate implements — over the fences in the file, with the
+// body of an indexed one then read through secrets.Service.Load, which applies
+// the predicate again. Two independent gates, neither of them a re-statement of
+// the other's logic. See pageSecrets for why the set comes from the file.
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	who := PrincipalFrom(ctx)
@@ -124,7 +127,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "read the page's context", err)
 		return
 	}
-	pageSecrets, err := s.pageSecrets(ctx, who, row)
+	pageSecrets, unattributed, err := s.pageSecrets(ctx, who, row, doc)
 	if err != nil {
 		s.fail(w, r, "list the page's secrets", err)
 		return
@@ -174,6 +177,11 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	for _, p := range doc.Problems {
 		view.Problems = append(view.Problems, p.Code+": "+p.Message)
 	}
+	// Appended rather than interleaved: the parser found its problems walking the
+	// bytes and these are found walking the fences, and the two orders are not
+	// the same sequence. One list beats two, and a reader working down it is
+	// told what is wrong either way.
+	view.Problems = append(view.Problems, unattributed...)
 
 	if err := s.Render(w, r, view); err != nil {
 		s.fail(w, r, "render the page view", err)
@@ -246,6 +254,27 @@ func clipDoc(d *md.Doc, body []byte) *md.Doc {
 // pageSecrets returns the page's fences, in file order, with a body only for the
 // ones this viewer may read.
 //
+// **The set comes from the file, not from the index, and that is the whole
+// property of this function.** renderBody has already removed every secret span
+// from the document it rendered, so every fence in the file needs an answer here
+// or the page has a hole where a secret used to be. Taking the set from
+// store.ListSecretRowsByPage instead means a fence the indexer declined to write
+// — one whose `author=` is not a known account, or one with no conforming `id=` —
+// produced no row and therefore no box, no lock, no body and no complaint: the
+// body was stripped from the page and nothing took its place. That is the same
+// defect pageraw.go's own comment names ("the redaction is decided against the
+// FILE, not against the index"), and it is why the secret survived only on the
+// two surfaces that serve bytes: /raw and the editor. So this walks
+// secrets.Parse over the same *md.Doc the renderer was given, which is
+// hiddenFences' input too, and asks the same question with the same rule.
+//
+// The index still earns its place, for two jobs and no others. It corroborates —
+// a fence it holds has its body re-read through secrets.Service.Load, so the
+// canonical SQL predicate stays a second independent gate on every body this
+// page serves. And it decides **addressability**: a reveal posts a secret id, so
+// a fence with no row is a fence the route could not act on, and offering the
+// control would be a broken control wearing a permission's clothes (AGENTS.md §7).
+//
 // The list is deliberately unfiltered: a fence is a visible box in the page's
 // layout, and hiding the box would tell the reader something was there while
 // showing nothing. What differs is the *content* of the box, and it differs down
@@ -253,14 +282,36 @@ func clipDoc(d *md.Doc, body []byte) *md.Doc {
 // not a credential — and not one more byte of metadata. That is why the response
 // for a page carrying a 40 KiB hidden secret differs from the response for one
 // carrying an empty fence by the length of "⟨secret:… hidden⟩" and not by 40 KiB.
-func (s *Server) pageSecrets(ctx context.Context, who authz.Principal, row store.Page) ([]SecretView, error) {
-	rows, err := store.ListSecretRowsByPage(ctx, s.db.Reader(), row.ID)
+//
+// The second return value is one problem line per fence the index declined and
+// the parser did not already report, shown only to a reader who may read that
+// fence, so that a box always has a reason beside it for the person who can fix
+// it. The only indexer refusal that leaves the parser silent is an unresolvable
+// `author=` — a missing id or an unreadable visibility is md's own problem and is
+// already in doc.Problems — so this names that, and says nothing about the body.
+func (s *Server) pageSecrets(
+	ctx context.Context,
+	who authz.Principal,
+	row store.Page,
+	doc *md.Doc,
+) ([]SecretView, []string, error) {
+	// Which of this page's fences the index holds, by id, and at which ordinal.
+	// The ordinal is part of the key because the index is keyed on the id alone:
+	// two fences in one file claiming one id — a malformed page — would otherwise
+	// make both of them addressable, and the second one's box would offer a
+	// reveal that rewrites the first one's directive.
+	indexed, err := store.ListSecretRowsByPage(ctx, s.db.Reader(), row.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	held := make(map[string]int, len(indexed))
+	for _, sec := range indexed {
+		held[sec.ID] = sec.Ordinal
+	}
+
 	owner, err := s.pageOwned(ctx, who, row.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Asked once for the page rather than per fence, and through the policy rather
 	// than through a role comparison: the route's Perm column is PermDM, so this
@@ -271,44 +322,117 @@ func (s *Server) pageSecrets(ctx context.Context, who authz.Principal, row store
 	// its gate is a control that can be wrong.
 	mayChange := s.mayChangeSecretVisibility(who)
 	base := cardOf(row).Href()
-	out := make([]SecretView, 0, len(rows))
-	for _, sec := range rows {
-		hidden := SecretView{ID: sec.ID, Ordinal: sec.Ordinal, Hidden: true, Label: lockLabel(sec.ID)}
-		// Both actions are on the hidden shape too, and that is deliberate: a DM
-		// reads every secret on the page, so for that principal no fence is hidden
-		// and the branch below is the only one that runs — but a principal who may
-		// neither see nor broadcast must not find a page where the control's
-		// presence depended on which branch produced the row.
-		if mayChange {
-			hidden.RevealAction = base + "/secrets/" + sec.ID + "/reveal"
-			hidden.RevokeAction = base + "/secrets/" + sec.ID + "/revoke"
-		}
-		if !authz.CanReadSecret(who, owner, sec.AuthorID, authz.Visibility(sec.Visibility)) {
-			out = append(out, hidden)
-			continue
-		}
-		// The only body-bearing read in the codebase. Load applies the canonical
-		// predicate itself, so a mistake in the check above is a mistake that
-		// still cannot reach a body.
-		loaded, err := s.secrets.Load(ctx, who, sec.ID)
-		if errors.Is(err, store.ErrNoRows) {
-			out = append(out, hidden)
-			continue
-		}
+
+	fences, fenceProblems := secrets.Parse(doc)
+	// A problem keyed on the fence's id, so a fence the parser has already
+	// reported is not reported a second time in this handler's words, and so the
+	// closed-to-everyone branch below can ask one question of one map.
+	reported := secrets.UnusableFenceIDs(doc.Problems, fenceProblems)
+
+	out := make([]SecretView, 0, len(fences))
+	var unattributed []string
+	for _, f := range fences {
+		author, err := s.authorID(ctx, f.Author)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out = append(out, SecretView{
-			ID:           loaded.ID,
-			Ordinal:      loaded.Ordinal,
-			Body:         loaded.Body,
-			Visibility:   string(loaded.Visibility),
-			Revealed:     loaded.IsOpen(),
-			RevealAction: hidden.RevealAction,
-			RevokeAction: hidden.RevokeAction,
-		})
+		f.AuthorID = author
+
+		ordinal, inIndex := held[f.ID]
+		// The index row that is *this* fence, not merely a row carrying its id.
+		ours := inIndex && ordinal == f.Ordinal
+
+		// Both actions, and both empty unless the index holds this exact fence:
+		// a reveal names an id, so an unaddressable fence is a control the route
+		// would refuse. Both are on the hidden shape too, and that is deliberate: a
+		// DM reads every secret on the page, so for that principal no fence is
+		// hidden and the branch below is the only one that runs — but a principal
+		// who may neither see nor broadcast must not find a page where the
+		// control's presence depended on which branch produced the row.
+		view := SecretView{ID: f.ID, Ordinal: f.Ordinal}
+		if mayChange && ours {
+			view.RevealAction = base + "/secrets/" + f.ID + "/reveal"
+			view.RevokeAction = base + "/secrets/" + f.ID + "/revoke"
+		}
+		// A fence whose directive could not be read is closed to everybody, and
+		// this is the branch that says so. The indexer declines to write a row
+		// for such a fence, so without it this falls through to the `!ours` path
+		// below and hands a principal who *may* read it the body — turning a
+		// fence that is fail-closed into one that is merely hidden from the table,
+		// which is exactly the demotion AGENTS.md §6 and
+		// TestAnUnunderstoodSecretFenceNeverBecomesPublic exist to prevent.
+		//
+		// The rule itself is secrets.Secret.Openable, which the raw view, the
+		// export and the conflict page all ask, because they were once four
+		// copies of it and two of them were wrong.
+		//
+		// lockLabel and not a sentinel, for the reason AGENTS.md §6 gives: this is
+		// a surface meant to be looked at, and a sentinel carries the hidden body's
+		// length and a digest of it. The editor needs that because a save has to
+		// put the body back; nothing else does.
+		if !f.Openable(who, owner, reported[f.ID]) {
+			view.Hidden = true
+			view.Label = lockLabel(f.ID)
+			out = append(out, view)
+			continue
+		}
+
+		// One problem line for a fence the index declined and the parser did not
+		// already report — and only to a reader who may read the fence, because
+		// the line is about the fence's directive and a directive is not shown to
+		// somebody the box above has just refused. The complaint is about the file
+		// rather than the reader, but a page where half the boxes can be explained
+		// and half cannot is a page a DM debugs in a text editor instead.
+		if !ours && !reported[f.ID] {
+			unattributed = append(unattributed, unattributedNote(f))
+		}
+
+		body := f.Body
+		if ours {
+			// The only body-bearing read in the codebase for an indexed fence.
+			// Load applies the canonical predicate itself, so a mistake in the
+			// check above is a mistake that still cannot reach a body.
+			loaded, err := s.secrets.Load(ctx, who, f.ID)
+			if err != nil {
+				if errors.Is(err, store.ErrNoRows) {
+					// The index and the file disagreed between the two reads
+					// above. The lock is the direction that leaks nothing.
+					view.Hidden = true
+					view.Label = lockLabel(f.ID)
+					out = append(out, view)
+					continue
+				}
+				return nil, nil, err
+			}
+			body = loaded.Body
+		}
+		view.Body = body
+		// The visibility this reader's answer came from, which for a fence whose
+		// directive could not be read is the fail-safe default rather than the
+		// token on disk. It is what the decision used, so it is what the view
+		// model reports; nothing renders it, and a template that compared it
+		// against a literal would be re-answering a rule authz owns.
+		view.Visibility = string(f.Visibility)
+		view.Revealed = f.IsOpen()
+		out = append(out, view)
 	}
-	return out, nil
+	return out, unattributed, nil
+}
+
+// unattributedNote is the problem line for a fence the file has and the index
+// does not.
+//
+// Its wording is the indexer's own (sync.ProblemAuthorUnknown), because the two
+// describe one refusal and a page that said it differently from the log would be
+// two descriptions of one fact. The id is in the line because the id is the fence
+// the reader can see boxed on this page, and a line about a secret with nothing
+// to point at is a line about which secret.
+func unattributedNote(f secrets.Secret) string {
+	what := "the fence names an author that is not a known account"
+	if f.Author == "" {
+		what = "the fence names no author"
+	}
+	return secrets.ProblemAuthorUnknown + ": " + what + " (" + f.ID + ")"
 }
 
 // lockLabel is the text shown in place of a secret this viewer may not read.
@@ -407,58 +531,70 @@ func (s *Server) wikilinkIDs(ctx context.Context, pageID int64) (map[string]int6
 		return nil, err
 	}
 	out := make(map[string]int64, len(links))
+	// One lookup per distinct target, not per link row: a page that links the
+	// same neighbour forty times costs one query, and a page whose links are
+	// resolved row by row is a per-render query storm.
+	paths := make(map[int64]string, len(links))
 	for _, l := range links {
 		if l.SecretID != "" || l.TargetPageID == nil {
 			continue
 		}
-		if href, ok := internalHref(l.TargetRaw, l.Kind); ok {
-			out[href] = *l.TargetPageID
+		switch l.Kind {
+		case store.LinkWikilink, store.LinkMarkdown:
+		default:
+			continue
+		}
+		page, ok := paths[*l.TargetPageID]
+		if !ok {
+			// The page's own path is needed only for a link that names a file,
+			// because that is addressed at the page's attachment route. The URL
+			// itself is md's to build — see md.LinkHref, which exists because
+			// this function used to rebuild the rule from the raw target and got
+			// the fragment encoding and the attachment route wrong, so the
+			// preview silently never appeared on a link with a heading or on a
+			// link that named a file. A rule the code owns twice is a rule that
+			// disagrees.
+			row, err := store.GetPageByID(ctx, s.db.Reader(), *l.TargetPageID)
+			if err != nil {
+				continue
+			}
+			page = row.Path
+			paths[*l.TargetPageID] = page
+		}
+		if href, ok := md.LinkHref(l.TargetRaw, page); ok {
+			if key, ok := hrefKey(href); ok {
+				out[key] = *l.TargetPageID
+			}
 		}
 	}
 	return out, nil
 }
 
-// internalHref is the URL the renderer will have produced for a link row.
+// hrefKey reduces a rendered href to the form the map is keyed by, so a link
+// matches whatever the renderer chose to emit.
 //
-// It mirrors md.VaultResolver: a target with no extension is a page and gains
-// the /p/ prefix, a target with one is a file and does not, and the fragment
-// the author wrote is appended. A target that is not a page reference is
-// skipped, because the renderer did not turn it into an <a href> and an
-// attribute on nothing is worse than no attribute.
-func internalHref(target string, kind store.LinkKind) (string, bool) {
-	switch kind {
-	case store.LinkWikilink, store.LinkMarkdown:
-	default:
+// The comparison is encoding-insensitive on purpose. The renderer escapes what
+// it writes, so the rendered form of a heading link carries percent-encoding the
+// link row does not, and requiring the two to agree byte for byte is requiring
+// an encoder to be duplicated. Decoding with the standard library is not a second
+// encoder: it is the inverse of whatever the renderer used, and two hrefs that
+// decode alike name the same destination, which is the only question the
+// attribute answers.
+func hrefKey(href string) (string, bool) {
+	base, fragment, hasFragment := strings.Cut(href, "#")
+	if base == "" {
 		return "", false
 	}
-	target = strings.TrimSpace(target)
-	page, fragment, _ := strings.Cut(target, "#")
-	if page == "" {
-		// A [[#heading]] points into the page it is written on, so it has no
-		// other page's id to carry.
-		return "", false
+	if u, err := url.PathUnescape(base); err == nil {
+		base = u
 	}
-	for _, scheme := range []string{"://", "mailto:", "tel:", "data:"} {
-		if strings.Contains(page, scheme) {
-			return "", false
+	if hasFragment {
+		if u, err := url.PathUnescape(fragment); err == nil {
+			fragment = u
 		}
+		base += "#" + fragment
 	}
-	if !strings.Contains(lastSegment(page), ".") {
-		page = "/p/" + page
-	}
-	if fragment != "" {
-		page += "#" + fragment
-	}
-	return page, true
-}
-
-// lastSegment is the last path segment of a target, which is where md looks for
-// the extension that tells a page from a file.
-func lastSegment(target string) string {
-	if i := strings.LastIndex(target, "/"); i >= 0 {
-		return target[i+1:]
-	}
-	return target
+	return base, true
 }
 
 // anchorOpen is the exact byte sequence an internal link starts with.
@@ -466,6 +602,13 @@ const anchorOpen = `<a href="`
 
 // insertWikilinkAttrs adds data-wikilink to every anchor whose href is in ids.
 func insertWikilinkAttrs(out []byte, ids map[string]int64) []byte {
+	// Spelled from the constant the plugin contract owns rather than as a literal
+	// here. web/static/app.js looks for this attribute by name, and plugin.go
+	// documents it as the one a component returns — so writing the bytes out in
+	// this function was a third copy of the name, in a package that could not see
+	// the two it had to agree with, and a rename would have left the shell's
+	// hover quietly finding nothing.
+	attr := []byte(` ` + plugin.WikiLinkAttr + `="`)
 	buf := make([]byte, 0, len(out)+64)
 	rest := out
 	for {
@@ -484,10 +627,12 @@ func insertWikilinkAttrs(out []byte, ids map[string]int64) []byte {
 		// other order produces href="/p/Tavern data-wikilink="1" and a link
 		// whose destination is the name of an attribute.
 		buf = append(buf, '"')
-		if id, ok := ids[string(rest[:j])]; ok {
-			buf = append(buf, ` data-wikilink="`...)
-			buf = strconv.AppendInt(buf, id, 10)
-			buf = append(buf, '"')
+		if key, ok := hrefKey(string(rest[:j])); ok {
+			if id, found := ids[key]; found {
+				buf = append(buf, attr...)
+				buf = strconv.AppendInt(buf, id, 10)
+				buf = append(buf, '"')
+			}
 		}
 		rest = rest[j+1:]
 	}

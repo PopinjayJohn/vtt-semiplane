@@ -124,7 +124,11 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 			// page: the status line is already on the wire. Recording it is all
 			// that is left, and pretending otherwise would corrupt the response
 			// body with a second document.
-			if rec == http.ErrAbortHandler {
+			// ==, not errors.Is: net/http compares the abort signal with ==
+			// itself in the server, so a wrapped ErrAbortHandler would already
+			// have been swallowed upstream and this is the one place the
+			// sentinel has to be recognised by identity.
+			if rec == http.ErrAbortHandler { //nolint:errorlint // identity, as net/http compares it
 				panic(rec)
 			}
 			s.log.ErrorContext(r.Context(), "a handler panicked; the response was replaced with the error page",
@@ -174,13 +178,20 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 
+		// The recorder is closed before it is read, and the order is the whole
+		// point: closing is what makes the read below and any write still in
+		// flight from another goroutine one critical section rather than two, and
+		// a read that happened first would leave that goroutine free to reach the
+		// socket while this one is building its log line.
+		status, written := rec.close()
+
 		// Principal.String() never contains a session token, and obs refuses a
 		// `cookie` or `token` key outright, so this line cannot become one even
 		// if a future edit names the wrong field.
 		level := slog.LevelInfo
-		if rec.status >= 500 {
+		if status >= 500 {
 			level = slog.LevelError
-		} else if rec.status >= 400 {
+		} else if status >= 400 {
 			level = slog.LevelWarn
 		}
 		s.log.Log(r.Context(), level, "request",
@@ -189,8 +200,8 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 			"method", r.Method,
 			"path", r.URL.Path,
 			"route", RouteFrom(r.Context()),
-			"status", rec.status,
-			"bytes", rec.written,
+			"status", status,
+			"bytes", written,
 			"duration_ms", s.now().Sub(started).Milliseconds(),
 			"actor", PrincipalFrom(r.Context()).String())
 	})
@@ -201,18 +212,61 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 // It implements Unwrap so that http.ResponseController can still reach Flush
 // and Hijack through it, which the live-push stream of a later phase needs; a
 // logger that swallowed them would break a feature it is not part of.
+//
+// # Two goroutines, and why the mutex is the whole fix
+//
+// A response is not always written by the goroutine that is running the handler.
+// The live-push stream is: subscriber.serve starts a goroutine to drain the
+// outbound queue, and it is allowed to return — and the handler with it — while
+// that goroutine is still inside Write or Flush. Every other route in the
+// package writes from one goroutine, which is why this went unnoticed for as
+// long as it did.
+//
+// So the recorder has two jobs it did not have before. It must serialise its own
+// state, because the request logger reads status and written after the handler
+// returns and the stream's writer goroutine is still incrementing them. And it
+// must stop touching the wrapped writer once the handler has returned, because
+// net/http finalises the response the instant ServeHTTP does and a Flush after
+// that point is a write into a response that has already been finished — which
+// is the corruption rather than merely the race, and no lock on this struct can
+// prevent it. The latch below is the only thing that can, and it is one flag in
+// the same critical section as the counters, so the two halves cannot disagree.
+//
+// A mutex and not atomics, for three reasons that are all about the shape of the
+// state rather than about performance. `wrote` guards a check-then-set on
+// `status`, so the first-writer-wins rule needs a compare-and-swap loop rather
+// than a store, and a loop that loses the race has to do something other than
+// store. The logger needs a consistent (status, written) pair, not two
+// independent loads that can straddle a write. And http.ResponseWriter requires
+// its writes and its flushes to be serialised against each other, which is a
+// property of the forwarded call and not of the counters: holding the lock
+// across the call is what makes a Flush impossible in the middle of a Write.
+//
+// Holding the lock across the forwarded call means a blocked socket write also
+// blocks close, and that is the intended trade. The only writer that can be
+// blocked is a client that has stopped reading an event stream, and in that case
+// the connection is already lost: the alternative is a byte written into a
+// response net/http has finished with, which costs the client a corrupt stream
+// rather than a late log line.
 type statusRecorder struct {
 	http.ResponseWriter
+	mu      sync.Mutex
 	status  int
 	written int
 	wrote   bool
+	// closed is set by close, which requestLogger calls the moment the handler
+	// returns. Every forwarded operation checks it, so a stream's writer goroutine
+	// that outlives the handler observes a refusal rather than a socket.
+	closed bool
 }
 
 // WriteHeader records the status the handler chose. A second call is ignored
 // rather than forwarded, because forwarding it would make the log record a status
 // the client never received.
 func (r *statusRecorder) WriteHeader(code int) {
-	if r.wrote {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.wrote || r.closed {
 		return
 	}
 	r.wrote = true
@@ -222,7 +276,17 @@ func (r *statusRecorder) WriteHeader(code int) {
 
 // Write records the size of the response as it goes, so the request record can
 // report how much a request actually cost rather than how much was offered.
+//
+// A write that arrives after the handler returned is counted as delivered and
+// not forwarded. It cannot be delivered — the response is finished — and
+// reporting a short count would be a lie about a request whose bytes did reach
+// the client, which is the direction that matters for a log an operator reads.
 func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return len(b), nil
+	}
 	r.wrote = true
 	n, err := r.ResponseWriter.Write(b)
 	r.written += n
@@ -231,10 +295,34 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 
 // Flush forwards to the wrapped writer when it can flush. A writer that cannot
 // is not an error: a recorder is not allowed to be the reason a stream breaks.
+//
+// It is the one method here that reaches into the response with no bytes to
+// account for, which is why it was the one the race detector named: the stream's
+// writer goroutine reaches it while the handler is returning, and the request
+// logger is reading the counters beside it.
 func (r *statusRecorder) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// close ends the recorder's authority over the wrapped writer and answers the
+// request log's two questions in one critical section.
+//
+// One call rather than a setter and a getter because the read and the latch have
+// to be the same critical section: a read taken before the latch was set would
+// leave a write from the stream's goroutine able to interleave with the log line
+// it is producing.
+func (r *statusRecorder) close() (status, written int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	return r.status, r.written
 }
 
 // Unwrap exposes the wrapped writer to http.ResponseController.

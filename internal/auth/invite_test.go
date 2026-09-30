@@ -73,10 +73,10 @@ func TestInviteIsSingleUseAndUndistinguishableFromUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
-	if _, err := h.svc.AcceptInvite(ctx, RedeemRequest{
+	if _, acceptInviteErr := h.svc.AcceptInvite(ctx, RedeemRequest{
 		Token: used, Username: "newcomer", Passphrase: "Correct-Horse-9",
-	}); err != nil {
-		t.Fatalf("redeem: %v", err)
+	}); acceptInviteErr != nil {
+		t.Fatalf("redeem: %v", acceptInviteErr)
 	}
 
 	expired, err := h.svc.CreateInvite(ctx, admin, authz.RolePlayer, 0)

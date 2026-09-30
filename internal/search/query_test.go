@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// The operator tokens that must never appear unquoted in a MATCH expression
-// BuildMatchQuery produces. `*` and `^` are included because a trailing `*` is
-// the one that looks harmless and is a prefix operator.
-var ftsOperators = []string{
-	"NEAR", "AND", "OR", "NOT", "^", "*", ":", "-",
-}
-
 // assertSafeMatch is the property every normalised query must have: it is a
 // sequence of quoted string literals joined by OR, and nothing else.
 //

@@ -111,6 +111,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int) 
 // every status and a page names its own title only when it has been authorized
 // to show it.
 func (s *Server) shell(r *http.Request, title string) Shell {
+	tree, omitted := s.vaultTree(r)
 	return Shell{
 		Title:     title,
 		Principal: PrincipalFrom(r.Context()),
@@ -131,5 +132,12 @@ func (s *Server) shell(r *http.Request, title string) Shell {
 		// setting it in the handlers that happened to have a plugin would make
 		// the affordance depend on which surface the reader is looking at.
 		PreviewsEnabled: s.hasSummaryProvider(),
+		// Same reasoning again, and sharper here: the tree is the campaign's own
+		// shape, so a sidebar that showed a different one per surface would be a
+		// map that changes under the reader. It is the same builder and the same
+		// query /files uses, and a nil tree is the degradation a broken listing
+		// gets.
+		VaultTree:        tree,
+		VaultTreeOmitted: omitted,
 	}
 }

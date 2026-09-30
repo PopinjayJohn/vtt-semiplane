@@ -673,9 +673,34 @@
 		@apply font-semibold;
 	}
 
+	/* The chevron turns with the state rather than being swapped for a second
+	 * glyph. aria-expanded is the same signal that shows the children, so the mark
+	 * cannot point the wrong way: there is no second icon that could fall out of
+	 * step with the first, and no icon name a template would have to choose
+	 * between from inside a conditional. `rotate` rather than `transform`, which a
+	 * utility on the same element would be free to overwrite. */
+	.file-dir-toggle[aria-expanded="true"] svg {
+		rotate: 90deg;
+	}
+
 	.file-page-link {
 		@apply flex items-center gap-1.5 rounded px-1.5 py-1 text-sm;
 		color: var(--color-ink);
+	}
+
+	/* The page being read, in the tree, marked the way the destinations above it
+	 * are marked. app.js writes aria-current from location.pathname because a
+	 * fragment render did not pass through a template that could have known which
+	 * page is open, so the attribute is the only state both the document and the
+	 * swap have — and the same reason means the styling hangs off the attribute
+	 * rather than off a class the server would have to guess. The colour pair and
+	 * the inset shadow are the .nav-item[aria-current="page"] declarations
+	 * verbatim, so the two read as one column and the contrast on this surface is
+	 * the contrast the navigation has always had on it. */
+	.file-page-link[aria-current="page"] {
+		@apply font-semibold;
+		background-color: light-dark(oklch(0.92 0.005 250), oklch(0.35 0.013 250));
+		box-shadow: inset 2px 0 0 var(--color-accent-500);
 	}
 
 	.command-row {

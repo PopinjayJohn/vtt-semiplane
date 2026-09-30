@@ -424,11 +424,11 @@ func (s *Server) planLinkUpdate(ctx context.Context, who authz.Principal, pageID
 	if err != nil {
 		return LinkUpdatePlan{}, nil, err
 	}
-	if err := s.requirePageWrite(ctx, who, row.ID); err != nil {
-		return LinkUpdatePlan{}, nil, err
+	if requirePageWriteErr := s.requirePageWrite(ctx, who, row.ID); requirePageWriteErr != nil {
+		return LinkUpdatePlan{}, nil, requirePageWriteErr
 	}
-	if _, err := s.renameDestinationPath(row.Path, newName); err != nil {
-		return LinkUpdatePlan{}, nil, err
+	if _, renameDestinationPathErr := s.renameDestinationPath(row.Path, newName); renameDestinationPathErr != nil {
+		return LinkUpdatePlan{}, nil, renameDestinationPathErr
 	}
 
 	plan := LinkUpdatePlan{
@@ -518,9 +518,9 @@ func (s *Server) planLinkUpdate(ctx context.Context, who authz.Principal, pageID
 			continue
 		}
 		if !ref.vanished {
-			writable, err := s.mayWritePage(ctx, who, id)
-			if err != nil {
-				return LinkUpdatePlan{}, nil, err
+			writable, mayWritePageErr := s.mayWritePage(ctx, who, id)
+			if mayWritePageErr != nil {
+				return LinkUpdatePlan{}, nil, mayWritePageErr
 			}
 			ref.page.CanWrite = writable
 			if !writable {
@@ -951,8 +951,8 @@ func (s *Server) renameTarget(ctx context.Context, who authz.Principal, pageID i
 	if err != nil {
 		return store.Page{}, "", err
 	}
-	if err := s.requirePageWrite(ctx, who, row.ID); err != nil {
-		return store.Page{}, "", err
+	if requirePageWriteErr := s.requirePageWrite(ctx, who, row.ID); requirePageWriteErr != nil {
+		return store.Page{}, "", requirePageWriteErr
 	}
 	name := strings.TrimSpace(rawName)
 	if name == "" || len(name) > maxRenameNameBytes {

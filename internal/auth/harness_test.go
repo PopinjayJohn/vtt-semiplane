@@ -81,12 +81,12 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
 		}
 	})
-	if err := store.Migrate(context.Background(), db.Writer(), func(context.Context) error { return nil }); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if migrateErr := store.Migrate(context.Background(), db.Writer(), func(context.Context) error { return nil }); migrateErr != nil {
+		t.Fatalf("migrate: %v", migrateErr)
 	}
 
 	h := &harness{t: t, vault: v, db: db, main: &safeBuffer{}, audit: &safeBuffer{}}

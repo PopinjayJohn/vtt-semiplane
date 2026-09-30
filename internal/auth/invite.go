@@ -166,11 +166,11 @@ func (s *Service) AcceptInvite(ctx context.Context, req RedeemRequest) (authz.Pr
 		return authz.Principal{}, ErrInviteInvalid
 	}
 
-	if err := ValidateUsername(req.Username); err != nil {
-		return authz.Principal{}, err
+	if validateUsernameErr := ValidateUsername(req.Username); validateUsernameErr != nil {
+		return authz.Principal{}, validateUsernameErr
 	}
-	if err := ValidatePassphrase(req.Passphrase); err != nil {
-		return authz.Principal{}, err
+	if validatePassphraseErr := ValidatePassphrase(req.Passphrase); validatePassphraseErr != nil {
+		return authz.Principal{}, validatePassphraseErr
 	}
 	phc, err := HashPassphrase(req.Passphrase)
 	if err != nil {
@@ -189,7 +189,7 @@ func (s *Service) AcceptInvite(ctx context.Context, req RedeemRequest) (authz.Pr
 	if err != nil {
 		return authz.Principal{}, fmt.Errorf("auth: begin invite redemption: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Re-read the invite inside the transaction. The read above is on the
 	// reader pool and a second redemption of the same token can commit between
@@ -224,11 +224,11 @@ func (s *Service) AcceptInvite(ctx context.Context, req RedeemRequest) (authz.Pr
 	// Redeeming after the insert, in the same transaction, is what makes the
 	// redemption single-use. If this fails the insert rolls back with it, so
 	// two simultaneous redemptions of one token leave one account and not two.
-	if err := store.RedeemInvite(ctx, tx, tokenHash, userID, now); err != nil {
-		if errors.Is(err, store.ErrInviteUsed) {
+	if redeemInviteErr := store.RedeemInvite(ctx, tx, tokenHash, userID, now); redeemInviteErr != nil {
+		if errors.Is(redeemInviteErr, store.ErrInviteUsed) {
 			return authz.Principal{}, ErrInviteInvalid
 		}
-		return authz.Principal{}, err
+		return authz.Principal{}, redeemInviteErr
 	}
 
 	generation, err := store.BumpAuthzGeneration(ctx, tx)

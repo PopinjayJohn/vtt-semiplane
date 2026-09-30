@@ -113,7 +113,7 @@ templ relatedPanel(cards []httpapi.PageCard) {
 		<ul class="mt-2 space-y-1">
 			for _, card := range cards {
 				<li>
-					<a href={ card.Href() } class="text-sm hover:underline">{ card.Title }</a>
+					<a href={ card.Href() } { Wikilink(card.ID)... } class="text-sm hover:underline">{ card.Title }</a>
 				</li>
 			}
 		</ul>
@@ -163,7 +163,7 @@ templ sessionPanel(s *httpapi.SessionRef) {
 	<div data-status-field="session">
 		<h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Current session</h3>
 		<p class="mt-1 text-sm">
-			<a href={ s.Card.Href() } class="font-medium hover:underline">
+			<a href={ s.Card.Href() } { Wikilink(s.Card.ID)... } class="font-medium hover:underline">
 				if s.Number > 0 {
 					{ "Session " + itoa(s.Number) }
 				} else {
@@ -195,7 +195,7 @@ templ threadsPanel(threads []httpapi.PageCard, count int) {
 			<ul class="mt-1 space-y-1">
 				for _, thread := range threads {
 					<li>
-						<a href={ thread.Href() } class="text-sm hover:underline">{ thread.Title }</a>
+						<a href={ thread.Href() } { Wikilink(thread.ID)... } class="text-sm hover:underline">{ thread.Title }</a>
 					</li>
 				}
 			</ul>
@@ -210,7 +210,7 @@ templ lastActivityPanel(cards []httpapi.PageCard) {
 		<ul class="mt-1 space-y-1">
 			for _, card := range cards {
 				<li>
-					<a href={ card.Href() } class="text-sm hover:underline">{ card.Title }</a>
+					<a href={ card.Href() } { Wikilink(card.ID)... } class="text-sm hover:underline">{ card.Title }</a>
 				</li>
 			}
 		</ul>
@@ -229,7 +229,7 @@ templ partyPanel(members []httpapi.PartyMember) {
 		<ul class="mt-1 space-y-1">
 			for _, member := range members {
 				<li>
-					<a href={ member.Card.Href() } class="text-sm hover:underline">{ member.Card.Title }</a>
+					<a href={ member.Card.Href() } { Wikilink(member.Card.ID)... } class="text-sm hover:underline">{ member.Card.Title }</a>
 					if member.Owner != "" {
 						<span class="text-xs text-neutral-500 dark:text-neutral-400">· { member.Owner }</span>
 					}

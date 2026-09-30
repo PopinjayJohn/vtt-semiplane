@@ -65,8 +65,8 @@ func TestRevisionRevocationIsAuthorised(t *testing.T) {
 		t.Error("a readable revision is not marked visible")
 	}
 
-	if err := h.svc.Revoke(ctx, h.dm(), secretID); err != nil {
-		t.Fatalf("revoke: %v", err)
+	if revokeErr := h.svc.Revoke(ctx, h.dm(), secretID); revokeErr != nil {
+		t.Fatalf("revoke: %v", revokeErr)
 	}
 
 	// After the revoke it is gone, and the file has to be consulted to know why.
@@ -268,9 +268,9 @@ func TestHistoryDoesNotCarryContent(t *testing.T) {
 		{"a player", h.player(), false},
 		{"a dm", h.dm(), true},
 	} {
-		rows, err := h.svc.History(ctx, who.p, id)
-		if err != nil {
-			t.Fatalf("%s: history: %v", who.name, err)
+		rows, historyErr := h.svc.History(ctx, who.p, id)
+		if historyErr != nil {
+			t.Fatalf("%s: history: %v", who.name, historyErr)
 		}
 		if len(rows) != total {
 			t.Errorf("%s: %d rows, want %d", who.name, len(rows), total)
@@ -517,8 +517,8 @@ func TestARevisionHoldingASecretTheFileNoLongerHasStillReads(t *testing.T) {
 			if !tc.readable && !errors.Is(err, store.ErrNoRows) {
 				t.Fatalf("a player read a deleted dm secret's revision: %v", err)
 			}
-			if _, err := h.svc.Revision(ctx, h.dm(), id, revID); err != nil {
-				t.Fatalf("a dm could not read the revision: %v", err)
+			if _, revisionErr := h.svc.Revision(ctx, h.dm(), id, revID); revisionErr != nil {
+				t.Fatalf("a dm could not read the revision: %v", revisionErr)
 			}
 			// The body is in the revision and nowhere else, which is the whole
 			// reason the fence's own directive is the answer here.

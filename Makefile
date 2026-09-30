@@ -55,6 +55,48 @@ COVERAGE_BASELINE := .coverage-baseline
 # flaky gate and you have removed the gate instead of the flake.
 COVERAGE_TOLERANCE ?= 0.5
 
+# The Go toolchain the coverage numbers are recorded against, and the reason
+# this variable exists at all.
+#
+# A coverage percentage is not a property of the tests alone: it is a property
+# of the tests, the source, AND the compiler that instrumented the source, and
+# the last of those is invisible in the profile. Measured on one tree, with one
+# command and no source change:
+#
+#   package          go1.26.0   go1.27.1
+#   /internal/config    94.2       94.9
+#   /internal/plugin    91.7       92.4
+#   /internal/vault     81.4       82.5
+#   /internal/md        87.1       87.6
+#   /internal/obs       77.6       77.6
+#
+# A baseline recorded on a 1.27 laptop and compared against a 1.26 runner
+# therefore reports a two-point DROP in most packages and a four-point RAISED in
+# one, and every one of those numbers is an artefact of the toolchain. That is
+# what the coverage job was reporting on 10 packages before this variable
+# existed, and it is a ratchet whose unit was never pinned — a gate measuring a
+# proxy for the thing.
+#
+# So the toolchain is part of the baseline: it is recorded in the file's header,
+# `coverage-check` refuses to compare across toolchains, and `cover` and
+# `coverage-baseline` both run the toolchain named here. Regenerating on a
+# different Go is therefore a deliberate act that changes this line, not
+# something that happens by accident on whoever's machine ran it last.
+COVERAGE_TOOLCHAIN ?= go1.26.6
+
+# atomic, not the `go test` default of set. The two count the same statements
+# from the same run, but `set` loses increments where a counter is shared between
+# goroutines, so the two can disagree in the last decimal — and a baseline
+# recorded under one and checked under the other is the same untrustworthy
+# comparison as a baseline recorded under a different toolchain. Pinned here so
+# that `make cover`, `make coverage-baseline` and `make coverage-check` cannot
+# disagree about it, and so the numbers in .coverage-baseline say which mode
+# they were taken with.
+#
+# atomic is also what `make test-race` already uses, so this is one convention
+# in the repository rather than two.
+COVERAGE_MODE ?= atomic
+
 # Each entry is a marker that must be present in the built binary for the
 # release notes' claim that the binary is self-contained to be true. These are
 # the //go:embed payloads named in .goreleaser.yaml's header, all three of them.
@@ -155,7 +197,7 @@ test-one: ## run one package or test through the bounded runner: make test-one P
 
 .PHONY: cover
 cover: ## run the tests and report coverage
-	./scripts/test.sh -coverprofile=$(COVERAGE_PROFILE)
+	GOTOOLCHAIN=$(COVERAGE_TOOLCHAIN) ./scripts/test.sh -coverprofile=$(COVERAGE_PROFILE) -covermode=$(COVERAGE_MODE)
 	$(GO) tool cover -func=$(COVERAGE_PROFILE) | tail -1
 
 # The gate. It fails on a DROP and on a MISSING, names the package and both
@@ -163,10 +205,31 @@ cover: ## run the tests and report coverage
 # green build. It reads the profile, it does not produce one: CI runs the tests
 # first so that "the tests failed" and "coverage fell" stay two different
 # messages instead of one.
+#
+# It also refuses to compare a profile measured on one Go toolchain against a
+# baseline recorded on another, and says which two. The reason is measured
+# rather than asserted — see COVERAGE_TOOLCHAIN above for the table — and the
+# alternative is a gate that reports a two-point coverage loss on a tree where
+# no test was deleted, which is a number nobody can act on and therefore a
+# number nobody reads.
 .PHONY: coverage-check
 coverage-check: ## fail if any package in the baseline lost coverage
 	@test -f $(COVERAGE_PROFILE) || { echo "no $(COVERAGE_PROFILE): run 'make cover' first"; exit 1; }
 	@test -f $(COVERAGE_BASELINE) || { echo "no $(COVERAGE_BASELINE)"; exit 1; }
+	@recorded=`sed -n 's/^# toolchain: //p' $(COVERAGE_BASELINE)`; \
+	running=`GOTOOLCHAIN=$(COVERAGE_TOOLCHAIN) $(GO) env GOVERSION`; \
+	if [ -z "$$recorded" ]; then \
+		echo "==> $(COVERAGE_BASELINE) records no '# toolchain:' line."; \
+		echo "    Regenerate it: make cover && make coverage-baseline"; exit 1; \
+	fi; \
+	if [ "$$recorded" != "$$running" ]; then \
+		echo "TOOLCHAIN $(COVERAGE_BASELINE) was recorded with $$recorded; this run measured $$running."; \
+		echo "    A coverage percentage is a property of the compiler as well as"; \
+		echo "    of the tests, so the two sets of numbers are not comparable and"; \
+		echo "    a DROP here would be the toolchain rather than a lost test."; \
+		echo "    Measure both with the same toolchain: make cover COVERAGE_TOOLCHAIN=$$recorded"; \
+		exit 1; \
+	fi
 	@awk -v BASELINE=$(COVERAGE_BASELINE) -v TOL=$(COVERAGE_TOLERANCE) '\
 	  FNR==NR { \
 	    if (NF >= 2 && $$1 !~ /^#/) { \
@@ -230,11 +293,19 @@ coverage-baseline: ## rewrite the coverage ratchet from the current profile
 	  } \
 	  END { for (f in tot) if (tot[f] > 0) printf "%s %.1f\n", f, 100 * cov[f] / tot[f] }' \
 	  $(COVERAGE_PROFILE) | sort > $(COVERAGE_BASELINE).new
-	@if [ -f $(COVERAGE_BASELINE) ]; then sed -n '/^#/!q;p' $(COVERAGE_BASELINE) > $(COVERAGE_BASELINE).hdr; else : > $(COVERAGE_BASELINE).hdr; fi
+	@# The old `# toolchain:` line is dropped rather than kept: a header that
+	@# carried a stale one would let a baseline recorded on one Go be read as
+	@# if it had been measured on another, which is the exact failure this line
+	@# exists to make visible. Everything else in the comment block is prose and
+	@# is preserved.
+	@if [ -f $(COVERAGE_BASELINE) ]; then \
+	  sed -n '/^#/!q;p' $(COVERAGE_BASELINE) | grep -v '^# toolchain: ' > $(COVERAGE_BASELINE).hdr; \
+	else : > $(COVERAGE_BASELINE).hdr; fi
 	@cat $(COVERAGE_BASELINE).hdr $(COVERAGE_BASELINE).new > $(COVERAGE_BASELINE)
 	@rm -f $(COVERAGE_BASELINE).hdr $(COVERAGE_BASELINE).new
 	@awk 'NR>1 && $$1 !~ /^#/ && NF>=2 { if (seen[$$1]++) dup = dup " " $$1 } END { if (dup != "") { print "still duplicated:" dup; exit 1 } }' $(COVERAGE_BASELINE)
-	@echo "==> rewrote $(COVERAGE_BASELINE): git diff it and commit the numbers"
+	@printf '# toolchain: %s\n' "`GOTOOLCHAIN=$(COVERAGE_TOOLCHAIN) $(GO) env GOVERSION`" >> $(COVERAGE_BASELINE)
+	@echo "==> rewrote $(COVERAGE_BASELINE) against `GOTOOLCHAIN=$(COVERAGE_TOOLCHAIN) $(GO) env GOVERSION`: git diff it and commit the numbers"
 
 .PHONY: fuzz
 fuzz: ## run the markdown and search fuzz targets for 30s each
@@ -317,6 +388,16 @@ targets-check: ## fail if the Makefile's TARGETS and .goreleaser.yaml disagree
 .PHONY: target-count
 target-count:
 	@echo $(words $(TARGETS))
+
+# The list itself, for the same reason and one step further: build.yml asserts
+# each built artifact against the platform it claims by reading the target out
+# of this variable rather than out of a list written beside it. A check that
+# enumerated the six binaries by hand would be a fourth copy of a set that has
+# already been written down twice and disagreed once — and the copy is what
+# goes stale, not the set.
+.PHONY: targets
+targets:
+	@echo $(TARGETS)
 
 # Enforces the claim in .goreleaser.yaml's header that the binary carries its
 # own stylesheet, icon sprite, DataStar bundle, migration SQL and sample

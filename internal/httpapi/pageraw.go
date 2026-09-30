@@ -96,13 +96,22 @@ func (s *Server) rawPage(w http.ResponseWriter, r *http.Request) {
 // It is secrets.hiddenIn re-derived over the file rather than the index, and
 // that duplication is the point: the index is derived and disposable, so an
 // index-derived answer to "which of these bodies may this reader not see"
-// answers about the index. The rule itself is one line — authz.CanReadSecret,
-// through secrets.Secret.CanRead, with a fence whose directive could not be
-// read defaulting to private in secrets.Parse and so being hidden from everyone
-// but a DM — and an unparseable fence is the fail-closed case AGENTS.md §6 is
+// answers about the index. The file is canonical; so is the decision.
+//
+// The rule is secrets.Secret.Openable, and asking it here rather than
+// re-implementing it is what stops this route and the page view disagreeing
+// about the same fence — which they did, until the rule had one owner: this one
+// swapped an unreadable fence for a lock for everybody, while the page view
+// showed its body to a DM. A fence that claims secrecy and cannot prove what it
+// claims is closed to everyone, and the comment that used to sit here claiming
+// so while the code did the opposite is the shape of thing AGENTS.md §0 warns
 // about.
 func (s *Server) hiddenFences(ctx context.Context, who authz.Principal, owner bool, doc *md.Doc) ([]secrets.Secret, error) {
-	all, _ := secrets.Parse(doc)
+	all, ownProblems := secrets.Parse(doc)
+	// md's problems too: a fence md segmented as secret and could not read is
+	// just as closed as one secrets.Parse could not read, and the indexer
+	// declines both.
+	unusable := secrets.UnusableFenceIDs(doc.Problems, ownProblems)
 	out := make([]secrets.Secret, 0, len(all))
 	for _, f := range all {
 		id, err := s.authorID(ctx, f.Author)
@@ -110,7 +119,7 @@ func (s *Server) hiddenFences(ctx context.Context, who authz.Principal, owner bo
 			return nil, err
 		}
 		f.AuthorID = id
-		if !f.CanRead(who, owner) {
+		if !f.Openable(who, owner, unusable[f.ID]) {
 			out = append(out, f)
 		}
 	}

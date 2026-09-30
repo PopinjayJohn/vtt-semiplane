@@ -180,6 +180,34 @@ target, and **no interactive elements** — the pin button is core's, because it
 needs JS and a plugin cannot ship JS. See `internal/systems/linkpreview` for the
 element shape the app.js agent binds against.
 
+### Emitting the attribute is your job, and it is one call
+
+A link previews because it carries `data-wikilink="{pageID}"`, and core attaches
+it in **two** places, a plugin in neither:
+
+- **The shell's own links carry it** — the file tree, the dashboard and tag
+  lists, search hits, backlink chips, the broken-links panel, the campaign-status
+  panels. Those are core templates, and they render `web.Wikilink(card.ID)`
+  themselves.
+- **A link inside a rendered page body carries it** because the handler rewrites
+  the finished anchors after the Markdown renderer has run. That is a rewrite of
+  core's own output, and it never sees your component.
+
+So for a link in a `templ.Component` you return, you emit the attribute
+yourself, through the one function that owns its name:
+
+```go
+<a href={ rule.Href() } { web.Wikilink(rule.ID)... }>{ rule.Title }</a>
+```
+
+`web` is on the import list, and `web.Wikilink` is `plugin.WikiLink`, so the name
+the shell binds to and the name you emit are one string with one definition. The
+value is an integer page id — never a title, a path, or anything a reader of
+the page could learn from it, because the attribute is the only thing that came
+out of a vault file. **No plugin in the tree does this yet**; `houserules` links
+each rule by bare `href` and so its links navigate rather than preview. That is
+allowed — an ordinary link is not a broken control — it is just not a preview.
+
 ## 7. What you may not do, and which test says so
 
 Import only `plugin`, `md`, `store`, `web`, `authz`, `secrets` — plus `templ`,

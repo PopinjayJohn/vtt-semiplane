@@ -360,8 +360,8 @@ func TestDeletingAWholeSecretBlockIsSeparatelyAuthorised(t *testing.T) {
 			t.Fatalf("edit view: %v", err)
 		}
 		stripped := removeFence(view.Content, closedSecretID)
-		if err := h.svc.Save(ctx, h.dm(), id, stripped, view.BaseHash); err != nil {
-			t.Fatalf("a dm could not delete a secret: %v", err)
+		if saveErr := h.svc.Save(ctx, h.dm(), id, stripped, view.BaseHash); saveErr != nil {
+			t.Fatalf("a dm could not delete a secret: %v", saveErr)
 		}
 		after := h.vault.ReadFile(t, "Page.md")
 		if bytes.Contains(after, []byte(secretBody)) {
@@ -460,8 +460,8 @@ func TestMovingAHiddenSecretIsNotAnEditToIt(t *testing.T) {
 	if bytes.Equal(moved, view.Content) {
 		t.Fatal("the fence did not move")
 	}
-	if err := h.svc.Save(ctx, h.player(), id, moved, view.BaseHash); err != nil {
-		t.Fatalf("moving a hidden block was refused: %v", err)
+	if saveErr := h.svc.Save(ctx, h.player(), id, moved, view.BaseHash); saveErr != nil {
+		t.Fatalf("moving a hidden block was refused: %v", saveErr)
 	}
 	after := h.vault.ReadFile(t, "Page.md")
 	if !bytes.Contains(after, []byte(secretBody)) {
@@ -682,16 +682,16 @@ func TestAVisibilityChangeThroughASaveIsADMOnly(t *testing.T) {
 	revealed := bytes.Replace(view.Content, []byte("visibility=private"), []byte("visibility=table"), 1)
 	before := h.vault.ReadFile(t, "Page.md")
 
-	if err := h.svc.Save(ctx, h.player(), id, revealed, view.BaseHash); !errors.Is(err, authz.ErrDenied) {
-		t.Fatalf("a player reached visibility=table through a save: %v", err)
+	if saveErr := h.svc.Save(ctx, h.player(), id, revealed, view.BaseHash); !errors.Is(saveErr, authz.ErrDenied) {
+		t.Fatalf("a player reached visibility=table through a save: %v", saveErr)
 	}
 	if !bytes.Equal(before, h.vault.ReadFile(t, "Page.md")) {
 		t.Fatal("the refused reveal changed the file")
 	}
 
 	// The DM may, and the event records the move the way SetVisibility's does.
-	if err := h.svc.Save(ctx, h.dm(), id, revealed, view.BaseHash); err != nil {
-		t.Fatalf("a dm could not reveal through a save: %v", err)
+	if saveErr := h.svc.Save(ctx, h.dm(), id, revealed, view.BaseHash); saveErr != nil {
+		t.Fatalf("a dm could not reveal through a save: %v", saveErr)
 	}
 	if got := h.text(`SELECT visibility FROM secrets WHERE id = ?`, openSecretID); got != "table" {
 		t.Errorf("the indexed visibility is %q, want table", got)
@@ -756,8 +756,8 @@ func TestSaveRefusesTheAppsOwnState(t *testing.T) {
 				t.Fatalf("seed a page row naming the lock: %v", err)
 			}
 
-			if err := tc.call(ctx, h, id); !errors.Is(err, secrets.ErrAppState) {
-				t.Fatalf("the error is %v, want ErrAppState", err)
+			if callErr := tc.call(ctx, h, id); !errors.Is(callErr, secrets.ErrAppState) {
+				t.Fatalf("the error is %v, want ErrAppState", callErr)
 			}
 			got, err := os.ReadFile(abs)
 			if err != nil {

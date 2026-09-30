@@ -130,7 +130,7 @@ func fences(src []byte) []md.Directive {
 // where the source is.
 func TestTheEmbeddedCampaignMatchesTheSourceTree(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("campaign")
+	root := "campaign"
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("no source campaign beside the test binary (%v): the embedded copy cannot be compared with anything", err)
 	}
@@ -236,9 +236,7 @@ func TestSampleCampaignExercisesEveryFeature(t *testing.T) {
 			}
 		}
 		want := []string{md.DefaultPageType, pageTypeHouseRule, pageTypeSession}
-		for _, id := range strings.Fields(reservedTypesCarried) {
-			want = append(want, id)
-		}
+		want = append(want, strings.Fields(reservedTypesCarried)...)
 		for _, id := range want {
 			if counts[id] == 0 {
 				t.Errorf("the campaign carries no page of type %s, so the %s it is there to demonstrate is not demonstrated",

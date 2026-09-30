@@ -12,5 +12,4 @@
 // codebase has already escaped. TestOnlyThisPackageMarksHTMLRaw in internal/httpapi
 // walks the tree and fails on any other templ.Raw, which is what keeps the
 // guarantee checkable rather than merely intended.
-
 package web

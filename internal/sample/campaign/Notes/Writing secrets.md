@@ -50,7 +50,7 @@ appear in a search result or a backlink for a reader who may not see this.
 > inside a longer code block. The scanner that finds secret fences reads every
 > line in the file rather than only the lines inside a Markdown fence, so a
 > sample spelled with real backticks becomes a **real, empty secret** on the page
-> — invisible, and reported in the page's Problems list as a directive with no
+> — withheld from every reader, and reported in the editor's Problems list as a directive with no
 > body. Show the directive line on its own, as above. That is the only reason
 > this page has no live fence in it.
 

@@ -222,9 +222,9 @@ func ListSecretRowsByPage(ctx context.Context, q Queryer, pageID int64) ([]Secre
 	}
 	var out []SecretRow
 	err = ForEach(rows, func(r Rows) error {
-		row, err := scanSecretRow(r)
-		if err != nil {
-			return fmt.Errorf("store: scan secret: %w", err)
+		row, scanSecretRowErr := scanSecretRow(r)
+		if scanSecretRowErr != nil {
+			return fmt.Errorf("store: scan secret: %w", scanSecretRowErr)
 		}
 		out = append(out, row)
 		return nil
@@ -254,9 +254,9 @@ func ListVisibleSecretRowsByPage(ctx context.Context, q Queryer, p authz.Princip
 	}
 	var out []SecretRow
 	err = ForEach(rows, func(r Rows) error {
-		row, err := scanSecretRow(r)
-		if err != nil {
-			return fmt.Errorf("store: scan secret: %w", err)
+		row, scanSecretRowErr := scanSecretRow(r)
+		if scanSecretRowErr != nil {
+			return fmt.Errorf("store: scan secret: %w", scanSecretRowErr)
 		}
 		out = append(out, row)
 		return nil

@@ -57,9 +57,9 @@ func ListHeadings(ctx context.Context, q Queryer, pageID int64) ([]Heading, erro
 	}
 	var out []Heading
 	err = ForEach(rows, func(r Rows) error {
-		h, err := scanHeading(r)
-		if err != nil {
-			return fmt.Errorf("store: scan heading: %w", err)
+		h, scanHeadingErr := scanHeading(r)
+		if scanHeadingErr != nil {
+			return fmt.Errorf("store: scan heading: %w", scanHeadingErr)
 		}
 		out = append(out, h)
 		return nil
@@ -90,9 +90,9 @@ func TOC(ctx context.Context, q Queryer, p authz.Principal, pageID int64) ([]Hea
 	}
 	var out []Heading
 	err = ForEach(rows, func(r Rows) error {
-		h, err := scanHeading(r)
-		if err != nil {
-			return fmt.Errorf("store: scan heading: %w", err)
+		h, scanHeadingErr := scanHeading(r)
+		if scanHeadingErr != nil {
+			return fmt.Errorf("store: scan heading: %w", scanHeadingErr)
 		}
 		out = append(out, h)
 		return nil

@@ -166,7 +166,7 @@ func TestTheStageOneDemoPath(t *testing.T) {
 		// a username oracle.
 		ghost := fx.newSession()
 		ghost.prime()
-		resp2 := ghost.do(&call{
+		resp2 := ghost.do(&call{ //nolint:bodyclose // ghost.read closes the body it is handed
 			method: http.MethodPost, path: "/login",
 			form: url.Values{"username": {"nobody-at-all"}, "passphrase": {"not the passphrase either"}},
 			csrf: ghost.csrf,
@@ -438,21 +438,51 @@ func assertStepClean(t *testing.T, body, where string, s *session) {
 // that the walk's own leak coverage comes from the tripwire test.
 func mayReadAs(_, _ string) bool { return true }
 
-// firstInternalPageLink is the first /p/ href in a rendered page, which is the
-// wikilink the walk follows.
+// firstInternalPageLink is the first /p/ href in a page's own content, which is
+// the wikilink the walk follows.
+//
+// It reads from the content region and not from the whole document, because
+// "the first internal link" is only a well-posed question about the page. The
+// left sidebar is chrome: it is a navigation over the vault, so every page a
+// reader may open is linked there too, and "the first /p/ href in the document"
+// became the sidebar's first row the moment the sidebar grew a tree. That answer
+// is a property of how the vault happens to be sorted, not of the page.
+//
+// #page-region is the fragment protocol's own id rather than a convention this
+// test invented, so scoping to it is checking a contract: a fragment response is
+// that region on its own, and a document is the shell wrapped around it.
 func firstInternalPageLink(t *testing.T, body string) string {
 	t.Helper()
 	const marker = `href="/p/`
-	i := strings.Index(body, marker)
+	region := contentRegion(t, body)
+	i := strings.Index(region, marker)
 	if i < 0 {
-		t.Fatalf("the page has no internal link to follow:\\n%s", snippet(body))
+		t.Fatalf("the page has no internal link to follow:\\n%s", snippet(region))
 	}
-	rest := body[i+len(marker):]
+	rest := region[i+len(marker):]
 	j := strings.Index(rest, `"`)
 	if j < 0 {
-		t.Fatalf("the internal link on the page is not closed:\\n%s", snippet(body))
+		t.Fatalf("the internal link on the page is not closed:\\n%s", snippet(region))
 	}
 	return "/p/" + rest[:j]
+}
+
+// contentRegion is a rendered document from #page-region onwards: the page's own
+// content, with the shell — masthead, sidebar, context column, footer — left off.
+//
+// The end is not searched for and does not need to be. Every caller asks either
+// about the first thing inside the region or about a set of links in it, and a
+// prefix answers both; trimming to the matching </div> would take a tag-depth
+// walk to get right, and a test helper that can be wrong about where a document
+// ends is one that will quietly be wrong about it one day.
+func contentRegion(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `id="page-region"`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("the document carries no content region, so the shell is not the shape this test expected:\\n%s", snippet(body))
+	}
+	return body[i:]
 }
 
 // snippet is the first chunk of a body, for a failure message that stays readable.

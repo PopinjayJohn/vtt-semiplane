@@ -70,7 +70,7 @@ is visible at a glance, and the graph is a *search* structure, not a summary.
 | `internal/web` | the templ component library, the layouts, the renderer | [`doc.go`](../internal/web/doc.go) |
 | `internal/app` | the composition root: sequence, lifetime, report | [`doc.go`](../internal/app/doc.go) |
 | `internal/sample` | the campaign the binary carries | [`doc.go`](../internal/sample/doc.go) |
-| `internal/testutil` | temp vaults, fixtures, the in-process harness | [`doc.go`](../internal/testutil/doc.go) |
+| `internal/testutil` | temp vaults, a deterministic clock, small fixtures | [`doc.go`](../internal/testutil/doc.go) |
 | `internal/systems/**` | plugins: `dnd5e` works, `houserules` and `linkpreview` are features, `example` is built to be refused | — |
 
 **The order itself is not restated here.** It is
@@ -78,10 +78,14 @@ is visible at a glance, and the graph is a *search* structure, not a summary.
 copy is `order` in
 [`../internal/architecture_test.go`](../internal/architecture_test.go);
 `TestDependencyDirection` walks every package and fails on an import that goes
-upward. `app` and `testutil` are exempt because they are the composition root
-and the test harness; `sample` and the plugin roots are held to the plugin
-boundary instead, and the boundary is a shorter list than the order — it is the
-six packages a plugin needs and nothing else.
+upward. `app` and `testutil` are exempt because one is the composition root and
+the other may be: the exemption is the permission to reach in, not a record of
+having done so, and `testutil` imports nothing of ours — the app-booting
+harnesses are per-package test files rather than a shared one, because this
+package is imported by every test that wants a temp vault. `sample` and the
+plugin roots are held to the plugin boundary instead, and the boundary is a
+shorter list than the order — it is the six packages a plugin needs and nothing
+else.
 
 Two of the edges in that order exist because of the security design rather than
 because of convenience, and they are the two ADR-0001 was written for: `authz`
@@ -269,6 +273,21 @@ verbatim: the bytes a subscriber receives are the bytes the ordinary handler
 would have produced under **that subscriber's own captured principal**. The
 stream itself carries a trigger and never content, and it terminates on any
 authorization change — which is what `authz_generation` is for.
+
+**One of those responses is written by a second goroutine, and that goroutine
+may outlive the handler.** The live-push stream is the only one: it starts a
+writer goroutine, and the grace it waits for on the way out is a bound rather
+than a join, so `ServeHTTP` can return with the writer still inside a write.
+That is the one property of the response path the chain has to answer, and
+`statusRecorder` is the answer: it holds a mutex across the forwarded call, and
+the request logger **latches** it the instant the handler returns, so a write
+that arrives afterwards is answered without reaching the socket. The latch is
+the load-bearing half and the lock cannot substitute for it — `net/http`
+finalises the response the instant `ServeHTTP` returns, and no lock on the
+recorder can un-write into a finished response. The argument and the accounting
+are in the recorder's own comment, and
+[`../internal/httpapi/statusrecorder_internal_test.go`](../internal/httpapi/statusrecorder_internal_test.go)
+is where the three are pinned: the latch, the lock, and the concurrent writer.
 
 Two error properties that several surfaces depend on: `httpapi.writeError`
 renders from a fixed copy table with nothing in the model that could differ

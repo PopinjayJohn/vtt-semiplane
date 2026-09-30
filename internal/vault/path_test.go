@@ -101,7 +101,7 @@ func TestErrorsAreDistinctSentinels(t *testing.T) {
 	// A caller must be able to tell "you asked for something outside the vault"
 	// from "it is not there", because the first is an attack and the second is
 	// a 404.
-	if ErrOutsideVault == ErrNotFound {
+	if ErrOutsideVault == ErrNotFound { //nolint:errorlint // identity of two sentinels is the assertion
 		t.Fatal("the two sentinels are the same value")
 	}
 	if !strings.Contains(ErrAlreadyLocked.Error(), "another semiplane process") {

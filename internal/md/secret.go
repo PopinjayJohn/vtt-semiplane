@@ -205,34 +205,6 @@ func splitFirstWord(s string) (word, rest string) {
 	return s[:i], s[i+1:]
 }
 
-// splitFields splits on runs of whitespace without allocating a field for an
-// empty run, so a trailing space does not produce a blank token.
-func splitFields(s string) []string {
-	var out []string
-	i := 0
-	for i < len(s) {
-		for i < len(s) && isSpaceByte(s[i]) {
-			i++
-		}
-		j := i
-		for j < len(s) && !isSpaceByte(s[j]) {
-			j++
-		}
-		if j > i {
-			out = append(out, s[i:j])
-		}
-		i = j
-	}
-	return out
-}
-
-func unquote(s string) string {
-	if len(s) >= 2 && (s[0] == '"' && s[len(s)-1] == '"' || s[0] == '\'' && s[len(s)-1] == '\'') {
-		return s[1 : len(s)-1]
-	}
-	return s
-}
-
 // directiveField is one `key=value` token of a fence info string, with the
 // absolute byte ranges of its key and of its value.
 type directiveField struct {

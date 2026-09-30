@@ -27,7 +27,7 @@ func PrintBanner(w io.Writer, st Status, report plugin.Report) {
 	// The version line is not a labelled fact, so it is written straight to the
 	// writer: inside the tabwriter it would set the label column to its own
 	// width and push every other value to the right edge of the terminal.
-	fmt.Fprintf(w, "%s\n", Info().String())
+	_, _ = fmt.Fprintf(w, "%s\n", Info().String())
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	printAddress(tw, st)
 	printReport(tw, st, report)
@@ -42,22 +42,22 @@ func PrintBanner(w io.Writer, st Status, report plugin.Report) {
 // named something else entirely — a reader would take it for the sample's
 // title. The boot log is where the sample is reported, by its own name.
 func printAddress(w io.Writer, st Status) {
-	fmt.Fprintf(w, "vault:\t%s (%s)\n", st.Vault, st.VaultSource)
-	fmt.Fprintf(w, "vault name:\t%s\n", st.Campaign)
+	_, _ = fmt.Fprintf(w, "vault:\t%s (%s)\n", st.Vault, st.VaultSource)
+	_, _ = fmt.Fprintf(w, "vault name:\t%s\n", st.Campaign)
 }
 
 // printReport is what the index holds and what the process is doing with it.
 func printReport(w io.Writer, st Status, report plugin.Report) {
-	fmt.Fprintf(w, "index:\t%d pages, schema %s, %s, authz generation %d\n",
+	_, _ = fmt.Fprintf(w, "index:\t%d pages, schema %s, %s, authz generation %d\n",
 		st.PageCount, st.SchemaVersion, st.BootState, st.AuthzGeneration)
 	if st.Addr == "" {
-		fmt.Fprintf(w, "listen:\t%s\n", "not listening")
+		_, _ = fmt.Fprintf(w, "listen:\t%s\n", "not listening")
 	} else {
-		fmt.Fprintf(w, "listen:\t%s (%s)\n", st.Addr, urlFor(st.Addr))
+		_, _ = fmt.Fprintf(w, "listen:\t%s (%s)\n", st.Addr, urlFor(st.Addr))
 	}
 	printPlugins(w, report)
 	if !st.IndexedAt.IsZero() {
-		fmt.Fprintf(w, "indexed:\t%s\n", st.IndexedAt.UTC().Format("2006-01-02T15:04:05Z"))
+		_, _ = fmt.Fprintf(w, "indexed:\t%s\n", st.IndexedAt.UTC().Format("2006-01-02T15:04:05Z"))
 	}
 	printWarnings(w, st.Warnings)
 }
@@ -75,9 +75,9 @@ func printReport(w io.Writer, st Status, report plugin.Report) {
 // per-plugin state including version skew is in `plugins list` and in
 // /admin/plugins.
 func printPlugins(w io.Writer, report plugin.Report) {
-	fmt.Fprintf(w, "plugins:\t%d registered\n", len(report.OKs()))
+	_, _ = fmt.Fprintf(w, "plugins:\t%d registered\n", len(report.OKs()))
 	for _, e := range report.Skipped() {
-		fmt.Fprintf(w, "\t- not registered: %s: %s\n", e.ID, e.Reason)
+		_, _ = fmt.Fprintf(w, "\t- not registered: %s: %s\n", e.ID, e.Reason)
 	}
 }
 
@@ -90,9 +90,9 @@ func printWarnings(w io.Writer, warnings []string) {
 	if len(warnings) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "warnings:\t%d\n", len(warnings))
+	_, _ = fmt.Fprintf(w, "warnings:\t%d\n", len(warnings))
 	for _, warning := range warnings {
-		fmt.Fprintf(w, "\t- %s\n", warning)
+		_, _ = fmt.Fprintf(w, "\t- %s\n", warning)
 	}
 }
 
@@ -150,19 +150,19 @@ func PluginsList(ctx context.Context, opts Options, out io.Writer) {
 // and anything that reads this output would then be reading prose as a plugin.
 func printPluginTable(w io.Writer, report plugin.Report) {
 	if len(report.Entries) == 0 {
-		fmt.Fprintln(w, "0 plugins registered")
-		fmt.Fprintln(w, "this build offers no plugins; the registry is one map entry in cmd/semiplane/registry.go")
+		_, _ = fmt.Fprintln(w, "0 plugins registered")
+		_, _ = fmt.Fprintln(w, "this build offers no plugins; the registry is one map entry in cmd/semiplane/registry.go")
 		return
 	}
-	fmt.Fprintln(w, "loaded with no vault behind it: a plugin refused for its schema steps or its stored configuration would still register at boot")
+	_, _ = fmt.Fprintln(w, "loaded with no vault behind it: a plugin refused for its schema steps or its stored configuration would still register at boot")
 	// A dropped contribution is a warning about a plugin that registered, so it
 	// belongs with the conditions rather than inside the table: the rows are
 	// outcomes and these are the host's objections to part of one.
 	printWarnings(w, report.Warnings)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tREASON")
+	_, _ = fmt.Fprintln(tw, "ID\tSTATE\tREASON")
 	for _, e := range report.Entries {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.ID, e.Status, e.Reason)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", e.ID, e.Status, e.Reason)
 	}
 	_ = tw.Flush()
 }

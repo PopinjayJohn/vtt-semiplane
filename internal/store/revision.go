@@ -162,9 +162,9 @@ func ListRevisionMetaByPage(ctx context.Context, q Queryer, pageID int64, limit 
 	}
 	var out []RevisionMeta
 	err = ForEach(rows, func(r Rows) error {
-		rev, err := scanRevisionMeta(r)
-		if err != nil {
-			return fmt.Errorf("store: scan revision metadata: %w", err)
+		rev, scanRevisionMetaErr := scanRevisionMeta(r)
+		if scanRevisionMetaErr != nil {
+			return fmt.Errorf("store: scan revision metadata: %w", scanRevisionMetaErr)
 		}
 		out = append(out, rev)
 		return nil
@@ -198,9 +198,9 @@ func ListRevisionsByPage(ctx context.Context, q Queryer, pageID int64, limit int
 	}
 	var out []Revision
 	err = ForEach(rows, func(r Rows) error {
-		rev, err := scanRevision(r)
-		if err != nil {
-			return fmt.Errorf("store: scan revision: %w", err)
+		rev, scanRevisionErr := scanRevision(r)
+		if scanRevisionErr != nil {
+			return fmt.Errorf("store: scan revision: %w", scanRevisionErr)
 		}
 		out = append(out, rev)
 		return nil

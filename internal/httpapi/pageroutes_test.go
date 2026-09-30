@@ -377,7 +377,7 @@ func TestRevisionRevocationIsAuthorised(t *testing.T) {
 	}
 	// And it is the router's 404, byte for byte, so the refusal is
 	// indistinguishable from a revision that never existed.
-	missing := player.do(player.get("/p/Tavern.md/revisions/999999"))
+	missing := player.do(player.get("/p/Tavern.md/revisions/999999")) //nolint:bodyclose // player.read closes the body it is handed
 	if got := player.read(missing); got != after {
 		t.Errorf("a revoked revision and a revision that never existed answer differently:\n revoked: %q\n missing: %q", after, got)
 	}
@@ -515,7 +515,7 @@ func TestAttachmentInSecretIsNotServed(t *testing.T) {
 				// are compared as bytes and not as statuses: "you may not have
 				// this file" and "there is no such file" have to be the same
 				// document.
-				missing := tc.s.do(tc.s.get("/p/Nowhere at all.md/raw"))
+				missing := tc.s.do(tc.s.get("/p/Nowhere at all.md/raw")) //nolint:bodyclose // tc.s.read closes the body it is handed
 				if got := tc.s.read(missing); got != body {
 					t.Errorf("a refused attachment and a page that does not exist answer differently:\n attachment: %q\n page:      %q", body, got)
 				}

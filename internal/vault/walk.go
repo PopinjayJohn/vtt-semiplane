@@ -145,8 +145,10 @@ func Walk(ctx context.Context, root string, opts WalkOptions) (WalkResult, error
 		}
 		st, err := d.Info()
 		if err != nil {
+			// Recorded, not propagated: the walk must finish so the caller sees
+			// every unreadable entry rather than the first one.
 			res.Unreadable = append(res.Unreadable, WalkError{rel, err.Error()})
-			return nil
+			return nil //nolint:nilerr // the error is the WalkError that was recorded
 		}
 		if st.Size() > opts.maxBytes() {
 			res.Unreadable = append(res.Unreadable, WalkError{
@@ -180,8 +182,10 @@ func Walk(ctx context.Context, root string, opts WalkOptions) (WalkResult, error
 func recordSymlink(root, abs, rel string, opts WalkOptions, res *WalkResult, groups map[string][]string) error {
 	target, err := filepath.EvalSymlinks(abs)
 	if err != nil {
+		// The path's message is the link's, not the filesystem's, and a
+		// dangling link is a fact about the vault rather than a walk failure.
 		res.Unreadable = append(res.Unreadable, WalkError{rel, "dangling symlink"})
-		return nil
+		return nil //nolint:nilerr // reported as a dangling symlink in res
 	}
 	if !within(root, target) {
 		res.SymlinksOutside = append(res.SymlinksOutside, rel)
@@ -190,8 +194,9 @@ func recordSymlink(root, abs, rel string, opts WalkOptions, res *WalkResult, gro
 	res.Symlinks = append(res.Symlinks, rel)
 	st, err := os.Stat(target)
 	if err != nil {
+		// Recorded, not propagated, for the same reason as the entry itself.
 		res.Unreadable = append(res.Unreadable, WalkError{rel, err.Error()})
-		return nil
+		return nil //nolint:nilerr // the error is the WalkError that was recorded
 	}
 	if st.IsDir() {
 		// Not indexed and not descended: a link to a directory is a link to
@@ -309,7 +314,7 @@ func probeCaseSensitivity(root string) bool {
 	defer func() { _ = os.RemoveAll(dir) }()
 
 	const lower = "probe"
-	if err := os.WriteFile(filepath.Join(dir, lower), []byte("x"), 0o600); err != nil {
+	if writeFileErr := os.WriteFile(filepath.Join(dir, lower), []byte("x"), 0o600); writeFileErr != nil {
 		return false
 	}
 	_, err = os.Stat(filepath.Join(dir, strings.ToUpper(lower)))

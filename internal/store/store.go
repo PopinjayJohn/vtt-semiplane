@@ -68,12 +68,12 @@ func Open(vault string) (*DB, error) {
 		return nil, fmt.Errorf("store: resolve vault path: %w", err)
 	}
 	dir := filepath.Join(abs, StateDirName)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("store: create %s: %w", dir, err)
+	if mkdirAllErr := os.MkdirAll(dir, 0o700); mkdirAllErr != nil {
+		return nil, fmt.Errorf("store: create %s: %w", dir, mkdirAllErr)
 	}
 	path := filepath.Join(dir, DBName)
-	if err := ensureDBFile(path); err != nil {
-		return nil, err
+	if ensureDBFileErr := ensureDBFile(path); ensureDBFileErr != nil {
+		return nil, ensureDBFileErr
 	}
 
 	write, err := sql.Open(Driver, fileDSN(path, writePragmas))
@@ -90,22 +90,22 @@ func Open(vault string) (*DB, error) {
 	// file it needs, so the writer must have created it first.
 	ctx, cancel := context.WithTimeout(context.Background(), openTimeout)
 	defer cancel()
-	if err := write.PingContext(ctx); err != nil {
-		write.Close()
-		return nil, fmt.Errorf("store: open write pool for %s: %w", path, err)
+	if pingContextErr := write.PingContext(ctx); pingContextErr != nil {
+		_ = write.Close()
+		return nil, fmt.Errorf("store: open write pool for %s: %w", path, pingContextErr)
 	}
 
 	read, err := sql.Open(Driver, fileDSN(path, readPragmas+"&mode=ro"))
 	if err != nil {
-		write.Close()
+		_ = write.Close()
 		return nil, fmt.Errorf("store: open read pool: %w", err)
 	}
 	read.SetMaxOpenConns(runtime.NumCPU())
 	read.SetMaxIdleConns(runtime.NumCPU())
 	read.SetConnMaxLifetime(0)
 	if err := read.PingContext(ctx); err != nil {
-		read.Close()
-		write.Close()
+		_ = read.Close()
+		_ = write.Close()
 		return nil, fmt.Errorf("store: open read pool for %s: %w", path, err)
 	}
 

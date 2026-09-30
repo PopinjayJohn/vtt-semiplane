@@ -341,8 +341,8 @@ func TestASecretBodyEditIsRecordedWithoutMovingAuthorization(t *testing.T) {
 		[]byte("The vault door is oak and the key is with the mayor."),
 		[]byte("The vault door is oak and the key is with the harbourmaster."), 1)
 
-	if err := h.svc.Save(ctx, h.dm(), id, edited, view.BaseHash); err != nil {
-		t.Fatalf("save: %v", err)
+	if saveErr := h.svc.Save(ctx, h.dm(), id, edited, view.BaseHash); saveErr != nil {
+		t.Fatalf("save: %v", saveErr)
 	}
 	after := h.vault.ReadFile(t, "Page.md")
 	if !bytes.Contains(after, []byte("harbourmaster")) {
@@ -468,8 +468,8 @@ func TestAFenceNamingAnAccountThatDoesNotExistIsHiddenFromEverybodyButADM(t *tes
 		t.Fatal("the buffer carried an orphan secret's body")
 	}
 	// A DM can, and the index never held it for anybody else.
-	if _, err := h.svc.EditView(ctx, h.dm(), id); err != nil {
-		t.Fatalf("a dm could not read the page: %v", err)
+	if _, editViewErr := h.svc.EditView(ctx, h.dm(), id); editViewErr != nil {
+		t.Fatalf("a dm could not read the page: %v", editViewErr)
 	}
 	if n := h.count(`SELECT COUNT(*) FROM secrets WHERE id = ?`, orphan); n != 0 {
 		t.Error("an orphan fence was indexed")
@@ -522,8 +522,8 @@ func TestAProblemInTheFileIsReportedByTheEditor(t *testing.T) {
 	}
 	// The body is still redacted for a principal who cannot read it, whatever the
 	// directive says — fail-closed is the direction §6 requires.
-	if _, err := h.svc.EditView(ctx, h.player(), id); err != nil {
-		t.Fatalf("player edit view: %v", err)
+	if _, editViewErr := h.svc.EditView(ctx, h.player(), id); editViewErr != nil {
+		t.Fatalf("player edit view: %v", editViewErr)
 	}
 	player, err := h.svc.EditView(ctx, h.player(), id)
 	if err != nil {

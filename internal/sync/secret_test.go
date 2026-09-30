@@ -84,8 +84,8 @@ func TestNoSecretEverEntersPageText(t *testing.T) {
 			if err == nil {
 				t.Errorf("a public snippet was produced: %q", snippet)
 			}
-			if n, err := store.CheckSecretIndexInvariant(context.Background(), h.db.Reader()); err != nil || n != 0 {
-				t.Errorf("the secret index invariant is %d, want 0 (%v)", n, err)
+			if n, checkSecretIndexInvariantErr := store.CheckSecretIndexInvariant(context.Background(), h.db.Reader()); checkSecretIndexInvariantErr != nil || n != 0 {
+				t.Errorf("the secret index invariant is %d, want 0 (%v)", n, checkSecretIndexInvariantErr)
 			}
 
 			hidden := visibility != "table"

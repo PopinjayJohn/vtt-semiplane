@@ -31,10 +31,10 @@ func TestTheRendererIsTotalOverItsViewModels(t *testing.T) {
 			t.Parallel()
 			// Exercise the real call sites: a view that renders as a document but
 			// not as a fragment is a view that can be navigated to and not swapped.
-			if err := r.Document(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), v); err != nil {
+			if err := r.Document(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), v); err != nil {
 				t.Errorf("the document does not render: %v", err)
 			}
-			if err := r.Fragment(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), v); err != nil {
+			if err := r.Fragment(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil), v); err != nil {
 				t.Errorf("the fragment does not render: %v", err)
 			}
 		})
@@ -198,7 +198,7 @@ func TestAPageWithSecretsRendersLocksAndBodies(t *testing.T) {
 func render(t *testing.T, r *web.Renderer, v httpapi.View, fragment bool) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	var err error
 	if fragment {
 		err = r.Fragment(rec, req, v)

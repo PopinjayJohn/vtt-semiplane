@@ -273,8 +273,8 @@ func ListBacklinks(ctx context.Context, q Queryer, p authz.Principal, targetPage
 			b    Backlink
 			line int64
 		)
-		if err := r.Scan(&b.Page.ID, &b.Page.Title, &b.Page.Path, &line); err != nil {
-			return fmt.Errorf("store: scan backlink: %w", err)
+		if scanErr := r.Scan(&b.Page.ID, &b.Page.Title, &b.Page.Path, &line); scanErr != nil {
+			return fmt.Errorf("store: scan backlink: %w", scanErr)
 		}
 		b.Line = int(line)
 		out = append(out, b)

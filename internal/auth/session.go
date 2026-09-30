@@ -89,7 +89,7 @@ func (s *Service) Create(ctx context.Context, req LoginRequest) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("auth: begin login: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Re-read inside the transaction. Between the read above and this one the
 	// account may have been disabled or have its role changed, and a session
@@ -166,16 +166,16 @@ func (s *Service) Session(ctx context.Context, rawToken string) (authz.Principal
 	// service was configured with.
 	absolute := sess.CreatedAt.Add(s.sessionTTL)
 	if !now.Before(sess.ExpiresAt) || !now.Before(absolute) {
-		if err := s.expire(ctx, id, "expired"); err != nil {
-			return authz.Principal{}, err
+		if expireErr := s.expire(ctx, id, "expired"); expireErr != nil {
+			return authz.Principal{}, expireErr
 		}
 		return s.anon(), nil
 	}
 
 	user, err := store.GetUserByID(ctx, s.db.Reader(), sess.UserID)
 	if errors.Is(err, store.ErrNoRows) {
-		if err := s.expire(ctx, id, "orphaned"); err != nil {
-			return authz.Principal{}, err
+		if expireErr := s.expire(ctx, id, "orphaned"); expireErr != nil {
+			return authz.Principal{}, expireErr
 		}
 		return s.anon(), nil
 	}
@@ -183,8 +183,8 @@ func (s *Service) Session(ctx context.Context, rawToken string) (authz.Principal
 		return authz.Principal{}, fmt.Errorf("auth: load account: %w", err)
 	}
 	if !user.Active() {
-		if err := s.expire(ctx, id, "disabled"); err != nil {
-			return authz.Principal{}, err
+		if expireErr := s.expire(ctx, id, "disabled"); expireErr != nil {
+			return authz.Principal{}, expireErr
 		}
 		return s.anon(), nil
 	}

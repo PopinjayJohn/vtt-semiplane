@@ -49,7 +49,3 @@ func Negotiate(r *http.Request) Shape {
 	}
 	return ShapeDocument
 }
-
-// wantsFragment is Negotiate's predicate, for a caller that has the shape
-// already and only wants the test.
-func wantsFragment(r *http.Request) bool { return Negotiate(r) == ShapeFragment }

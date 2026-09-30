@@ -69,13 +69,27 @@ func TestScopingLeavesEverythingThatIsNotAnAttachmentAlone(t *testing.T) {
 		// The fragment is space-encoded on the way into the attribute. That is
 		// correct and is not this file's decision to make either way.
 		{"a page wikilink with a fragment", "[[Wardens#The door]]\n", `href="/p/Wardens#The%20door"`},
-		// hasExtension is the whole of the "is this a file" decision, and its
-		// scheme guard is the reason these are not sent to an attachment route.
-		{"an https url", "[[https://example.invalid/a.png]]\n", `href="/p/https://example.invalid/a.png"`},
-		{"a mailto", "[[mailto:x@y.invalid]]\n", `href="/p/mailto:x@y.invalid"`},
-		{"a data uri", "[[data:image/png;base64,AAAA]]\n", `href="/p/data:image/png;base64,AAAA"`},
+		// A destination carrying a URI scheme is not ours and is left exactly as
+		// the author wrote it. These three used to expect an /p/ prefix, which was
+		// the wrong answer twice over: an external link was addressed inside the
+		// vault, and `javascript:` stopped being recognisable as a scheme, so
+		// goldmark's stripping of a dangerous href stopped happening and a link
+		// that had been inert became one the page carried. Leaving them alone
+		// hands the decision to the only component that knows which schemes are
+		// dangerous.
+		{"an https url", "[[https://example.invalid/a.png]]\n", `href="https://example.invalid/a.png"`},
+		{"a mailto", "[[mailto:x@y.invalid]]\n", `href="mailto:x@y.invalid"`},
+		// An image data URI is inert and passes through. The dangerous sibling —
+		// data:text/html — is goldmark's to strip, and is not this file's to
+		// assert: TestXSSFixturesAreEscaped in internal/httpapi pins it, and a
+		// second expectation of it here would be a second place to be wrong about
+		// which schemes are dangerous.
+		{"a data uri", "[[data:image/png;base64,AAAA]]\n", `href="data:image/png;base64,AAAA"`},
 		// An author who wrote a rooted path has answered the question themselves.
 		{"an already rooted name", "![[/vault/root/map.png]]\n", `src="/vault/root/map.png"`},
+		// A reference that climbs out of the directory it is written in has no
+		// address here, and inventing one would be a link the author never wrote.
+		{"a climbing reference", "[up](../outside.md)\n", `href="../outside.md"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,6 +176,49 @@ func TestAFenceBodyIsNeverScoped(t *testing.T) {
 	}
 	if strings.Contains(string(out), "hidden.png") {
 		t.Errorf("a name referenced only inside a secret reached the page:\n%s", out)
+	}
+}
+
+// TestASchemeBearingDestinationIsNeverRewritten is the property the
+// implementation almost broke, and it is here because the test that caught it
+// lives two packages away in an HTTP-level XSS walk.
+//
+// A destination that already looks like a URI must come out of the renderer
+// byte-identical. Rewriting one — even by prefixing the /p/ root — destroys the
+// thing goldmark looks at: it decides whether a scheme is dangerous by the shape
+// of the destination, so `/p/javascript:alert(1)` is no longer a scheme at all
+// and the href is emitted intact. The link goes from inert to carried.
+//
+// Every scheme is in scope and none is listed here, because a list is what made
+// this wrong: an earlier version enumerated mailto, tel and data, and
+// javascript: was the one that was missing.
+func TestASchemeBearingDestinationIsNeverRewritten(t *testing.T) {
+	t.Parallel()
+	for _, scheme := range []string{
+		"https://example.invalid/a.png",
+		"mailto:x@y.invalid",
+		"data:image/png;base64,AAAA",
+		"javascript:alert(1)",
+		"vbscript:msgbox(1)",
+		"file:///etc/passwd",
+		"JAVASCRIPT:alert(1)",
+	} {
+		t.Run(scheme, func(t *testing.T) {
+			t.Parallel()
+			for _, body := range []string{
+				"[[" + scheme + "]]\n",
+				"[" + scheme + "](" + scheme + ")\n",
+				"![" + scheme + "](" + scheme + ")\n",
+			} {
+				out := scopeSrc(t, body)
+				if !strings.Contains(out, scheme) {
+					t.Errorf("%q was rewritten rather than passed through:\n%s", body, out)
+				}
+				if strings.Contains(out, pageURLPrefix+scheme) {
+					t.Errorf("%q was given the /p/ root, so a scheme-shaped destination stopped being one:\n%s", body, out)
+				}
+			}
+		})
 	}
 }
 

@@ -209,8 +209,8 @@ func Query(ctx context.Context, db Queryer, p authz.Principal, q string, opts Op
 		offset = 0
 	}
 
-	if err := assertSecretIndexInvariant(ctx, db); err != nil {
-		return Result{}, err
+	if assertSecretIndexInvariantErr := assertSecretIndexInvariant(ctx, db); assertSecretIndexInvariantErr != nil {
+		return Result{}, assertSecretIndexInvariantErr
 	}
 
 	pageHits, err := queryPageHits(ctx, db, match, limit, offset)
@@ -265,7 +265,7 @@ func queryPageHits(ctx context.Context, db Queryer, match string, limit, offset 
 	if err != nil {
 		return nil, fmt.Errorf("search: page query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Hit
 	for rows.Next() {
@@ -274,8 +274,8 @@ func queryPageHits(ctx context.Context, db Queryer, match string, limit, offset 
 			updatedAt string
 			snippet   string
 		)
-		if err := rows.Scan(&h.PageID, &h.Title, &h.Path, &updatedAt, &snippet, &h.Score); err != nil {
-			return nil, fmt.Errorf("search: scan page hit: %w", err)
+		if scanErr := rows.Scan(&h.PageID, &h.Title, &h.Path, &updatedAt, &snippet, &h.Score); scanErr != nil {
+			return nil, fmt.Errorf("search: scan page hit: %w", scanErr)
 		}
 		if h.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
 			return nil, fmt.Errorf("search: page %d updated_at: %w", h.PageID, err)
@@ -308,7 +308,7 @@ func querySecretHits(ctx context.Context, db Queryer, p authz.Principal, match s
 	if err != nil {
 		return nil, fmt.Errorf("search: secret query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Hit
 	for rows.Next() {
@@ -317,8 +317,8 @@ func querySecretHits(ctx context.Context, db Queryer, p authz.Principal, match s
 			secretID  string
 			updatedAt string
 		)
-		if err := rows.Scan(&secretID, &h.PageID, &h.Title, &h.Path, &updatedAt, &h.Score); err != nil {
-			return nil, fmt.Errorf("search: scan secret hit: %w", err)
+		if scanErr := rows.Scan(&secretID, &h.PageID, &h.Title, &h.Path, &updatedAt, &h.Score); scanErr != nil {
+			return nil, fmt.Errorf("search: scan secret hit: %w", scanErr)
 		}
 		if h.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
 			return nil, fmt.Errorf("search: secret %s updated_at: %w", secretID, err)

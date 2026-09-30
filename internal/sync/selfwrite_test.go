@@ -109,7 +109,7 @@ func TestAWatcherSaveIsSuppressedEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	wr := h.writer()
 	onDisk := h.vault.ReadFile(t, "Page.md")
@@ -168,7 +168,7 @@ func TestSelfwriteIsAskedThroughTheReadPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	done := make(chan bool, 1)
 	go func() {
 		ok, err := sw.IsSelfwrite(ctx, "Page.md", vault.Hash([]byte("x")))

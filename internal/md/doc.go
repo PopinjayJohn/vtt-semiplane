@@ -5,5 +5,4 @@
 // md.Span it came from, and therefore a secret_id or the empty string. That
 // single classification point is what makes "a secret never enters a derived
 // index" implementable rather than aspirational.
-
 package md

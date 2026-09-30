@@ -11,42 +11,6 @@ import (
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
 )
 
-// visibilityCase is one cell of the authorization matrix that every
-// predicate-using query must agree about. The per-principal expectations are
-// computed from §8.2 by expectVisible, not from this table; it is kept for the
-// order it documents.
-type visibilityCase struct {
-	name      string
-	vis       authz.Visibility
-	principal authz.Principal
-	want      bool
-}
-
-// matrix is every (visibility, is_dm, is_author, is_page_owner) combination that
-// §6.4 turns on, in the order the plan lists them.
-//
-// The setup gives page 1 three secrets authored by user 2 (alice) and page 2 two
-// authored by user 1 (dm). Alice owns page 1; dm owns page 2. That is what makes
-// the private rule's two routes — authored it, or own the page — distinguishable
-// at all: a rule that only tested one of them would look correct here.
-var matrix = []visibilityCase{
-	{"dm_seen_by_dm", authz.VisibilityDM, authz.ForUser(1, "dm", authz.RoleDM, false), true},
-	{"dm_seen_by_admin", authz.VisibilityDM, authz.ForUser(3, "root", authz.RoleAdmin, false), true},
-	{"dm_hidden_from_page_owner", authz.VisibilityDM, authz.ForUser(2, "alice", authz.RolePlayer, false), false},
-	{"dm_hidden_from_other_player", authz.VisibilityDM, authz.ForUser(4, "bob", authz.RolePlayer, false), false},
-	{"dm_hidden_from_anon", authz.VisibilityDM, authz.Anonymous(true), false},
-
-	{"private_seen_by_dm", authz.VisibilityPrivate, authz.ForUser(1, "dm", authz.RoleDM, false), true},
-	{"private_seen_by_author", authz.VisibilityPrivate, authz.ForUser(2, "alice", authz.RolePlayer, false), true},
-	{"private_seen_by_page_owner", authz.VisibilityPrivate, authz.ForUser(5, "carol", authz.RolePlayer, false), true},
-	{"private_hidden_from_other_player", authz.VisibilityPrivate, authz.ForUser(4, "bob", authz.RolePlayer, false), false},
-	{"private_hidden_from_anon", authz.VisibilityPrivate, authz.Anonymous(true), false},
-
-	{"table_seen_by_any_user", authz.VisibilityTable, authz.ForUser(4, "bob", authz.RolePlayer, false), true},
-	{"table_seen_by_dm", authz.VisibilityTable, authz.ForUser(1, "dm", authz.RoleDM, false), true},
-	{"table_hidden_from_anon", authz.VisibilityTable, authz.Anonymous(true), false},
-}
-
 // secretMeta is the fixture's own record of one secret, kept so the test can
 // decide visibility from the §8.2 table rather than by asking the code under
 // test.
@@ -127,7 +91,7 @@ func newMatrixFixture(t *testing.T) *matrixFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	f := &matrixFixture{
 		db:      db,
@@ -490,9 +454,9 @@ func TestPredicateMatrixAgrees(t *testing.T) {
 				{f.dmOnlyAttachment, expectVisible(p, f.secrets[authz.VisibilityDM])},
 				{f.unreferencedAttachment, false},
 			} {
-				got, err := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, tc.name)
-				if err != nil {
-					t.Fatalf("attachment %s: %v", tc.name, err)
+				got, attachmentVisibleToErr := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, tc.name)
+				if attachmentVisibleToErr != nil {
+					t.Fatalf("attachment %s: %v", tc.name, attachmentVisibleToErr)
 				}
 				if got != tc.want {
 					t.Errorf("attachment %s visible = %v, want %v", tc.name, got, tc.want)
@@ -501,8 +465,8 @@ func TestPredicateMatrixAgrees(t *testing.T) {
 			// A name that is not on this page answers the same way as one that
 			// is hidden, because a route that could tell them apart would be a
 			// route that confirms the existence of a DM's portrait.
-			if got, err := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, "assets/guessed.png"); err != nil || got {
-				t.Errorf("a guessed attachment name is visible = %v (err %v), want false", got, err)
+			if got, attachmentVisibleToErr := AttachmentVisibleTo(ctx, f.db.Writer(), p, f.sourcePage, "assets/guessed.png"); attachmentVisibleToErr != nil || got {
+				t.Errorf("a guessed attachment name is visible = %v (attachmentVisibleToErr %v), want false", got, attachmentVisibleToErr)
 			}
 
 			// Tag counts, which §6.4 also names.
@@ -563,8 +527,8 @@ func TestPredicateMatrixAgrees(t *testing.T) {
 
 			// A page that was never written is ErrNoRows and not a zero card, so
 			// a caller cannot mistake "nothing here" for "an empty page".
-			if _, err := GetPageSummary(ctx, f.db.Writer(), p, 999999); !errors.Is(err, ErrNoRows) {
-				t.Errorf("a summary of a page that does not exist is %v, want ErrNoRows", err)
+			if _, getPageSummaryErr := GetPageSummary(ctx, f.db.Writer(), p, 999999); !errors.Is(getPageSummaryErr, ErrNoRows) {
+				t.Errorf("a summary of a page that does not exist is %v, want ErrNoRows", getPageSummaryErr)
 			}
 
 			// The by-type pair, which is what a feature plugin reads a
@@ -748,18 +712,18 @@ func TestPageOwnershipAndAliases(t *testing.T) {
 	if len(byOwner) != 0 {
 		t.Errorf("the DM owns nothing, got %d pages", len(byOwner))
 	}
-	if err := RemovePageOwner(ctx, db.Writer(), page, alice); err != nil {
-		t.Fatal(err)
+	if removePageOwnerErr := RemovePageOwner(ctx, db.Writer(), page, alice); removePageOwnerErr != nil {
+		t.Fatal(removePageOwnerErr)
 	}
 	if ok, _ := IsPageOwner(ctx, db.Writer(), page, alice); ok {
 		t.Error("ownership survived removal")
 	}
 
-	if err := AddPageAlias(ctx, db.Writer(), page, "NPC-Gundren"); err != nil {
-		t.Fatal(err)
+	if addPageAliasErr := AddPageAlias(ctx, db.Writer(), page, "NPC-Gundren"); addPageAliasErr != nil {
+		t.Fatal(addPageAliasErr)
 	}
-	if err := AddPageAlias(ctx, db.Writer(), page, "NPC-Gundren"); err != nil {
-		t.Errorf("duplicate alias: %v", err)
+	if addPageAliasErr := AddPageAlias(ctx, db.Writer(), page, "NPC-Gundren"); addPageAliasErr != nil {
+		t.Errorf("duplicate alias: %v", addPageAliasErr)
 	}
 	aliases, err := ListPageAliases(ctx, db.Writer(), page)
 	if err != nil {
@@ -808,8 +772,8 @@ func TestUnresolvedLinksAreKept(t *testing.T) {
 	if len(unresolved) != 1 || unresolved[0].TargetRaw != "[[Nowhere]]" {
 		t.Fatalf("unresolved = %v, want just the dangling link", unresolved)
 	}
-	if n, err := CountOutgoingLinks(ctx, db.Writer(), page); err != nil || n != 1 {
-		t.Errorf("dangling count = %d (err %v), want 1", n, err)
+	if n, countOutgoingLinksErr := CountOutgoingLinks(ctx, db.Writer(), page); countOutgoingLinksErr != nil || n != 1 {
+		t.Errorf("dangling count = %d (countOutgoingLinksErr %v), want 1", n, countOutgoingLinksErr)
 	}
 	all, err := ListLinksByPage(ctx, db.Writer(), page)
 	if err != nil {

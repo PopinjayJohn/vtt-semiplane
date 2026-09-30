@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -124,7 +125,7 @@ func AttachmentVisibleTo(ctx context.Context, q Queryer, p authz.Principal, page
 		pageID, name, string(LinkAttachment), name,
 		sql.Named("uid", uid), sql.Named("is_dm", isDM)).Scan(&one)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("store: check attachment on page %d: %w", pageID, err)
@@ -187,7 +188,7 @@ func HasPluginMigration(ctx context.Context, q Queryer, pluginID string, version
 		`SELECT 1 FROM plugin_migrations WHERE plugin_id = ? AND version = ?`,
 		pluginID, version).Scan(&one)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("store: check migration %d of %s: %w", version, pluginID, err)
@@ -223,12 +224,12 @@ func ListPluginMigrations(ctx context.Context, q Queryer, pluginID string) ([]Pl
 			m  PluginMigration
 			at string
 		)
-		if err := r.Scan(&m.PluginID, &m.Version, &at); err != nil {
-			return fmt.Errorf("store: scan plugin migration: %w", err)
+		if scanErr := r.Scan(&m.PluginID, &m.Version, &at); scanErr != nil {
+			return fmt.Errorf("store: scan plugin migration: %w", scanErr)
 		}
-		var err error
-		if m.AppliedAt, err = ParseTime(at); err != nil {
-			return err
+		var appliedErr error
+		if m.AppliedAt, appliedErr = ParseTime(at); appliedErr != nil {
+			return appliedErr
 		}
 		out = append(out, m)
 		return nil
@@ -288,8 +289,10 @@ func SelfwriteMatches(ctx context.Context, q Queryer, path string, hash []byte, 
 	)
 	err := q.QueryRowContext(ctx, `SELECT hash, expires_at FROM selfwrites WHERE path = ?`, path).
 		Scan(&stored, &expiresAt)
+	// errors.Is, not ==, for the reason given on pagestore.go: a Queryer that
+	// wraps its errors would otherwise report a missing selfwrite as a failure.
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("store: read selfwrite for %s: %w", path, err)

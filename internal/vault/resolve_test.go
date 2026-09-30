@@ -268,7 +268,7 @@ func TestResolveAndReadReportDifferentFailures(t *testing.T) {
 	if errors.Is(err, ErrNotFound) {
 		t.Errorf("an escape was reported as a missing file: %v", err)
 	}
-	if ErrOutsideVault == ErrNotFound {
+	if ErrOutsideVault == ErrNotFound { //nolint:errorlint // identity of two sentinels is the assertion
 		t.Error("the two sentinels are not distinct values")
 	}
 }

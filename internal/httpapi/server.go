@@ -457,7 +457,7 @@ func withValue(ctx context.Context, key contextKey, value any) context.Context {
 // anything the panicking code had in hand, including a fragment of a vault
 // file, so only its type, its length and a hash of it are recorded.
 func logRecord(v any) slog.Value {
-	msg := ""
+	var msg string
 	switch t := v.(type) {
 	case error:
 		msg = t.Error()

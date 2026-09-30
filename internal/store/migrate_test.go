@@ -100,9 +100,9 @@ func TestMigrationsFromEveryVersion(t *testing.T) {
 			// A row written before the byte-offset columns existed must come out
 			// of the migration as "not recorded" rather than as offset 0.
 			var start, length int64
-			if err := db.Writer().QueryRowContext(ctx,
-				`SELECT byte_start, byte_len FROM links WHERE target_raw = 'Ash'`).Scan(&start, &length); err != nil {
-				t.Fatalf("seeded link lost: %v", err)
+			if writerErr := db.Writer().QueryRowContext(ctx,
+				`SELECT byte_start, byte_len FROM links WHERE target_raw = 'Ash'`).Scan(&start, &length); writerErr != nil {
+				t.Fatalf("seeded link lost: %v", writerErr)
 			}
 			if start != LinkByteStartUnset || length != 0 {
 				t.Errorf("a pre-migration link reads byte_start=%d byte_len=%d, want %d/0",
@@ -379,8 +379,8 @@ func TestQueryIterErrorPropagated(t *testing.T) {
 	var iterErr error
 	err = ForEach(rows, func(r Rows) error {
 		var id, v int64
-		if err := r.Scan(&id, &v); err != nil {
-			return err
+		if scanErr := r.Scan(&id, &v); scanErr != nil {
+			return scanErr
 		}
 		seen++
 		return nil
@@ -448,7 +448,7 @@ func TestForEachClosesRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ForEach(rows, func(Rows) error { return errors.New("bail") }); err == nil {
+	if forEachErr := ForEach(rows, func(Rows) error { return errors.New("bail") }); forEachErr == nil {
 		t.Fatal("expected the callback error")
 	}
 	// With one write connection, a leaked cursor would make this hang or fail.
@@ -456,5 +456,5 @@ func TestForEachClosesRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rows were not closed: %v", err)
 	}
-	probe.Close()
+	_ = probe.Close()
 }

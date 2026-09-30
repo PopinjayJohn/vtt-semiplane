@@ -249,6 +249,8 @@ type NavItem struct {
 // a panel declaring an unknown slot is dropped with a warning.
 type Slot string
 
+// The slots core renders containers for. A panel declaring anything else is
+// dropped with a warning rather than rendered nowhere.
 const (
 	SlotRightTop      Slot = "right-top"
 	SlotRightMid      Slot = "right-mid"
@@ -455,6 +457,8 @@ type KV struct {
 // Level is a log severity.
 type Level int
 
+// The severities a plugin may log at, in ascending order. The host maps them
+// onto its own levels; a plugin cannot choose a destination.
 const (
 	LevelDebug Level = iota
 	LevelInfo

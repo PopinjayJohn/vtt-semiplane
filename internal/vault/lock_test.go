@@ -104,8 +104,8 @@ func TestLockReleaseIsIdempotent(t *testing.T) {
 	}
 	h.Release()
 	h.Release()
-	if err := h.Close(); err != nil {
-		t.Errorf("Close after Release = %v", err)
+	if closeErr := h.Close(); closeErr != nil {
+		t.Errorf("Close after Release = %v", closeErr)
 	}
 	h.Release()
 

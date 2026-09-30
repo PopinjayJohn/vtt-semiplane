@@ -52,7 +52,7 @@ func Read(ctx context.Context, p Path) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", p.Rel(), err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	b, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {

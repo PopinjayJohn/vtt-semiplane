@@ -7,5 +7,4 @@
 // internal/secrets: the arrow runs secrets -> authz, so that the redactor can
 // ask CanReadSecret without a cycle. See AGENTS.md for the full dependency
 // order.
-
 package authz

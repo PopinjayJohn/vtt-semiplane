@@ -182,8 +182,8 @@ func TestTheConflictPageRedactsTheOnDiskSideForAnActorWhoCannotReadIt(t *testing
 		t.Fatalf("open the index: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); err != nil {
-		t.Fatalf("migrate the index: %v", err)
+	if migrateErr := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); migrateErr != nil {
+		t.Fatalf("migrate the index: %v", migrateErr)
 	}
 
 	dm := insertUser(t, db, 1, "dungeonmaster", authz.RoleDM)

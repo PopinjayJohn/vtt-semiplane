@@ -190,7 +190,11 @@ func (w *Watcher) addTree(ctx context.Context, dir string) {
 	}
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			// Best-effort recovery of a tree that appeared; the 60 second scan
+			// is the guarantee and an entry that cannot be read here is read
+			// there. Propagating would abandon the rest of the tree, which is
+			// the one outcome that loses more than it recovers.
+			return nil //nolint:nilerr // the scan is the correctness guarantee
 		}
 		if d.IsDir() {
 			if p != dir && ignoredDirName(d.Name()) {

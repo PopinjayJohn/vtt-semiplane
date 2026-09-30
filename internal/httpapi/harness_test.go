@@ -164,11 +164,11 @@ func newFixturePlugins(t testing.TB, files map[string]string, plugins plugin.Reg
 	// that records that it was asked and copies nothing: the vault is a temp
 	// directory holding three files this test wrote.
 	var backupCalls int
-	if err := store.Migrate(context.Background(), db.Writer(), func(context.Context) error {
+	if migrateErr := store.Migrate(context.Background(), db.Writer(), func(context.Context) error {
 		backupCalls++
 		return nil
-	}); err != nil {
-		t.Fatalf("migrate the index: %v", err)
+	}); migrateErr != nil {
+		t.Fatalf("migrate the index: %v", migrateErr)
 	}
 	if backupCalls != 1 {
 		t.Fatalf("the migration ran with %d backup hooks, want 1", backupCalls)
@@ -186,16 +186,16 @@ func newFixturePlugins(t testing.TB, files map[string]string, plugins plugin.Reg
 	// this key rather than re-deriving readiness. A fixture that left it unset
 	// would be testing a vault mid-boot, which is not what any of these tests are
 	// about.
-	if err := store.MetaSet(context.Background(), db.Writer(), store.KeyBootState, store.BootStateReady); err != nil {
-		t.Fatalf("record the boot state: %v", err)
+	if metaSetErr := store.MetaSet(context.Background(), db.Writer(), store.KeyBootState, store.BootStateReady); metaSetErr != nil {
+		t.Fatalf("record the boot state: %v", metaSetErr)
 	}
 
 	res, err := ix.Walk(context.Background())
 	if err != nil {
 		t.Fatalf("walk the vault: %v", err)
 	}
-	if _, err := ix.IndexBatch(context.Background(), res.Files); err != nil {
-		t.Fatalf("index the vault: %v", err)
+	if _, indexBatchErr := ix.IndexBatch(context.Background(), res.Files); indexBatchErr != nil {
+		t.Fatalf("index the vault: %v", indexBatchErr)
 	}
 
 	policy := authz.NewPolicy(cfg.AllowAnonymousRead)
@@ -264,18 +264,6 @@ func (fx *fixture) logs() string {
 	return fx.mainLog.String() + fx.auditLog.String()
 }
 
-// discardLogs turns both sinks into io.Discard from here on.
-//
-// Capture is the default because a leak suite that had to opt in would be a leak
-// suite somebody forgets to opt in to, and a fixture that quietly discards is
-// indistinguishable from a fixture that is clean. A test that wants the old
-// behaviour asks for it in one place here rather than by building its own
-// logger, which is the way a harness ends up with two of them.
-func (fx *fixture) discardLogs() {
-	fx.mainLog.discard()
-	fx.auditLog.discard()
-}
-
 // safeBuffer is a bytes.Buffer that a request handler may write to from any
 // goroutine while a test reads it.
 //
@@ -306,14 +294,6 @@ func (b *safeBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// discard empties the buffer and refuses everything written after it.
-func (b *safeBuffer) discard() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.dropping = true
-	b.buf.Reset()
 }
 
 // campaignFiles is the campaign every fixture is seeded with.
@@ -930,9 +910,9 @@ func (s *session) prime() {
 	// back to the second is one round trip for a signed-in session and two for an
 	// anonymous one, which is the right order: the anonymous case is the one that
 	// happens once, and the signed-in case happens before every mutation.
-	s.send(s.get("/"))
+	drain(s.send(s.get("/"))) //nolint:bodyclose // drain closes the body it is handed
 	if s.token() == "" {
-		s.send(s.get("/login"))
+		drain(s.send(s.get("/login"))) //nolint:bodyclose // drain closes the body it is handed
 	}
 }
 
@@ -995,13 +975,25 @@ func (s *session) send(c *call) *http.Response {
 // text performs a request and returns the body as a string.
 func (s *session) text(c *call) string {
 	s.t.Helper()
-	return s.read(s.do(c))
+	resp := s.do(c) //nolint:bodyclose // s.read below closes the body it is handed
+	// read closes the body, and so does the drain; the drain is here because
+	// bodyclose only credits a close it can see at this call site, and it reads
+	// what read does out of read's own shape.
+	defer drain(resp)
+	return s.read(resp)
 }
 
 // read returns a response's body as a string and closes it.
+//
+// The close is a deferred *call* and not a deferred closure over it. bodyclose
+// summarises a function that closes the body it is handed from the shape of
+// that close, and `defer func() { _ = resp.Body.Close() }()` — the shape
+// errcheck wants — is invisible to it, so every `s.read(resp)` in the package
+// would read as an unclosed response. The harness closes every body, and this
+// line is what makes that visible to a linter rather than a claim.
 func (s *session) read(resp *http.Response) string {
 	s.t.Helper()
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // a read handle's close cannot fail in a way a test can act on
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		s.t.Fatalf("read a response body: %v", err)
@@ -1015,6 +1007,25 @@ func (s *session) status(c *call) int {
 	resp := s.do(c)
 	defer drain(resp)
 	return resp.StatusCode
+}
+
+// getBody performs a GET and returns the body whatever it answered.
+//
+// It exists beside getOK because a test that asserts about a 404 or a redirect
+// needs the bytes of that answer, and spelling it as s.read(s.do(s.get(p)))
+// hands a response to a caller who must remember to close it. read does close
+// it; writing it out anyway is a chance to forget, and bodyclose reports every
+// one of those chances as though they were real.
+//
+// The suppression below is a limitation of the linter rather than a claim about
+// the code: bodyclose derives its interprocedural summary from the shape of the
+// close inside the callee, and it does not follow a call to read, which closes
+// the body with a bare `defer resp.Body.Close()`. Every site that spells this
+// out by hand reports the same finding, so the one suppression lives here where
+// the close actually is.
+func (s *session) getBody(path string) string {
+	s.t.Helper()
+	return s.read(s.do(s.get(path))) //nolint:bodyclose // s.read closes the body; see above
 }
 
 // get performs a GET and returns the body.
@@ -1087,29 +1098,6 @@ func (fx *fixture) sessionFor(raw string) *session {
 	}
 	s.jar.SetCookies(u, []*http.Cookie{{Name: httpapi.SessionCookie, Value: raw, Path: "/"}})
 	return s
-}
-
-// asUserPass signs in and returns the response without asserting, for the tests
-// that want to inspect a failure.
-func (fx *fixture) asUserPass(user, pass string) *session {
-	fx.t.Helper()
-	s := fx.newSession()
-	resp := s.login(user, pass)
-	drain(resp)
-	return s
-}
-
-// loginReq is the login request the harness builds.
-func loginReq(user, pass string) auth.LoginRequest {
-	return auth.LoginRequest{Username: user, Passphrase: pass}
-}
-
-// loginCall is the login form submission the harness builds.
-func loginCall(user, pass, csrf string) *call {
-	return &call{
-		method: http.MethodPost, path: "/login",
-		form: url.Values{"username": {user}, "passphrase": {pass}}, csrf: csrf,
-	}
 }
 
 // disable turns an account off, which must leave it with no session at all.
@@ -1246,7 +1234,7 @@ func (fx *fixture) sessionRows(userID int64) string {
 	if err != nil {
 		return "could not read the rows: " + err.Error()
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var id, created, expires string
@@ -1300,9 +1288,14 @@ func writeVault(t testing.TB, dir string, files map[string]string) {
 
 // drain closes a response and reads whatever is left, so a test that only wants
 // a status does not leak a connection.
+// drain releases a response whose body no assertion will read.
+//
+// The close is a deferred *call* for the same reason read's is: bodyclose reads
+// this function's shape to decide whether a caller that hands it a response
+// closed the body, and a close inside a discarded closure is invisible to it.
 func drain(resp *http.Response) {
 	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // a drained read handle's close is not actionable
 }
 
 // startTime is the instant every fixture's clock starts at.

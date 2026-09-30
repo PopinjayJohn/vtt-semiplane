@@ -458,9 +458,9 @@ func (ix *Indexer) IndexBatch(ctx context.Context, paths []string) (BatchResult,
 		}
 	}
 	for _, rel := range gone {
-		res, err := ix.removeOne(ctx, rel)
-		if err != nil {
-			return out, err
+		res, removeOneErr := ix.removeOne(ctx, rel)
+		if removeOneErr != nil {
+			return out, removeOneErr
 		}
 		out.Indexed = append(out.Indexed, res)
 	}
@@ -470,9 +470,9 @@ func (ix *Indexer) IndexBatch(ctx context.Context, paths []string) (BatchResult,
 		if contains(gone, rel) {
 			continue
 		}
-		res, err := ix.indexOne(ctx, rel, resolver, indexIfChanged)
-		if err != nil {
-			return out, err
+		res, indexOneErr := ix.indexOne(ctx, rel, resolver, indexIfChanged)
+		if indexOneErr != nil {
+			return out, indexOneErr
 		}
 		out.Indexed = append(out.Indexed, res)
 		switch {
@@ -759,7 +759,7 @@ func (ix *Indexer) writeOne(
 	}
 	// Rollback after a successful commit is a no-op, so this one deferred call
 	// is the whole error path rather than a second return to remember.
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// The page row is re-read inside the transaction, because the check above
 	// happened on the read pool and another pass may have written since.
@@ -827,20 +827,20 @@ func (ix *Indexer) writeOne(
 	if kind == ChangeCreated {
 		source = store.RevisionCreate
 	}
-	if _, err := store.AppendRevision(ctx, tx, store.Revision{
+	if _, appendRevisionErr := store.AppendRevision(ctx, tx, store.Revision{
 		PageID:      pageID,
 		ContentHash: hash,
 		Content:     string(src),
 		At:          now,
 		Source:      source,
-	}); err != nil {
-		return res, err
+	}); appendRevisionErr != nil {
+		return res, appendRevisionErr
 	}
-	if _, err := store.PruneRevisions(ctx, tx, pageID); err != nil {
-		return res, err
+	if _, pruneRevisionsErr := store.PruneRevisions(ctx, tx, pageID); pruneRevisionsErr != nil {
+		return res, pruneRevisionsErr
 	}
-	if err := touchLastChange(ctx, tx, st.ModTime()); err != nil {
-		return res, err
+	if touchLastChangeErr := touchLastChange(ctx, tx, st.ModTime()); touchLastChangeErr != nil {
+		return res, touchLastChangeErr
 	}
 	// A visibility that moved under the index is an authorization change whether
 	// or not anybody pressed a button: a DM who edits a fence in Obsidian has
@@ -918,20 +918,20 @@ func (ix *Indexer) writeFacts(
 	if err != nil {
 		return nil, err
 	}
-	if err := ix.writeAttachments(ctx, tx, pageID, facts.Attachments); err != nil {
-		return nil, err
+	if writeAttachmentsErr := ix.writeAttachments(ctx, tx, pageID, facts.Attachments); writeAttachmentsErr != nil {
+		return nil, writeAttachmentsErr
 	}
 	// Remembered rather than acted on: a reference to a page that does not exist
 	// yet is not an error, it is a reference to a page the DM has not written.
 	ix.rememberDangling(rel, missed)
-	if err := writeHeadings(ctx, tx, pageID, facts.Headings); err != nil {
-		return nil, err
+	if writeHeadingsErr := writeHeadings(ctx, tx, pageID, facts.Headings); writeHeadingsErr != nil {
+		return nil, writeHeadingsErr
 	}
-	if err := store.ReplacePageTags(ctx, tx, pageID, pageTags(facts.Tags)); err != nil {
-		return nil, err
+	if replacePageTagsErr := store.ReplacePageTags(ctx, tx, pageID, pageTags(facts.Tags)); replacePageTagsErr != nil {
+		return nil, replacePageTagsErr
 	}
-	if err := store.ReplacePageText(ctx, tx, pageText(doc, facts, pageID, title)); err != nil {
-		return nil, err
+	if replacePageTextErr := store.ReplacePageText(ctx, tx, pageText(doc, facts, pageID, title)); replacePageTextErr != nil {
+		return nil, replacePageTextErr
 	}
 	unresolved, err := ix.writeSecrets(ctx, tx, rel, pageID, fences, res)
 	if err != nil {
@@ -1444,7 +1444,7 @@ func (ix *Indexer) removeOne(ctx context.Context, rel string) (Result, error) {
 	if err != nil {
 		return Result{Path: rel}, fmt.Errorf("sync: begin removing %s: %w", rel, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := store.DeletePage(ctx, tx, prev.ID); err != nil {
 		return Result{Path: rel}, err
 	}
@@ -1558,9 +1558,9 @@ func (ix *Indexer) RemoveMissing(ctx context.Context, seen []string) ([]Result, 
 		if keep[p.Path] {
 			continue
 		}
-		res, err := ix.removeOne(ctx, p.Path)
-		if err != nil {
-			return out, err
+		res, removeOneErr := ix.removeOne(ctx, p.Path)
+		if removeOneErr != nil {
+			return out, removeOneErr
 		}
 		out = append(out, res)
 	}

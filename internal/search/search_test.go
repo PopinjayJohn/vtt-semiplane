@@ -26,7 +26,7 @@ func newVault(t *testing.T) (*store.DB, int64, map[string]int64) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	if err := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -572,7 +572,7 @@ func injectionCorpus(random int) []string {
 		"a AND (b OR c)", `""`, `"""`, `""""`, `"""""""`, `a" OR "b`, `"a"b"`,
 		"DROP TABLE pages", "'; DELETE FROM secrets; --", "1=1", "a OR 1=1",
 		"a\x00b", "\x00", "\xff", "\xff\xfe\xfd", "a\u202eb", "a\U0001F600b",
-		"日本語", "𝔘𝔫𝔦", "café", "cafe", "½", "Ⅻ", "‮", "",
+		"日本語", "𝔘𝔫𝔦", "café", "cafe", "½", "Ⅻ", "\u202e", "",
 		"-" + strings.Repeat("a", 300), strings.Repeat("-", 64),
 		strings.Repeat("a ", 2000), strings.Repeat("\"", 200),
 		"a OR " + strings.Repeat("b OR ", 100) + "c",

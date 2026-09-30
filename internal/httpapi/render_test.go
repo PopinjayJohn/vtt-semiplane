@@ -148,10 +148,10 @@ func TestAssetsAreServedFromTheBinary(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the asset is not in the embedded filesystem: %v", err)
 			}
-			defer embedded.Close()
+			defer func() { _ = embedded.Close() }()
 			buf := make([]byte, 1<<22)
 			n, _ := embedded.Read(buf)
-			if string(body) != string(buf[:n]) {
+			if body != string(buf[:n]) {
 				t.Errorf("the served bytes differ from the embedded file: %d served, %d embedded", len(body), n)
 			}
 			if n == 0 {

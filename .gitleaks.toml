@@ -1,0 +1,94 @@
+# gitleaks configuration. One allowlist entry, and it exists because this
+# application has a secret syntax whose identifiers look like credentials.
+#
+# ## What the rule is actually matching
+#
+# gitleaks' `generic-api-key` rule keys off a word such as `secret`, `id` or
+# `token` near a `:` or `=`. This application's on-disk secret syntax is a fenced
+# block whose directive line begins exactly that way (AGENTS.md 6):
+#
+#   ```secret id=5d2e8ba604c7 visibility=private author=thia created=… title="…"
+#
+# so the rule fires and extracts the fence's **id** as the secret. That id is
+# 12 lowercase hex characters this application mints so it can find a fence
+# again on save. It is not a credential, it authenticates nothing, and it is not
+# even unique across a vault. Measured with gitleaks 8.24.3, `Secret` is those
+# 12 characters and nothing else in all 10 findings the runner reported:
+#
+#   File: internal/sample/campaign/People/Characters/Thia Vantage.md  Secret: 5d2e8ba604c7
+#   File: internal/sample/campaign/House Rules/Halting Rules.md       Secret: 07a29f54e8d1
+#   File: internal/sample/campaign/Quests/The Ninefold Oath.md       Secret: a71b3e9d04c6
+#   … ten files, all `RuleID: generic-api-key`, all the same shape
+#
+# ## The one fact this encodes
+#
+# `^[0-9a-f]{12}$` is this application's secret-id format, and that is a claim
+# about the repository rather than about any one file — so it keeps working when
+# the file is refactored, which a rule written as "the text `secret id=` appears
+# here" does not. It is applied to the extracted **secret**, not to the line,
+# because the same id reaches gitleaks through at least four spellings and a
+# match-scoped rule had to chase all of them:
+#
+#   `secret id=5d2e8ba604c7 `                     the fence directive
+#   `SecretID: "7f3a91c40d2e"`                    a Go struct field
+#   `secret_id":"7f3a91c40d2e"`                   a JSON log line
+#   `authz.VisibilityTable, "a1b2c3d4e5f6"`       a table-driven test case
+#
+# ## `[allowlist]`, and why the brackets and the target are load-bearing
+#
+# Single brackets, and `regexTarget = "secret"`. gitleaks 8.24.3's parsed config
+# has one `Allowlist` struct and no `Allowlists` slice (config/config.go, `type
+# ViperConfig`), so `[[allowlist]]` and `[[allowlists]]` are arrays-of-tables
+# that map onto nothing and are **silently dropped** — a config in either of
+# those forms looks applied and suppresses nothing. Measured against one planted
+# fence line: `[[allowlist]]` → 1 finding, `[[allowlists]]` → 1 finding,
+# `[allowlist]` → 0. The same is true of `regexTarget`: with `regexes` alone the
+# line is still reported, because the default target is not the secret. An
+# allowlist that can be wrong in three ways and reports nothing when it is is a
+# gate that measures whether it was configured.
+#
+# ## What this costs, stated rather than discovered
+#
+# It suppresses any finding whose extracted secret is exactly 12 lowercase hex
+# characters. So, of the six planted cases below, the one that changes is the
+# fence id and nothing else:
+#
+#   api_key = "AKIA3XQ7PLMNOPQRSTU"                       20 chars  still reported
+#   token   = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8" prefixed  still reported
+#   secret  = "sk-live-9f8e7d6c5b4a39281706"              26 chars  still reported
+#   password= "9f8e7d6c5b4a3928170"                       19 chars  still reported
+#   ```secret id=ABCDEF012345 …                          uppercase  still reported
+#   Token: "0123456789abcdef01234567"                     24 chars  still reported
+#   ```secret id=5d2e8ba604c7 …                          12 chars  SUPPRESSED
+#
+# The whole risk, then: a real credential that is exactly 12 lowercase hex
+# characters, with a keyword beside it, anywhere in the repository. 48 bits is
+# below what any mainstream token format uses and below a meaningful shared
+# secret, and every prefixed format is untouched, so the cost is judged rather
+# than assumed away.
+#
+# Two of those "still reported" lines are also two live trips on a future
+# commit, left deliberately: `internal/sync/malformed_test.go` holds an
+# uppercase id because it is a fixture for a *malformed* fence, and
+# `internal/web/shell_test.go` holds a 24-hex CSRF token because it is a fixture
+# for a token. Neither is this application's id format, so neither is admitted
+# here on the strength of a file somebody happened to edit. If one ever fails
+# the build the fix is to make the fixture unmistakably fake, which is the real
+# fix and is somebody else's file.
+#
+# ## Verification
+#
+# `gitleaks detect` over the whole tree reports 0 findings with this file in
+# place. Against a file of planted credentials the default rules report 5 and
+# this config reports the same 4 with the fence id removed — the `github-pat` and
+# `generic-api-key` rules fire identically, which is the only evidence that
+# `useDefault = true` plus one regex is a filter rather than a switch.
+
+[extend]
+useDefault = true
+
+[allowlist]
+regexTarget = "secret"
+regexes = [
+  '''^[0-9a-f]{12}$''',
+]

@@ -414,22 +414,30 @@ func UserMenu(shell httpapi.Shell) templ.Component {
 }
 
 // LeftNav is the campaign column: the core destinations, in the order the plan
-// puts them, and then the plugin group if there is one.
+// puts them, the vault's own tree, and then the plugin group if there is one.
+//
+// The order is a decision and not an accident. The destinations come first
+// because they are the fixed set a reader can rely on being in the same place on
+// every page; the tree comes next because it is the answer to "where is the thing
+// I am looking for"; and the plugin group stays last so that a plugin
+// contributes to the column rather than displacing anything core owns. It is the
+// position the Admin group is waiting for too, when a view model grows the field
+// its permission needs.
 //
 // The plugin group renders only when the handler found at least one entry this
 // principal may follow. An <h2> over an empty <ul> is a heading promising a
 // destination and offering none, which AGENTS.md §7 calls a bug rather than a
 // cosmetic one: the absence of a plugin has to leave no trace at all, not a
 // placeholder with a name on it. So the test is the count, and at zero the
-// heading is not in the document.
+// heading is not in the document. The tree section applies the same rule to its
+// own two absences — see SidebarTree.
 //
 // The Admin group is still absent, and for a different reason: it needs a
 // permission the view model does not carry. Shell has the principal, and a
 // template that asks a principal whether it is an administrator is the second
 // place in the codebase answering a question that belongs to the Perm
 // middleware. It waits for a field the handler fills rather than for a guess
-// made here — and the plugin group below it is placed so that Admin lands
-// between the core entries and the plugins when it arrives.
+// made here.
 func LeftNav(shell httpapi.Shell) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -476,6 +484,10 @@ func LeftNav(shell httpapi.Shell) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</ul>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = SidebarTree(shell).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -537,7 +549,7 @@ func pluginNavItem(item httpapi.PluginNavItem) templ.Component {
 		var templ_7745c5c3_Var12 templ.SafeURL
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs(item.Href)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 308, Col: 21}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 317, Col: 21}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -550,7 +562,7 @@ func pluginNavItem(item httpapi.PluginNavItem) templ.Component {
 		var templ_7745c5c3_Var13 string
 		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.Plugin)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 308, Col: 66}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 317, Col: 66}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 		if templ_7745c5c3_Err != nil {
@@ -573,7 +585,7 @@ func pluginNavItem(item httpapi.PluginNavItem) templ.Component {
 		var templ_7745c5c3_Var14 string
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(item.Label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 315, Col: 21}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 324, Col: 21}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 		if templ_7745c5c3_Err != nil {
@@ -621,7 +633,7 @@ func NavItem(href, icon, label string) templ.Component {
 		var templ_7745c5c3_Var16 templ.SafeURL
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(href)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 328, Col: 16}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 337, Col: 16}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -642,7 +654,7 @@ func NavItem(href, icon, label string) templ.Component {
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 330, Col: 16}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 339, Col: 16}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 		if templ_7745c5c3_Err != nil {

@@ -212,8 +212,8 @@ func (s *Service) write(ctx context.Context, actor authz.Principal, pageID int64
 	if err != nil {
 		return err
 	}
-	if err := s.policy.Check(actor, authz.PermWritePage, authz.Page(pageID, owner)); err != nil {
-		return err
+	if checkErr := s.policy.Check(actor, authz.PermWritePage, authz.Page(pageID, owner)); checkErr != nil {
+		return checkErr
 	}
 	hidden, err := s.hiddenIn(ctx, actor, owner, doc)
 	if err != nil {
@@ -265,8 +265,8 @@ func (s *Service) write(ctx context.Context, actor authz.Principal, pageID int64
 		}
 		defer func() { _ = tx.Rollback() }()
 		for _, ev := range rows {
-			if _, err := store.AppendSecretEvent(ctx, tx, ev); err != nil {
-				return err
+			if _, appendSecretEventErr := store.AppendSecretEvent(ctx, tx, ev); appendSecretEventErr != nil {
+				return appendSecretEventErr
 			}
 		}
 		if change.movedAuthorization() {

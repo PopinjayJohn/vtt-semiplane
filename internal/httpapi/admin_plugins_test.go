@@ -300,9 +300,13 @@ func TestAContributionOfNothingIsDistinguishableFromAPluginThatIsNotOffered(t *t
 		t.Errorf("a plugin granted nothing does not say so:\n%.2000s", document)
 	}
 	// A plugin that was never offered is not a row. It has no name, no id and
-	// no row, and "quietmode" is not what it would be called.
-	if strings.Contains(document, "houserules") {
-		t.Errorf("a plugin that was never offered appears on the page:\n%.2000s", document)
+	// no row, and "quietmode" is not what it would be called. The scan is over the
+	// page's own content: the sidebar is a navigation over the vault, so a
+	// campaign that keeps its rules in a directory called houserules/ would
+	// otherwise be reported as a plugin that was never offered. See
+	// contentRegion.
+	if strings.Contains(contentRegion(t, document), "houserules") {
+		t.Errorf("a plugin that was never offered appears on the report:\n%.2000s", document)
 	}
 }
 
@@ -526,10 +530,25 @@ func TestNoPluginIdLeaksIntoThePageOutsideTheReport(t *testing.T) {
 		}
 	}
 
+	// Both scans below are over the page's own content and not over the whole
+	// document, and that boundary is the correction rather than a convenience.
+	// The left sidebar is a navigation over the vault: it links every page this
+	// principal may read, by path. A campaign is free to keep its rules in
+	// houserules/ and its maps in maps/, and this fixture's does, so a
+	// whole-document substring test for a plugin id was measuring the shape of
+	// somebody's vault rather than the shape of the report. The claim is "the
+	// report does not describe a plugin that was not offered", and the report is
+	// inside #page-region.
+	//
+	// The same reasoning is why the vault's path check below still reads the
+	// document: the shell's own campaign name is a directory name and is on every
+	// page by design, and its *path* is not.
+	page := contentRegion(t, document)
+
 	// A plugin that was never offered is nowhere on the page. These are the ids
 	// the tree is most likely to grow, which is why they are the ones named.
 	for _, id := range []string{"houserules", "linkpreview", "forgesmith", "maptool", "core"} {
-		if strings.Contains(document, id) {
+		if strings.Contains(page, id) {
 			t.Errorf("the page mentions %q, which is not in the report", id)
 		}
 	}
@@ -543,7 +562,7 @@ func TestNoPluginIdLeaksIntoThePageOutsideTheReport(t *testing.T) {
 		if !plugin.All().Has(granted) {
 			t.Fatalf("the fixture's assumption about %q is wrong, so the assertion below is vacuous", granted)
 		}
-		if strings.Contains(document, string(granted)) {
+		if strings.Contains(page, string(granted)) {
 			t.Errorf("the page names the capability %q, which the report granted to nobody", granted)
 		}
 	}

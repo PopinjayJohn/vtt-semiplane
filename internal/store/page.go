@@ -3,13 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
-// pageColumns is the one projection of the pages table. Every getter and lister
-// selects exactly these, in this order, so a change to the row struct is a
-// change to one list rather than to twenty queries.
 // PageRef is a lightweight reference to a page, used where only identity and a
 // display string are needed (breadcrumb, backlink chip, related list).
 type PageRef struct {
@@ -136,6 +134,9 @@ const LinkByteStartUnset = -1
 // LinkKind is the kind of reference a Link row represents.
 type LinkKind string
 
+// The reference kinds a Link row can record. They are distinct from the
+// markdown constructs that produce them: one `![[x]]` is an embed and a
+// wikilink at once, and the row records which reading won.
 const (
 	LinkWikilink   LinkKind = "wikilink"
 	LinkEmbed      LinkKind = "embed"
@@ -162,6 +163,9 @@ type Tag struct {
 	Name string
 }
 
+// pageColumns is the one projection of the pages table. Every getter and lister
+// selects exactly these, in this order, so a change to the row struct is a
+// change to one list rather than to twenty queries.
 const pageColumns = `p.id, p.path, p.basename, p.title, p.frontmatter, p.content_hash,
 	p.mtime_unix, p.size_bytes, p.page_type, p.system_id, p.owner_id,
 	p.created_at, p.updated_at`
@@ -194,14 +198,6 @@ func scanPage(s RowScanner) (Page, error) {
 		return Page{}, err
 	}
 	return p, nil
-}
-
-func scanPageRow(s RowScanner) (PageRow, error) {
-	var r PageRow
-	if err := s.Scan(&r.ID, &r.Path, &r.Title); err != nil {
-		return PageRow{}, err
-	}
-	return r, nil
 }
 
 // upsertPageSQL keys on path, which is the natural key, and deliberately leaves
@@ -340,9 +336,9 @@ func queryPages(ctx context.Context, q Queryer, query string, args ...any) ([]Pa
 	}
 	var out []Page
 	err = ForEach(rows, func(r Rows) error {
-		p, err := scanPage(r)
-		if err != nil {
-			return fmt.Errorf("store: scan page: %w", err)
+		p, scanPageErr := scanPage(r)
+		if scanPageErr != nil {
+			return fmt.Errorf("store: scan page: %w", scanPageErr)
 		}
 		out = append(out, p)
 		return nil
@@ -426,7 +422,7 @@ func IsPageOwner(ctx context.Context, q Queryer, pageID, userID int64) (bool, er
 	err := q.QueryRowContext(ctx,
 		`SELECT 1 FROM page_owners WHERE page_id = ? AND user_id = ?`, pageID, userID).Scan(&one)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("store: check ownership of page %d: %w", pageID, err)
@@ -449,13 +445,13 @@ func ListPageOwners(ctx context.Context, q Queryer, pageID int64) ([]PageOwner, 
 			isOwner int64
 			addedAt string
 		)
-		if err := r.Scan(&po.PageID, &po.UserID, &isOwner, &addedAt); err != nil {
-			return fmt.Errorf("store: scan page owner: %w", err)
+		if scanErr := r.Scan(&po.PageID, &po.UserID, &isOwner, &addedAt); scanErr != nil {
+			return fmt.Errorf("store: scan page owner: %w", scanErr)
 		}
 		po.IsOwner = isOwner != 0
-		var err error
-		if po.AddedAt, err = ParseTime(addedAt); err != nil {
-			return err
+		var addedErr error
+		if po.AddedAt, addedErr = ParseTime(addedAt); addedErr != nil {
+			return addedErr
 		}
 		out = append(out, po)
 		return nil
@@ -477,8 +473,8 @@ func ListPagesForUser(ctx context.Context, q Queryer, userID int64) ([]int64, er
 	var out []int64
 	err = ForEach(rows, func(r Rows) error {
 		var id int64
-		if err := r.Scan(&id); err != nil {
-			return fmt.Errorf("store: scan page id: %w", err)
+		if scanErr := r.Scan(&id); scanErr != nil {
+			return fmt.Errorf("store: scan page id: %w", scanErr)
 		}
 		out = append(out, id)
 		return nil
@@ -519,8 +515,8 @@ func ListPageAliases(ctx context.Context, q Queryer, pageID int64) ([]string, er
 	var out []string
 	err = ForEach(rows, func(r Rows) error {
 		var alias string
-		if err := r.Scan(&alias); err != nil {
-			return fmt.Errorf("store: scan alias: %w", err)
+		if scanErr := r.Scan(&alias); scanErr != nil {
+			return fmt.Errorf("store: scan alias: %w", scanErr)
 		}
 		out = append(out, alias)
 		return nil

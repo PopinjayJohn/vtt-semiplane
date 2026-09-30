@@ -33,7 +33,13 @@ permissions:
 
 env:
   GOFLAGS: -mod=readonly
-  GO_VERSION: "1.26.0"
+  # 1.26.6, and the reason is security.yml's govulncheck job rather than taste:
+  # at 1.26.0 that job reported 16 standard-library vulnerabilities, every one
+  # of them fixed in a 1.26.x patch and GO-2026-6090 needing 1.26.6. The
+  # vulnerable code is the toolchain's own standard library, so no change to this
+  # repository can clean a scan run under 1.26.0. go.mod's `go 1.26.0` directive
+  # is a language version and stays: 1.26.6 satisfies it.
+  GO_VERSION: "1.26.6"
 
 jobs:
   cross-build:
@@ -64,26 +70,52 @@ jobs:
       # failure `go build` cannot report. windows/arm64 is the target that
       # would go unexecuted by every other job in this file, so it is the one
       # that most needs this.
+      #
+      # It is asserted with `go version -m`, not with `file(1)`, and the reason
+      # is that `file(1)` was measuring the runner rather than the artifact.
+      # The libmagic wording for a PE machine type changed: file 5.48 prints
+      # "PE32+ executable for MS Windows 10.00 (console), ARM64, 6 sections" and
+      # the Ubuntu 24.04 runner's file 5.45 prints "PE32+ executable (console)
+      # Aarch64, for MS Windows, 6 sections". The old check asserted the string
+      # "ARM64", so it passed on one image and failed on another for a binary
+      # that was correct on both — and the five markers that did match were
+      # matching by luck of the same thing. A check whose expected string is a
+      # property of the host's magic database is not a check on the artifact.
+      #
+      # `go version -m` reads the build info the Go linker embedded in the
+      # binary itself, so the answer is "what did this binary say it was built
+      # for", and it is the same string on every machine and every file(1).
+      # Verified on all six artifacts of a real `make cross`; the ELF/Mach-O/PE
+      # shape is still worth knowing, so it is printed rather than asserted.
       - name: each artifact is a binary for the platform it claims
         shell: bash
         run: |
           set -euo pipefail
-          check() { # <file> <marker> <marker>
-            got=$(file -b "$1")
-            for want in "${@:2}"; do
-              case "$got" in
-                *"$want"*) ;;
-                *) echo "FAIL $1: expected \"$want\" in: $got"; return 1 ;;
-              esac
-            done
-            echo "ok   $1: $want"
-          }
-          check dist/semiplane_linux_amd64       "ELF 64-bit LSB executable" "x86-64" "statically linked"
-          check dist/semiplane_linux_arm64       "ELF 64-bit LSB executable" "ARM aarch64" "statically linked"
-          check dist/semiplane_darwin_amd64      "Mach-O 64-bit" "x86_64"
-          check dist/semiplane_darwin_arm64      "Mach-O 64-bit" "arm64"
-          check dist/semiplane_windows_amd64.exe "PE32+ executable" "x86-64"
-          check dist/semiplane_windows_arm64.exe "PE32+ executable" "ARM64"
+          # os/arch pairs are read from the Makefile's own TARGETS, so this
+          # cannot be a fourth copy of the release matrix: a target added there
+          # and forgotten here would go unchecked rather than be reported.
+          targets=$(make -s targets)
+          failed=0
+          for target in $targets; do
+            os=${target%/*}; arch=${target#*/}
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            bin="dist/semiplane_${os}_${arch}${ext}"
+            if [ ! -f "$bin" ]; then
+              echo "MISSING  $target: $bin was not built"; failed=1; continue
+            fi
+            info=$(go version -m "$bin")
+            got_os=$(printf '%s\n' "$info" | sed -n 's/.*GOOS=//p')
+            got_arch=$(printf '%s\n' "$info" | sed -n 's/.*GOARCH=//p')
+            if [ "$got_os" = "$os" ] && [ "$got_arch" = "$arch" ]; then
+              echo "ok   $target  ($bin)"
+              echo "       $(file -b "$bin")"
+            else
+              echo "FAIL $target: $bin reports GOOS=$got_os GOARCH=$got_arch"
+              failed=1
+            fi
+          done
+          echo "==> $(( $(echo "$targets" | wc -w) )) artifacts checked"
+          test "$failed" -eq 0
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: cross-build

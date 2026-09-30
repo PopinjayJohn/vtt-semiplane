@@ -149,11 +149,19 @@
 
 	// The link preview's hook and its two surfaces.
 	//
-	// The attribute is the one core's link renderer puts on every internal link
-	// in a rendered body; its value is an integer page id and never a title, a
-	// path or any content, so a listener bound to it cannot learn anything the
-	// document did not already say. A plugin that wants its links previewable
-	// emits the attribute and never emits hover behaviour of its own.
+	// The attribute is the one core puts on every internal link to a page: on
+	// the links in a rendered body, and on the shell's own — the file tree, the
+	// dashboard, a search hit, a backlink, a tag chip, a status panel. Its value
+	// is an integer page id and never a title, a path or any content, so a
+	// listener bound to it cannot learn anything the document did not already
+	// say. A plugin that wants its links previewable emits the attribute and
+	// never emits hover behaviour of its own.
+	//
+	// "Every internal link" is the part that is easy to get half right. An
+	// attribute on the body's links alone means a reader gets a preview from one
+	// link on a page and nothing from the link beside it, with nothing in the
+	// console to explain it — which is what "previews work unreliably" looks
+	// like from a chair.
 	const WIKILINK = '[data-wikilink]';
 	const PREVIEW_CARD = 'link-preview-card';
 	const PREVIEW_PANE = 'link-preview';

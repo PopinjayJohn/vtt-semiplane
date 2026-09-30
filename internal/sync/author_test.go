@@ -235,22 +235,22 @@ func TestRetryWithNoAccountsIsANoOp(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
 		}
 	})
-	if err := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if migrateErr := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); migrateErr != nil {
+		t.Fatalf("migrate: %v", migrateErr)
 	}
-	if n, err := store.CountUsers(ctx, db.Reader()); err != nil || n != 0 {
-		t.Fatalf("the fixture has %d accounts, want none (%v)", n, err)
+	if n, countUsersErr := store.CountUsers(ctx, db.Reader()); countUsersErr != nil || n != 0 {
+		t.Fatalf("the fixture has %d accounts, want none (%v)", n, countUsersErr)
 	}
 	ix, err := New(Options{DB: db, Root: v.Root, Log: obs.Discard()})
 	if err != nil {
 		t.Fatalf("new indexer: %v", err)
 	}
-	if _, err := ix.IndexBatch(ctx, []string{"Cellar.md"}); err != nil {
-		t.Fatalf("index: %v", err)
+	if _, indexBatchErr := ix.IndexBatch(ctx, []string{"Cellar.md"}); indexBatchErr != nil {
+		t.Fatalf("index: %v", indexBatchErr)
 	}
 	if pendingCount(ix) != 1 {
 		t.Fatalf("%d paths pending, want 1", pendingCount(ix))
@@ -275,11 +275,11 @@ func TestRetryWithNoAccountsIsANoOp(t *testing.T) {
 		t.Error("the retry forgot a pending path that is still unattributable")
 	}
 	// And with the account finally created, the same call now does the work.
-	if _, err := store.InsertUser(ctx, db.Writer(), store.User{
+	if _, insertUserErr := store.InsertUser(ctx, db.Writer(), store.User{
 		Username: "wren", DisplayName: "wren", Role: "dm",
 		PWSalt: []byte("salt"), CreatedAt: clockNow,
-	}); err != nil {
-		t.Fatalf("insert user: %v", err)
+	}); insertUserErr != nil {
+		t.Fatalf("insert user: %v", insertUserErr)
 	}
 	res, err = ix.RetryUnresolvedAuthors(ctx)
 	if err != nil {
@@ -319,8 +319,8 @@ func TestThePendingSetIsBounded(t *testing.T) {
 		h.vault.WriteFile(t, rel, "# P\n\n"+
 			secretFence(fmt.Sprintf("%012x", i), "dm", fmt.Sprintf("ghost%d", i), secretBody(rel))+"\n")
 	}
-	if _, err := small.IndexBatch(context.Background(), paths); err != nil {
-		t.Fatalf("index: %v", err)
+	if _, indexBatchErr := small.IndexBatch(context.Background(), paths); indexBatchErr != nil {
+		t.Fatalf("index: %v", indexBatchErr)
 	}
 	if got := pendingCount(small); got != capacity {
 		t.Errorf("the pending set holds %d paths, want the capacity of %d", got, capacity)

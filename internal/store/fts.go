@@ -36,7 +36,7 @@ func readPageText(ctx context.Context, q Queryer, pageID int64) (PageText, bool,
 	err := q.QueryRowContext(ctx, `SELECT `+pageTextColumns+` FROM page_text WHERE page_id = ?`, pageID).
 		Scan(&t.PageID, &t.Title, &t.Headings, &t.Body)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return PageText{}, false, nil
 	case err != nil:
 		return PageText{}, false, fmt.Errorf("store: read page_text of page %d: %w", pageID, err)
@@ -118,7 +118,7 @@ func readSecretText(ctx context.Context, q Queryer, secretID string) (string, in
 	err := q.QueryRowContext(ctx,
 		`SELECT body, fts_rowid FROM secret_text WHERE secret_id = ?`, secretID).Scan(&body, &row)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return "", 0, false, nil
 	case err != nil:
 		return "", 0, false, fmt.Errorf("store: read secret_text of %s: %w", secretID, err)
@@ -196,8 +196,8 @@ func DeleteSecretTextsOfPage(ctx context.Context, e Execer, pageID int64) error 
 	var ids []string
 	err = ForEach(rows, func(r Rows) error {
 		var id string
-		if err := r.Scan(&id); err != nil {
-			return fmt.Errorf("store: scan secret id: %w", err)
+		if scanErr := r.Scan(&id); scanErr != nil {
+			return fmt.Errorf("store: scan secret id: %w", scanErr)
 		}
 		ids = append(ids, id)
 		return nil

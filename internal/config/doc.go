@@ -4,5 +4,4 @@
 // Stdlib flag parsing, not a config library: there are eight settings and a
 // third-party config framework would add a dependency and a learning curve for
 // nothing.
-
 package config

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/PopinjayJohn/vtt-semiplane/internal/authz"
+	"github.com/PopinjayJohn/vtt-semiplane/internal/md"
 )
 
 // Visibility is an alias of the canonical visibility type, which lives in
@@ -73,6 +74,51 @@ func (s Secret) CanRead(p authz.Principal, isPageOwner bool) bool {
 // IsOpen reports whether the secret is currently visible to every
 // authenticated user.
 func (s Secret) IsOpen() bool { return s.Visibility == VisibilityTable }
+
+// Openable reports whether the body of this fence may be shown to p at all.
+//
+// It is CanRead plus the fail-closed rule, and it is the only function that
+// should answer that, because the two halves have been owned separately and
+// disagreed. A fence whose directive the parser could not read is closed to
+// *everybody* — including the author and including a DM — because the app could
+// not establish what closing it means, and a fence that claims secrecy and
+// cannot prove it says what it claims must not be served to anyone.
+//
+// That is a stronger refusal than CanRead, and it is not a policy: the
+// entitlement question is still CanRead's and is still authz's. CanRead answers
+// "may this principal read a well-formed secret"; Openable answers "is this
+// fence a secret at all".
+//
+// unusable reports whether the parser reported a problem with this fence's
+// directive, from either source: md's codes for a fence it segmented as secret,
+// or Parse's own. A caller that has neither can pass false, and gets CanRead —
+// which is the weaker answer, so a caller that has the problems must pass them.
+//
+// AGENTS.md §6 and TestAnUnunderstoodSecretFenceNeverBecomesPublic are the rule
+// this is the code for, and TestThePageViewShowsEveryFenceTheFileHas is the gate
+// that noticed it had been implemented twice and differently: the page view hid
+// such a fence from the table and showed it to the DM, while the raw view
+// swapped it for a lock for everyone. Neither was fail-closed, and they were not
+// even the same rule.
+func (s Secret) Openable(p authz.Principal, isPageOwner, unusable bool) bool {
+	return !unusable && s.CanRead(p, isPageOwner)
+}
+
+// UnusableFenceIDs is the set of fence ids the parser reported a problem with,
+// from md's problems and Parse's own.
+//
+// Problems that name no fence are not in it: a frontmatter that could not be
+// located is about the document rather than about a secret inside it, and
+// attributing it to every fence on the page would close fences that are fine.
+func UnusableFenceIDs(mdProblems, ownProblems []md.Problem) map[string]bool {
+	out := make(map[string]bool, len(mdProblems)+len(ownProblems))
+	for _, p := range append(append([]md.Problem{}, mdProblems...), ownProblems...) {
+		if p.SecretID != "" {
+			out[p.SecretID] = true
+		}
+	}
+	return out
+}
 
 // Redacted returns a copy with the body removed, suitable for a ViewModel that
 // is rendered to a principal who failed CanRead. The body string is dropped,

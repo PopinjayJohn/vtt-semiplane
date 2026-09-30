@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// sink keeps a result alive so the compiler cannot elide the call that made it.
-var sink []Edit
-
 func TestSplit(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -120,11 +117,18 @@ func TestIdenticalInputIsANoOp(t *testing.T) {
 // called from a parallel test.
 func TestIdenticalInputAllocatesNothing(t *testing.T) {
 	big := []byte(pathological())
-	if n := testing.AllocsPerRun(5, func() { sink = Lines(big, big) }); n != 0 {
+	// The result is held in a local rather than a package variable. A global
+	// sink is the usual way to keep a call from being elided, and it was the
+	// race this package's CI caught: TestWallClockAt400KiB's subtests run in
+	// parallel and wrote the same global, so `go test -race` failed while the
+	// non-race build passed. A local plus KeepAlive is as un-elidable and is
+	// not shared.
+	var kept []Edit
+	if n := testing.AllocsPerRun(5, func() { kept = Lines(big, big) }); n != 0 {
 		t.Errorf("Lines on identical %d-byte input allocated %v times, want 0", len(big), n)
 	}
-	if sink != nil {
-		t.Errorf("identical input produced %d edits, want 0", len(sink))
+	if len(kept) != 0 {
+		t.Errorf("identical input produced %d edits, want 0", len(kept))
 	}
 }
 

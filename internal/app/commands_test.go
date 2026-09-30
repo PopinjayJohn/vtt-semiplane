@@ -226,14 +226,14 @@ func TestBackupThenMigrateTakesABackup(t *testing.T) {
 	head := store.SchemaVersion()
 	withDB(t, f.vault.Root, func(db *store.DB) {
 		for _, col := range []string{"byte_start", "byte_len"} {
-			if _, err := db.Writer().ExecContext(context.Background(),
-				"ALTER TABLE links DROP COLUMN "+col); err != nil {
-				t.Fatalf("roll the schema back: %v", err)
+			if _, writerErr := db.Writer().ExecContext(context.Background(),
+				"ALTER TABLE links DROP COLUMN "+col); writerErr != nil {
+				t.Fatalf("roll the schema back: %v", writerErr)
 			}
 		}
-		if _, err := db.Writer().ExecContext(context.Background(),
-			"PRAGMA user_version = 1"); err != nil {
-			t.Fatalf("roll the schema back: %v", err)
+		if _, writerErr := db.Writer().ExecContext(context.Background(),
+			"PRAGMA user_version = 1"); writerErr != nil {
+			t.Fatalf("roll the schema back: %v", writerErr)
 		}
 	})
 	f.boot(t, f.opts)
@@ -310,8 +310,8 @@ func TestTheBackupCommandWritesAndPlacesABackup(t *testing.T) {
 	}
 	placed := filepath.Join(outDir, entries[0].Name())
 	for _, want := range []string{vault.ManifestName, vault.MetaName, vault.DBName, vault.FilesDir} {
-		if _, err := os.Stat(filepath.Join(placed, want)); err != nil {
-			t.Errorf("the copy has no %s: %v", want, err)
+		if _, statErr := os.Stat(filepath.Join(placed, want)); statErr != nil {
+			t.Errorf("the copy has no %s: %v", want, statErr)
 		}
 	}
 	// The original stays where vault.Restore can reach it: a --out copy must not

@@ -7,5 +7,4 @@
 // Path is the only way a user-supplied string becomes a filesystem path, and
 // its constructor is the only place containment is established. Nothing in the
 // codebase may do filepath.Join(root, userInput) directly.
-
 package vault

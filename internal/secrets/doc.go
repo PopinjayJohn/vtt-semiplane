@@ -8,5 +8,4 @@
 //
 // Secrets are plaintext on disk (D4, ADR-0004). The protection is filesystem
 // permissions plus server-side authorization, not encryption. See docs.
-
 package secrets

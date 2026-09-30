@@ -8,5 +8,4 @@
 // log is a separate handler with an allow-list of keys, because an audit entry
 // is a security record and must be structured and free-form values must not
 // reach it.
-
 package obs

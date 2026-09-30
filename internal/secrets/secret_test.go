@@ -127,7 +127,15 @@ func TestVisibilityAliasesTheCanonicalType(t *testing.T) {
 	t.Parallel()
 	// The alias is the mechanism that keeps the SQL predicate and the Go policy
 	// naming the same three values. A distinct type would break both.
-	var v Visibility = authz.VisibilityDM
+	//
+	// Declared with the named type and then assigned, rather than `var v =` or
+	// `Visibility(...)`: Visibility is an alias, so a conversion is a no-op that
+	// unconvert rightly reports, and inferring the type would stop naming it —
+	// which is the only thing this test is about. staticcheck wants both forms
+	// collapsed, so the two that would collapse it are suppressed rather than
+	// applied; the alternative is a test that cannot fail.
+	var v Visibility       //nolint:staticcheck // the named type is the subject; see above
+	v = authz.VisibilityDM //nolint:staticcheck // ditto
 	if v != authz.VisibilityDM {
 		t.Fatal("secrets.Visibility is not the authz type")
 	}

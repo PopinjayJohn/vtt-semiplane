@@ -60,7 +60,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// flag.Parse has already printed the whole flag set's usage.
 		return exitOK
 	case err != nil:
-		fmt.Fprintln(stderr, "semiplane: "+err.Error())
+		_, _ = fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		return exitUsage
 	}
 	if helpRequested(cfg) {
@@ -68,12 +68,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// own argument, and config cannot answer it: it does not know which
 		// command is coming, and refusing the flag would be worse than both
 		// answering it and ignoring it.
-		fmt.Fprintln(stderr, usageLine)
+		_, _ = fmt.Fprintln(stderr, usageLine)
 		return exitOK
 	}
 	if bad := unexpectedFlag(cfg); bad != "" {
-		fmt.Fprintln(stderr, "semiplane: "+bad)
-		fmt.Fprintln(stderr, usageLine)
+		_, _ = fmt.Fprintln(stderr, "semiplane: "+bad)
+		_, _ = fmt.Fprintln(stderr, usageLine)
 		return exitUsage
 	}
 
@@ -85,7 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// The one command that must work with no vault at all: it reports what
 		// was linked into this binary, so it is answered before anything is
 		// resolved, locked or opened. A wrong --vault is irrelevant to it.
-		fmt.Fprintln(stdout, app.Info())
+		_, _ = fmt.Fprintln(stdout, app.Info())
 		return exitOK
 
 	case "reindex":
@@ -104,8 +104,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return pluginsCommand(cfg, stdout, stderr)
 
 	default:
-		fmt.Fprintf(stderr, "semiplane: unknown command %q\n", cfg.Command)
-		fmt.Fprintln(stderr, usageLine)
+		_, _ = fmt.Fprintf(stderr, "semiplane: unknown command %q\n", cfg.Command)
+		_, _ = fmt.Fprintln(stderr, usageLine)
 		return exitUsage
 	}
 }
@@ -188,7 +188,7 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 		Reindex: cfg.Reindex,
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "semiplane: "+err.Error())
+		_, _ = fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		return exitFailure
 	}
 	if a.Status().Addr == "" {
@@ -196,17 +196,17 @@ func serve(cfg config.Config, stdout, stderr io.Writer) int {
 		// Saying so is the difference between a build whose router has not
 		// landed yet and a server that is broken; exiting non-zero is because
 		// the operator asked to serve and was not served.
-		fmt.Fprintln(stderr, "semiplane: the vault was opened and indexed, but no HTTP handler is mounted in this build, so nothing is being served")
+		_, _ = fmt.Fprintln(stderr, "semiplane: the vault was opened and indexed, but no HTTP handler is mounted in this build, so nothing is being served")
 		shutdown(a, stderr)
 		return exitFailure
 	}
 	if api, err = installHandler(cfg, a, mount, stderr); err != nil {
-		fmt.Fprintln(stderr, "semiplane: "+err.Error())
+		_, _ = fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		shutdown(a, stderr)
 		return exitFailure
 	}
 	if err := a.Run(ctx); err != nil {
-		fmt.Fprintln(stderr, "semiplane: "+err.Error())
+		_, _ = fmt.Fprintln(stderr, "semiplane: "+err.Error())
 		return exitFailure
 	}
 	// Before a.Run's own shutdown would have run, and deliberately: the streams
@@ -265,7 +265,7 @@ func vaultCommand(cfg config.Config, stdout, stderr io.Writer) int {
 	case len(cfg.SubArgs) == 0, len(cfg.SubArgs) == 1 && cfg.SubArgs[0] == "info":
 		return report(stderr, app.VaultInfo(context.Background(), options(cfg, stderr), stdout))
 	default:
-		fmt.Fprintf(stderr, "semiplane: unknown vault subcommand %q; the only one is info\n", strings.Join(cfg.SubArgs, " "))
+		_, _ = fmt.Fprintf(stderr, "semiplane: unknown vault subcommand %q; the only one is info\n", strings.Join(cfg.SubArgs, " "))
 		return exitUsage
 	}
 }
@@ -287,7 +287,7 @@ func pluginsCommand(cfg config.Config, stdout, stderr io.Writer) int {
 		app.PluginsList(context.Background(), opts, stdout)
 		return exitOK
 	default:
-		fmt.Fprintf(stderr, "semiplane: unknown plugins subcommand %q; the only one is list\n", strings.Join(cfg.SubArgs, " "))
+		_, _ = fmt.Fprintf(stderr, "semiplane: unknown plugins subcommand %q; the only one is list\n", strings.Join(cfg.SubArgs, " "))
 		return exitUsage
 	}
 }
@@ -328,7 +328,7 @@ func report(stderr io.Writer, err error) int {
 	if err == nil {
 		return exitOK
 	}
-	fmt.Fprintln(stderr, "semiplane: "+err.Error())
+	_, _ = fmt.Fprintln(stderr, "semiplane: "+err.Error())
 	return exitFailure
 }
 
@@ -338,6 +338,6 @@ func shutdown(a *app.App, stderr io.Writer) {
 	ctx, cancel := context.WithTimeout(context.Background(), app.ShutdownTimeout)
 	defer cancel()
 	if err := a.Shutdown(ctx); err != nil {
-		fmt.Fprintln(stderr, "semiplane: shutdown: "+err.Error())
+		_, _ = fmt.Fprintln(stderr, "semiplane: shutdown: "+err.Error())
 	}
 }

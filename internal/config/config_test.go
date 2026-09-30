@@ -130,9 +130,9 @@ func TestTheSubcommandMayBeWrittenAnywhere(t *testing.T) {
 		t.Fatalf("the first form did not parse as written: %+v", want)
 	}
 	for _, args := range forms[1:] {
-		got, err := Load(args, io.Discard)
-		if err != nil {
-			t.Fatalf("load %v: %v", args, err)
+		got, loadErr := Load(args, io.Discard)
+		if loadErr != nil {
+			t.Fatalf("load %v: %v", args, loadErr)
 		}
 		if got.Command != want.Command {
 			t.Errorf("%v: command is %q, want %q", args, got.Command, want.Command)

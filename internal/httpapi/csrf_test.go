@@ -292,13 +292,13 @@ func fixtureNewestRevisionID(fx *fixture) string {
 		}
 		// The fixture's own writer, so the revision is recorded by the same
 		// mechanism the route uses and not by a test-only insert.
-		if err := fx.Vault.Save(context.Background(), vault.SaveRequest{
+		if saveErr := fx.Vault.Save(context.Background(), vault.SaveRequest{
 			Path:            p.Rel(),
 			NewContent:      src,
 			BaseContentHash: vault.Hash(src),
 			ActorID:         fx.tryAdminPrincipal().UserID,
 			ExpectPerm:      authz.PermWritePage,
-		}); err != nil {
+		}); saveErr != nil {
 			return
 		}
 		fx.reindexAll()
@@ -532,9 +532,9 @@ func TestLoginRotatesTheSession(t *testing.T) {
 		fx := newFixture(t)
 		fx.accountsFor()
 		phone := fx.newSession()
-		drain(phone.login(otherName, otherPass))
+		drain(phone.login(otherName, otherPass)) //nolint:bodyclose // drain closes the body it is handed
 		laptop := fx.newSession()
-		drain(laptop.login(otherName, otherPass))
+		drain(laptop.login(otherName, otherPass)) //nolint:bodyclose // drain closes the body it is handed
 		if got := fx.liveSessionCount(fx.userID(otherName)); got < 2 {
 			t.Errorf("two independent logins produced %d live sessions; a second device is not a rotation and must not be revoked", got)
 		}

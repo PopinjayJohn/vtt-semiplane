@@ -112,7 +112,11 @@ func benchPageLoop(b *testing.B, client *http.Client, pages []string) {
 	for i := 0; i < b.N; i++ {
 		page := pages[i%len(pages)]
 		start := time.Now()
-		resp, err := client.Get(page)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, page, nil)
+		if err != nil {
+			b.Fatalf("build the request for %s: %v", page, err)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			b.Fatalf("GET %s: %v", page, err)
 		}
@@ -121,7 +125,7 @@ func benchPageLoop(b *testing.B, client *http.Client, pages []string) {
 		// benchmark that opened a new TCP connection per iteration would be
 		// measuring the loopback stack.
 		n, err := io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		lat = append(lat, time.Since(start))
 		if err != nil {
 			b.Fatalf("read %s: %v", page, err)

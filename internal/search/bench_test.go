@@ -173,9 +173,9 @@ func benchVault(b *testing.B, pages int) *store.DB {
 	if err != nil {
 		b.Fatalf("open: %v", err)
 	}
-	b.Cleanup(func() { db.Close() })
-	if err := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); err != nil {
-		b.Fatalf("migrate: %v", err)
+	b.Cleanup(func() { _ = db.Close() })
+	if migrateErr := store.Migrate(ctx, db.Writer(), func(context.Context) error { return nil }); migrateErr != nil {
+		b.Fatalf("migrate: %v", migrateErr)
 	}
 
 	now := time.Unix(1750000000, 0).UTC()
@@ -183,12 +183,12 @@ func benchVault(b *testing.B, pages int) *store.DB {
 	for _, u := range []struct {
 		name, role string
 	}{{"dm", "dm"}, {"alice", "player"}, {"bob", "player"}} {
-		id, err := store.InsertUser(ctx, db.Writer(), store.User{
+		id, insertUserErr := store.InsertUser(ctx, db.Writer(), store.User{
 			Username: u.name, DisplayName: u.name, Role: u.role, PWSalt: []byte("s"),
 			CreatedAt: now,
 		})
-		if err != nil {
-			b.Fatalf("user: %v", err)
+		if insertUserErr != nil {
+			b.Fatalf("user: %v", insertUserErr)
 		}
 		ids = append(ids, id)
 	}
