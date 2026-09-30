@@ -1096,6 +1096,67 @@ func assertNoFixtureBody(t *testing.T, what, text string) {
 // that traverses out of the vault and of the app's own state must all be the
 // same bytes, and the permission the route is mounted on must be one every reader
 // who may read public content already holds.
+// TestARequestedPathCarryingABackslashIsRefusedLikeAMissingPage is the portable
+// half of the backslash case, and it is the half that runs everywhere.
+//
+// A backslash is a path separator on Windows and an escape character in a
+// quoted string, so a request naming one is asking for something the route must
+// not interpret. The page it must not reach is a *real* one, nested one level
+// down, because a request for a path that does not exist proves nothing: a
+// router that quietly rewrote the backslash to a separator, or dropped it, would
+// still answer 404 for a name that is not there.
+//
+// The refusal also has to be the whole of the refusal — the same bytes as a page
+// that is not there — or a reader who is refused one path learns that some other
+// path was the one intended.
+func TestARequestedPathCarryingABackslashIsRefusedLikeAMissingPage(t *testing.T) {
+	t.Parallel()
+	fx := newFixtureWith(t, map[string]string{
+		"Index.md":            "---\ntitle: Index\ntype: note\n---\n\n# Index\n\nSee the [[nested/slash]].\n",
+		"nested/slash.md":     "---\ntitle: Nested\ntype: note\n---\n\n# Nested\n\nA page whose body is the one-nested-line.\n",
+		"nested/deep/page.md": "---\ntitle: Deep\ntype: note\n---\n\n# Deep\n\nA page whose body is the two-deep-line.\n",
+		"Backslash-free.md":   "---\ntitle: Flat\ntype: note\n---\n\n# Flat\n\nA page whose body is the flat-line.\n",
+	})
+	fx.accounts()
+	s := fx.asUser(otherName, otherPass)
+
+	// The control: the pages the backslashes stand in for, asked for properly.
+	// They answer 200, so the refusals below are refusals and not a fixture that
+	// never indexed anything.
+	for _, path := range []string{"/p/nested/slash.md", "/p/nested/deep/page.md", "/p/Backslash-free.md"} {
+		resp := s.do(s.get(path))
+		drain(resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status %d, want 200, so the refusals below would be vacuous", path, resp.StatusCode)
+		}
+	}
+
+	// The 404 page is the app shell, and the shell lists every page this reader
+	// may see — so a title is not evidence of anything. A body line is.
+	for _, tc := range []struct{ path, body string }{
+		{"/p/" + url.PathEscape(`Back\slash-free.md`) + "/export", "the flat-line"},
+		{"/p/" + url.PathEscape(`nested\slash.md`) + "/export", "the one-nested-line"},
+		{"/p/nested/deep" + url.PathEscape(`\page.md`) + "/export", "the two-deep-line"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			refused := s.do(s.get(tc.path))
+			refusedBody := s.read(refused)
+			if refused.StatusCode != http.StatusNotFound {
+				t.Errorf("a requested path carrying a backslash: status %d, want 404", refused.StatusCode)
+			}
+			if strings.Contains(refusedBody, tc.body) {
+				t.Errorf("the answer carries %q, so the refusal served the page the backslash named", tc.body)
+			}
+			missing := s.do(s.get("/p/There-is-no-such-page.md/export")) //nolint:bodyclose // s.read closes the body it is handed
+			if got := s.read(missing); got != refusedBody {
+				t.Errorf("a refused path answers differently from a page that does not exist (%d bytes against %d)",
+					len(refusedBody), len(got))
+			}
+		})
+	}
+}
+
 func TestExportNeverLeaks(t *testing.T) {
 	t.Parallel()
 	fences := fixtureFences(t)
@@ -1269,16 +1330,34 @@ func TestExportNeverLeaks(t *testing.T) {
 		t.Parallel()
 		// A page's name is an author's file name and is therefore whatever they
 		// typed, so it is not something that can be pasted into a response header
-		// unexamined. A quote is the character that matters: it ends the quoted
-		// string the name is written into, and anything after it is parsed as a
-		// new parameter. It is also legal in a POSIX file name, so an author can
-		// produce one without trying.
+		// unexamined. Two classes of character make that a real hazard, and which
+		// of them a fixture can be built from is a property of the filesystem,
+		// so it is probed and both are named here.
+		//
+		// A quote is the sharp one: it ends the quoted string the name is
+		// written into, and anything after it parses as a new parameter. It is
+		// legal in a POSIX file name, so an author produces one without trying,
+		// and it is not legal in a Windows one at all — seeding it there fails
+		// with "The filename, directory name, or volume label syntax is
+		// incorrect", a message about the fixture rather than about the header.
+		// The character itself is therefore covered on every platform by
+		// TestTheExportHeaderCannotBeSplitByAPageName, which drives the header
+		// builder with no filesystem in it at all; what this subtest keeps on
+		// every platform is the wiring around it — a real page, a real route, a
+		// real response header — using a name outside ASCII, which is the other
+		// class headerFilename reduces and which NTFS and APFS can both hold.
+		// (U+20AC has no canonical decomposition, so a filesystem that
+		// normalises filenames cannot change the name into a different one.)
+		pageName := "Owes €5.md"
+		if volumeCanHold(t, `Quote "only".md`) {
+			pageName = `Quote "only".md`
+		} else {
+			t.Logf("this volume refused the page name %q, so the quote case is covered by TestTheExportHeaderCannotBeSplitByAPageName and this subtest exercises the header with %q", `Quote "only".md`, pageName)
+		}
+
 		fx := newFixtureWith(t, map[string]string{
-			"Index.md":          "---\ntitle: Index\ntype: note\n---\n\n# Index\n\nSee the [[Odd]].\n",
-			"Quote \"only\".md": "---\ntitle: Odd\ntype: note\n---\n\n# Odd\n\nA page with an awkward name.\n",
-			// A backslash is refused, so it is here to be measured rather than
-			// assumed: see the subtest below.
-			"Back\\slash.md": "---\ntitle: B\ntype: note\n---\n\n# B\n\nAnother awkward name.\n",
+			"Index.md": "---\ntitle: Index\ntype: note\n---\n\n# Index\n\nSee the [[Odd]].\n",
+			pageName:   "---\ntitle: Odd\ntype: note\n---\n\n# Odd\n\nA page with an awkward name.\n",
 		})
 		// accounts and not accountsFor: this vault has no Tavern page, and
 		// accountsFor grants ownership of one, which is a failure in the fixture
@@ -1286,13 +1365,13 @@ func TestExportNeverLeaks(t *testing.T) {
 		fx.accounts()
 		s := fx.asUser(otherName, otherPass)
 
-		resp := s.do(s.get("/p/" + url.PathEscape("Quote \"only\".md") + "/export"))
+		resp := s.do(s.get("/p/" + url.PathEscape(pageName) + "/export"))
 		body := s.read(resp)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("the export of a page with a quote in its name: status %d, want 200", resp.StatusCode)
+			t.Fatalf("the export of the page named %q: status %d, want 200", pageName, resp.StatusCode)
 		}
 		if len(body) == 0 {
-			t.Error("the export of a page with a quote in its name is empty")
+			t.Errorf("the export of the page named %q is empty", pageName)
 		}
 		disposition := resp.Header.Get("Content-Disposition")
 		if disposition == "" {
@@ -1304,8 +1383,17 @@ func TestExportNeverLeaks(t *testing.T) {
 		if !strings.Contains(disposition, "attachment;") {
 			t.Errorf("the Content-Disposition is %q, want an attachment", disposition)
 		}
-		if name := dispositionName(t, disposition); strings.ContainsAny(name, "\"\\\r\n") {
+		name := dispositionName(t, disposition)
+		if strings.ContainsAny(name, "\"\\\r\n") {
 			t.Errorf("the Content-Disposition filename is %q, which still carries a quote, a backslash or a line break", name)
+		}
+		// The name was reduced rather than passed through: RFC 6266's plain
+		// filename form is a Latin-1 token, so anything outside ASCII has to
+		// have been replaced. Asserted as a property of the header and not as an
+		// exact string, because a filesystem is free to normalise the name it
+		// stored and the header is built from what came back out of the index.
+		if hasNonASCII(name) {
+			t.Errorf("the Content-Disposition filename %q is not ASCII, so a name a browser cannot read was passed through unexamined", name)
 		}
 
 		t.Run("a backslash in a page name is refused, not served", func(t *testing.T) {
@@ -1315,13 +1403,32 @@ func TestExportNeverLeaks(t *testing.T) {
 			// turn a name into a header parameter — and the answer it gets has to
 			// be the same answer a page that is not there gets, or the refusal
 			// confirms that something is.
-			refused := s.do(s.get("/p/" + url.PathEscape("Back\\slash.md") + "/export"))
-			refusedBody := s.read(refused)
+			//
+			// A page whose *name* carries a backslash cannot be created where a
+			// backslash is a path separator: FromSlash turns the name into a
+			// two-level path, the walk records "Back/slash.md" instead, and the
+			// request below is then asking about a page that does not exist —
+			// which is the assertion below, for the wrong reason. So the case is
+			// built only where the fixture can hold the name, and the refusal of
+			// a backslash in a requested path is covered everywhere by
+			// TestARequestedPathCarryingABackslashIsRefusedLikeAMissingPage.
+			if !volumeCanHold(t, "Back\\slash.md") {
+				t.Skip("this volume cannot hold a file whose name carries a backslash, " +
+					"so a page named Back\\slash.md does not exist to be refused")
+			}
+			slash := newFixtureWith(t, map[string]string{
+				"Index.md":       "---\ntitle: Index\ntype: note\n---\n\n# Index\n\nSee the [[B]].\n",
+				"Back\\slash.md": "---\ntitle: B\ntype: note\n---\n\n# B\n\nAnother awkward name.\n",
+			})
+			slash.accounts()
+			cs := slash.asUser(otherName, otherPass)
+			refused := cs.do(cs.get("/p/" + url.PathEscape("Back\\slash.md") + "/export"))
+			refusedBody := cs.read(refused)
 			if refused.StatusCode != http.StatusNotFound {
 				t.Errorf("the export of a page whose name carries a backslash: status %d, want 404", refused.StatusCode)
 			}
-			missing := s.do(s.get("/p/There-is-no-such-page.md/export")) //nolint:bodyclose // s.read closes the body it is handed
-			if got := s.read(missing); got != refusedBody {
+			missing := cs.do(cs.get("/p/There-is-no-such-page.md/export")) //nolint:bodyclose // cs.read closes the body it is handed
+			if got := cs.read(missing); got != refusedBody {
 				t.Errorf("a refused page name answers differently from a page that does not exist (%d bytes against %d)",
 					len(refusedBody), len(got))
 			}
@@ -1369,6 +1476,18 @@ func dispositionName(t *testing.T, disposition string) string {
 		t.Fatalf("the Content-Disposition %q has an unterminated filename", disposition)
 	}
 	return rest[:j]
+}
+
+// hasNonASCII reports whether a header value carries a byte above 0x7e, which
+// is the class RFC 6266's plain filename form cannot carry and headerFilename
+// exists to remove.
+func hasNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 0x7e {
+			return true
+		}
+	}
+	return false
 }
 
 // newFailingReindexFixture is a second view of the same fixture, pointed at a

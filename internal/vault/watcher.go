@@ -371,6 +371,17 @@ func (w *Watcher) rel(abs string) (string, bool) {
 	if err != nil {
 		real = w.opts.Root
 	}
+	// The event's path has to be resolved too, and the two sides have to be
+	// resolved the same way. Comparing a resolved root against an unresolved
+	// event path refuses every event for a vault reached through any symlinked
+	// component — which on macOS is not an edge case but the shape of every
+	// temporary directory (/var → /private/var, /tmp → /private/tmp) and of
+	// `semiplane --vault /tmp/vault` as an ordinary command. Every other walk in
+	// this package resolves both sides; resolve.go carries the same warning in
+	// prose, and this function was the one that forgot the other half.
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = resolved
+	}
 	r, err := filepath.Rel(real, abs)
 	if err != nil {
 		return "", false

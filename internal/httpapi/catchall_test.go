@@ -516,7 +516,11 @@ func TestWhichLayerRefusedEachNameIsMeasuredRatherThanAssumed(t *testing.T) {
 			t.Fatalf("write the file outside the vault: %v", err)
 		}
 		if err := os.Symlink(outside, filepath.Join(fx.Root, "escape.png")); err != nil {
-			t.Fatalf("link the vault's escape.png to a file outside it: %v", err)
+			// Whether a symlink can be created is a property of the host and not
+			// of the route: Windows needs the unprivileged-create flag to be
+			// honoured, which it is only for an administrator or with Developer
+			// Mode on. The error is the probe, and it is the message.
+			t.Skipf("this platform will not take a symlink: %v", err)
 		}
 		armAttachment(t, fx, "Tavern.md", "escape.png")
 

@@ -3,10 +3,13 @@ package httpapi_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -494,11 +497,25 @@ func TestRenameRefusesAPathOutsideTheVault(t *testing.T) {
 // produces is <vault>/etc/passwd.md. Accepting it is correct. What must be
 // impossible is the thing a reader of the code is worried about — the real
 // /etc/passwd being overwritten — so that is what the test asserts.
+//
+// The out-of-vault half of that claim is asserted two ways because one of them
+// does not exist everywhere. `/etc/passwd` is a POSIX path: Windows has no such
+// file to have been clobbered, and a test that asserted it still existed would be
+// asserting the shape of the host rather than the behaviour of the rename. So
+// the host-file check runs where the file is, and the invariant that holds on
+// every platform — the vault's parent is not a place a rename may write — is
+// asserted unconditionally, against a snapshot taken before the rename.
 func TestRenameTreatsALeadingSlashAsVaultRelative(t *testing.T) {
 	t.Parallel()
 	fx := newFixture(t)
 	fx.accountsFor()
 	ctx := context.Background()
+
+	// t.TempDir's parent holds only this test's own directories and is removed
+	// with the test, so a snapshot of it is private evidence: anything the
+	// rename created or changed outside the vault would show up here.
+	parent := filepath.Dir(fx.Root)
+	before := outsideVault(t, parent, fx.Root)
 
 	tavern := fx.renamePageID(t, "Tavern.md")
 	result, err := fx.Server.RenamePage(ctx, fx.renamePrincipal(t, dmName), tavern, "/etc/passwd")
@@ -511,9 +528,55 @@ func TestRenameTreatsALeadingSlashAsVaultRelative(t *testing.T) {
 	if !fx.existsOnDisk("etc/passwd.md") {
 		t.Error("the file was not created inside the vault")
 	}
-	if _, err := os.Stat("/etc/passwd"); err != nil {
-		t.Errorf("the real /etc/passwd is gone: %v", err)
+
+	if got := outsideVault(t, parent, fx.Root); !slices.Equal(got, before) {
+		t.Errorf("the rename wrote outside the vault:\n before %v\n after  %v", before, got)
 	}
+	// The host file, where there is one. Recorded rather than assumed, so the
+	// absence of /etc/passwd is not read as a pass.
+	if st, err := os.Stat("/etc/passwd"); err == nil {
+		if after, afterErr := os.Stat("/etc/passwd"); afterErr != nil || after.Size() != st.Size() {
+			t.Errorf("the real /etc/passwd is gone or changed: was %d bytes, now %v (%v)", st.Size(), after, afterErr)
+		}
+	} else {
+		t.Logf("this host has no /etc/passwd (%v), so the out-of-vault check is the parent snapshot above", err)
+	}
+}
+
+// outsideVault lists every path under root that is not under skip, with each
+// file's size. It is a byte-level record, because "the rename did not touch it"
+// is a claim about contents and a name-only listing would miss a file rewritten
+// in place.
+func outsideVault(t *testing.T, root, skip string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == skip {
+			return fs.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			return relErr
+		}
+		if d.IsDir() {
+			out = append(out, rel+"/")
+			return nil
+		}
+		st, statErr := d.Info()
+		if statErr != nil {
+			return statErr
+		}
+		out = append(out, fmt.Sprintf("%s (%d bytes)", rel, st.Size()))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", root, err)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // TestRenameRefusesTheAppsOwnState is the case the vault agent flagged and the

@@ -320,6 +320,7 @@ func TestMoveRenamesWithinTheVault(t *testing.T) {
 
 func TestMoveCreatesTheDestinationDirectory(t *testing.T) {
 	t.Parallel()
+	skipUnlessModeBitsAreEnforced(t)
 	v := testutil.NewVault(t)
 	body := "# Map of Ash\n"
 	v.WriteFile(t, "Campaigns/Ash/Map.md", body)

@@ -991,6 +991,32 @@ func (sub *subscriber) deliver() {
 	if sub.path == "" {
 		return
 	}
+	// A subscriber's authority is the one it was attached with, but the *index* it
+	// would be rendered against is the current one, and a reveal is both: it
+	// bumps the generation and reindexes, in that order. So a render started
+	// after the bump and flushed before terminateStale swept would be rendered by
+	// a principal who is no longer entitled to its contents — a body delivered
+	// to a reader the stream was supposed to have ended for.
+	//
+	// Reading the generation here closes that window, and it is the same value
+	// the sweep compares, so the two cannot disagree about what "stale" means.
+	// The cost is one indexed read per deliver, which is nothing next to the
+	// render it is guarding, and the alternative is a security property that
+	// depends on the sweep winning a race.
+	//
+	// A read that fails closes the stream rather than proceeding. A guard that is
+	// skipped when the check cannot be made is not a guard, and the two answers
+	// are not symmetrical: delivering may be wrong, and not delivering costs a
+	// reconnect.
+	gen, err := store.AuthzGeneration(sub.ctx, ev.srv.db.Reader())
+	if err != nil || gen != sub.gen {
+		if err != nil {
+			ev.log.Warn("a live-update stream was closed because its entitlement could not be confirmed",
+				"action", "http.events.generation_unreadable", "path", sub.path, "reason", err.Error())
+		}
+		sub.abort()
+		return
+	}
 	ev.mu.Lock()
 	hook := ev.onRender
 	ev.mu.Unlock()

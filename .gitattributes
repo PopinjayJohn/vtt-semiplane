@@ -1,0 +1,22 @@
+# Line endings are the repository's business, not the checker's.
+#
+# Git for Windows installs with core.autocrlf=true, and actions/checkout does
+# not override it. Without this file every LF-only file in the tree arrives on a
+# Windows runner as CRLF, and four tests that hold a byte-exact expectation
+# about a file's contents fail with "want \n, got \r" — on a repository where
+# nothing has changed any line endings. It also breaks scripts/test.sh's shebang
+# and hands the embedded sample campaign to //go:embed with CRLF, so a campaign
+# page round-trips differently on the machine that ships it.
+#
+# The rule is one line: text files are LF in the tree and LF in the repository,
+# on every platform, and CRLF is something a file's *contents* decide — the
+# reason the entries below are marked -text rather than converted.
+
+* text=auto eol=lf
+
+# Fixtures whose whole subject is what a checkout did to them. `crlf-mixed.md`
+# exists to prove that a CRLF file round-trips byte for byte, and a checkout
+# that normalises it turns a mixed file into a pure-CRLF one, so the test stops
+# testing the case it was written for. Marking it -text leaves the blob exactly
+# as committed, which is the only way a fixture about line endings can be tested.
+internal/md/testdata/crlf*.md -text

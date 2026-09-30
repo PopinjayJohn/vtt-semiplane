@@ -318,3 +318,92 @@ func readOrEmpty(t *testing.T, v *testutil.Vault, rel string) []byte {
 	}
 	return b
 }
+
+// TestTheWatcherSeesChangesThroughASymlinkedRoot is a regression gate on a
+// defect this file's subject had, and it is here so the next reader finds it
+// beside the code that caused it rather than in a CI log on a platform they do
+// not use.
+//
+// **What was wrong.** Watcher.rel resolved the vault root with EvalSymlinks and
+// then compared it against the event name, which fsnotify built from the path it
+// was given — the unresolved one. A vault reached through any symlinked component
+// therefore had every event refused by within, silently, with no log line and no
+// counter. What was left was the 60 second reconciliation scan, so the index still
+// converged and the app still looked correct; what was lost was the whole reason
+// the watcher exists, which is a change showing up in a third of a second.
+//
+// **Why it was not a test problem.** Every other consumer of the root in this
+// package resolves it: Walk, Scanner.Scan and Resolve all EvalSymlinks the root
+// first, and resolve.go says why in as many words — "a temp dir under /var on
+// macOS is reached through a symlink, so an unresolved root would make every
+// legitimate path look like it escaped". rel resolved the root and forgot the
+// other side of the comparison, internal/sync handed it the unresolved root
+// straight from Options.Root, and app.Boot hands it one from --vault without
+// resolving it. So `semiplane --vault /tmp/vault` on macOS, where /tmp is a
+// symlink to /private/tmp, was an ordinary command producing a dead watcher, and
+// it was found only because the macOS unit job runs the suite on a volume where
+// every temp dir is symlinked.
+//
+// The fix is one line — resolve the event path as well as the root — and this
+// test is the half that would have caught it without a macOS runner. It is
+// written to fail on either side of the defect, because a test that only passes
+// when the bug is present is a characterisation and not a gate.
+func TestTheWatcherSeesChangesThroughASymlinkedRoot(t *testing.T) {
+	t.Parallel()
+	// The macOS shape exactly: a symlinked *component above* the root, which is
+	// what /var -> private/var and /tmp -> private/tmp do to every t.TempDir.
+	outer := t.TempDir()
+	realParent := filepath.Join(outer, "real")
+	if err := os.MkdirAll(filepath.Join(realParent, "vault", "Campaigns"), 0o700); err != nil {
+		t.Fatalf("create the vault: %v", err)
+	}
+	page := []byte("# Gundren\n")
+	if err := os.WriteFile(filepath.Join(realParent, "vault", "Campaigns", "Gundren.md"), page, 0o600); err != nil {
+		t.Fatalf("seed the page: %v", err)
+	}
+	linkParent := filepath.Join(outer, "link")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	viaLink := filepath.Join(linkParent, "vault")
+	viaReal := filepath.Join(realParent, "vault")
+	if resolved, err := filepath.EvalSymlinks(viaLink); err != nil || resolved != viaReal {
+		t.Skipf("this volume resolves %q to %q, so there is no mismatch for the defect to act on", viaLink, resolved)
+	}
+
+	delivered := deliveriesFor(t, viaLink)
+	if got := delivered(); len(got) == 0 {
+		t.Errorf("the watcher delivered nothing through a symlinked root, so rel is comparing a resolved root "+
+			"against an unresolved event path and the watcher is dead for any vault reached through a symlink: %v", got)
+	}
+
+	// The positive control, in the same test and the same session: the same
+	// vault, the same code, addressed by the path the root resolves to. Without
+	// it this test would pass on a watcher that is broken for any reason at all.
+	if got := deliveriesFor(t, viaReal)(); len(got) == 0 {
+		t.Fatal("the watcher delivered nothing through the resolved root either, so this test is not measuring the symlink at all")
+	}
+}
+
+// deliveriesFor runs a watcher over a root, edits one file through that root and
+// returns a function that reports what arrived. It waits a bounded quiet period
+// rather than for a delivery, so it answers "was anything seen" in both
+// directions.
+func deliveriesFor(t *testing.T, root string) func() []string {
+	t.Helper()
+	col := &batchCollector{}
+	w, err := NewWatcher(WatchOptions{Root: root, Debounce: 40 * time.Millisecond, Log: obs.Discard()})
+	if err != nil {
+		t.Fatalf("new watcher: %v", err)
+	}
+	w.OnBatch(col.add)
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	if err := os.WriteFile(filepath.Join(root, "Campaigns", "Gundren.md"), []byte("# edited\n"), 0o600); err != nil {
+		t.Fatalf("edit through the root: %v", err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	return col.all
+}

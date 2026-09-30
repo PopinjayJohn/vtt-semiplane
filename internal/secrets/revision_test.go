@@ -411,15 +411,33 @@ func TestEditModeStrings(t *testing.T) {
 // on what it does and does not mention. A source-reading gate is coarse, and that
 // is the point: it fails loudly and names the string it objected to, where a
 // behavioural assertion would pass on an empty result.
+//
+// The end of the body is found by line rather than by searching for the byte
+// sequence "\n}\n", because the source is a checked-in file read at test time
+// and a checkout may rewrite its terminators: git's core.autocrlf is true by
+// default on Git for Windows and actions/checkout does not override it, so on a
+// Windows runner every Go source file in the tree is CRLF. A byte sequence that
+// only occurs in an LF file would report "could not find the end" there — a
+// failure with nothing wrong with the function, and no way to tell a real
+// regression from a runner setting.
 func functionBody(t *testing.T, src, signature string) string {
 	t.Helper()
 	i := strings.Index(src, signature)
 	if i < 0 {
 		t.Fatalf("no %q in the source", signature)
 	}
+	// A top-level function's closing brace is the only one in column zero, so
+	// the first line that is exactly "}" ends it.
 	rest := src[i+len(signature):]
-	if j := strings.Index(rest, "\n}\n"); j >= 0 {
-		return src[i : i+len(signature)+j+3]
+	for off := 0; off < len(rest); {
+		nl := strings.IndexByte(rest[off:], '\n')
+		if nl < 0 {
+			break
+		}
+		if strings.TrimSuffix(rest[off:off+nl], "\r") == "}" {
+			return src[i : i+len(signature)+off+nl+1]
+		}
+		off += nl + 1
 	}
 	t.Fatalf("could not find the end of %q", signature)
 	return ""

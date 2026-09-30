@@ -63,6 +63,7 @@ func TestReadReportsMissingAndDirectorySeparately(t *testing.T) {
 
 func TestWriteIsAtomicAndLeavesTheModeAt0600(t *testing.T) {
 	t.Parallel()
+	skipUnlessModeBitsAreEnforced(t)
 	v := testutil.NewVault(t)
 	p := New(v.Root, "Campaigns/Ash/Gundren.md")
 
@@ -89,6 +90,7 @@ func TestWriteIsAtomicAndLeavesTheModeAt0600(t *testing.T) {
 // is the common case, not an edge case.
 func TestWriteCreatesParentDirectories(t *testing.T) {
 	t.Parallel()
+	skipUnlessModeBitsAreEnforced(t)
 	v := testutil.NewVault(t)
 	p := New(v.Root, "Campaigns/Braxton/Ash/NPCs/Sela.md")
 	if err := Write(t.Context(), p, []byte("# Sela\n")); err != nil {

@@ -248,7 +248,7 @@ func TestRoundTripGoldenIsNotVacuous(t *testing.T) {
 	if !bytes.Contains(revealed, []byte("under the third stone")) {
 		t.Errorf("the body did not survive the reveal: %q", revealed)
 	}
-	if !bytes.HasPrefix(revealed, []byte("# Secrets\n\nPublic before.\n\n")) {
+	if !bytes.HasPrefix(revealed, []byte(inEOL("# Secrets\n\nPublic before.\n\n", fixtureEOL(withSecret)))) {
 		t.Errorf("reveal disturbed the bytes before the fence: %q", revealed)
 	}
 }

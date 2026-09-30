@@ -227,6 +227,26 @@ func TestCRLFRoundTrip(t *testing.T) {
 	if !bytes.Equal(Resave(Parse("mixed.md", mixed)), mixed) {
 		t.Error("a mixed-ending file did not round trip")
 	}
+	// Whether the fixture is still mixed is a property of the *checkout*, not of
+	// the parser, and it is checked here because it is invisible from Go: the
+	// blob of crlf-mixed.md is LF-only, so git's core.autocrlf — true by default
+	// on Git for Windows, and not overridden by actions/checkout — rewrites it
+	// to pure CRLF on a Windows runner. The round trip above still passes, so
+	// without this line the fixture silently stops being the thing it exists for
+	// and the suite reports green over a case it is no longer running. The fix
+	// belongs in .gitattributes (`internal/md/testdata/crlf*.md -text`); this
+	// only makes the loss say so.
+	if isCRLFOnly(mixed) {
+		t.Log("the checkout normalised crlf-mixed.md to pure CRLF, so the mixed-ending case above is not being exercised here; " +
+			"the blob is LF-only, so a .gitattributes marking internal/md/testdata/crlf*.md -text would restore it")
+	}
+}
+
+// isCRLFOnly reports whether every line terminator in b is CRLF, which is what a
+// checkout that normalised a mixed fixture produces.
+func isCRLFOnly(b []byte) bool {
+	n := bytes.Count(b, []byte("\n"))
+	return n > 0 && bytes.Count(b, []byte("\r\n")) == n
 }
 
 // TestTrailingWhitespacePreserved covers the whitespace a YAML round trip and
@@ -234,14 +254,17 @@ func TestCRLFRoundTrip(t *testing.T) {
 func TestTrailingWhitespacePreserved(t *testing.T) {
 	t.Parallel()
 	// Each case is a fixture and the exact bytes inside it that a tidy-up
-	// would remove.
+	// would remove. The bytes are written in LF and rendered into whatever the
+	// fixture carries, because a Windows checkout of this repository arrives
+	// with core.autocrlf on and every LF-only fixture as CRLF.
 	cases := map[string]string{
 		"trailing-whitespace.md": "Line with trailing spaces.   \n",
 		"frontmatter-comment.md": "title: Commented   # trailing comment\n",
 		"escape.md":              `and a backslash \\ at the end.` + "\n",
 	}
-	for name, want := range cases {
+	for name, literal := range cases {
 		src := loadFixture(t, name)
+		want := inEOL(literal, fixtureEOL(src))
 		d := Parse(name, src)
 		if !bytes.Equal(Resave(d), src) {
 			t.Errorf("%s: a re-save changed the bytes", name)
@@ -330,7 +353,9 @@ func TestInvalidFrontmatterIsPreservedAndReported(t *testing.T) {
 		t.Error("an unparseable frontmatter block was rewritten")
 	}
 	block := d.FrontmatterRange.Slice(src)
-	if !bytes.HasPrefix(block, []byte("---\n")) || !bytes.Contains(block, []byte("\n---\n")) {
+	eol := fixtureEOL(src)
+	openFence, closeFence := inEOL("---\n", eol), inEOL("\n---\n", eol)
+	if !bytes.HasPrefix(block, []byte(openFence)) || !bytes.Contains(block, []byte(closeFence)) {
 		t.Errorf("block range = %q, want both fences", block)
 	}
 	if !bytes.Contains(src[d.FrontmatterYAMLRange.Start:d.FrontmatterYAMLRange.End], []byte("title: [unclosed")) {

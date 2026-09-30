@@ -27,16 +27,16 @@ func TestRewriteLinksIsBytePreserving(t *testing.T) {
 	got, problems := RewriteLinks(d, edits)
 	assertNoProblems(t, problems)
 
-	want := "# Links around a secret\n" +
-		"\n" +
-		"A [[Gundren Redrake]] and a [[Gundren Redrake#Flaws|flaws]] and a ![[Gundren Redrake#^d8f1a2]] and a\n" +
-		"[markdown](Gundren Redrake.md) and a [[#Local heading]] and a [[Other/Gundren]].\n" +
-		"\n" +
-		"```secret id=abcdef012345\n" +
-		"A [[Gundren]] that only the DM may read.\n" +
-		"```\n" +
-		"\n" +
-		"And a [[Gundren Redrake]] after the secret.   " + "\n"
+	want := inEOL("# Links around a secret\n"+
+		"\n"+
+		"A [[Gundren Redrake]] and a [[Gundren Redrake#Flaws|flaws]] and a ![[Gundren Redrake#^d8f1a2]] and a\n"+
+		"[markdown](Gundren Redrake.md) and a [[#Local heading]] and a [[Other/Gundren]].\n"+
+		"\n"+
+		"```secret id=abcdef012345\n"+
+		"A [[Gundren]] that only the DM may read.\n"+
+		"```\n"+
+		"\n"+
+		"And a [[Gundren Redrake]] after the secret.   "+"\n", fixtureEOL(src))
 	if !bytes.Equal(got, []byte(want)) {
 		t.Errorf("the rewrite is not byte-exact:\n%s", firstDifference([]byte(want), got))
 	}

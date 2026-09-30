@@ -103,6 +103,7 @@ func TestRestoreRefusesToOverwriteWithoutForce(t *testing.T) {
 // backup directory is a vault in a folder, and the operator must be told.
 func TestBackupIsPrivateAndSaysItHoldsSecrets(t *testing.T) {
 	t.Parallel()
+	skipUnlessModeBitsAreEnforced(t)
 	v := testutil.NewVault(t)
 	v.WriteFile(t, "Campaigns/Ash/Gundren.md", "# Gundren\n")
 	dir := backupAt(t, v, 6)

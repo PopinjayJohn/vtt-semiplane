@@ -16,6 +16,7 @@ import (
 // is to stop before the index is built rather than after a page has vanished.
 func TestCaseCollisionHaltsIndexing(t *testing.T) {
 	t.Parallel()
+	skipUnlessCaseIsDistinct(t)
 	v := testutil.NewVault(t)
 	v.WriteFile(t, "Campaigns/Ash/Gundren.md", "# lower\n")
 	v.WriteFile(t, "Campaigns/Ash/gundren.md", "# upper\n")
@@ -54,6 +55,7 @@ func TestCaseCollisionHaltsIndexing(t *testing.T) {
 // indexed, the other is reported as skipped, and the report is on every boot.
 func TestCaseCollisionAllowedIsExplicit(t *testing.T) {
 	t.Parallel()
+	skipUnlessCaseIsDistinct(t)
 	v := testutil.NewVault(t)
 	v.WriteFile(t, "Campaigns/Ash/Gundren.md", "# upper-first\n")
 	v.WriteFile(t, "Campaigns/Ash/gundren.md", "# lower-first\n")

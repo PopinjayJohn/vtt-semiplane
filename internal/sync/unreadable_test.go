@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -110,16 +109,30 @@ func TestAnUnreadableFileIsReportedAsAProblem(t *testing.T) {
 	}
 }
 
-// skipUnlessModesGateReads skips where the premise does not hold: on windows a
-// mode bit does not gate reads, and as root a mode-000 file is still readable,
-// so in both cases the test would pass without proving anything.
+// skipUnlessModesGateReads skips where the premise does not hold: a mode of 000
+// is a request, and a volume that does not honour it would let the test read the
+// very file whose unreadability it is asserting. That is three different
+// situations — Windows has no mode bits at all and os.Chmod toggles the
+// read-only attribute instead, root reads a mode-000 file, and a volume mounted
+// without mode support ignores the request — and they are told apart here by
+// performing the read the test depends on being refused.
+//
+// The previous form of this asked runtime.GOOS, which got Windows right and
+// named no reason for the other two, and the reason nobody reads is the whole
+// problem: a test that vanishes with a one-line message is a test a reader
+// cannot tell apart from one that was deleted.
 func skipUnlessModesGateReads(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("file modes do not gate reads on windows")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "probe.md")
+	if err := os.WriteFile(p, []byte("readable\n"), 0o000); err != nil {
+		t.Fatalf("create the mode probe: %v", err)
 	}
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a mode-000 file, so the test would prove nothing")
+	// Restore it so the temp directory can be removed: a 000 file with no
+	// permission bits is unremovable by its own directory on a POSIX volume.
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+	if b, err := os.ReadFile(p); err == nil {
+		t.Skipf("this volume let a mode-000 file be read (%d bytes), so a mode-000 file here is not an unreadable one", len(b))
 	}
 }
 

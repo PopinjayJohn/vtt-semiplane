@@ -163,9 +163,6 @@ func TestALostSaveRaceCarriesNoBytes(t *testing.T) {
 // file cannot be created. The file is canonical, so the service must say so
 // rather than report a success it cannot back up.
 func TestASaveWhoseFileCannotBeWrittenIsReported(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root, which ignores the directory mode this test sets")
-	}
 	t.Parallel()
 	ctx := context.Background()
 	h := newHarness(t, map[string]string{"Page.md": pageWithTwoSecrets})
@@ -184,6 +181,20 @@ func TestASaveWhoseFileCannotBeWrittenIsReported(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	// A chmod is a request, and not every volume honours one: root ignores it,
+	// Windows has no mode bit to set (os.Chmod toggles the read-only attribute
+	// and nothing else), and a volume mounted without mode support ignores it
+	// too. The refusal this test asserts is the one the filesystem produced, so
+	// the refusal is attempted here first — a positive control, because a test
+	// that assumed the directory was unwritable would go on to assert over a
+	// save that succeeded and report it as "a save into an unwritable directory
+	// was accepted", which sends a reader to the service when the service is
+	// fine.
+	if created, err := os.CreateTemp(dir, "semiplane-deny-probe-"); err == nil {
+		_ = created.Close()
+		t.Skip("this volume let a file be created in a directory whose mode is 0500, " +
+			"so there is no unwritable directory here to refuse a save against")
+	}
 	h.indexAll()
 	nested := pageID(t, h, "nested/Page.md")
 	nestedView, err := h.svc.EditView(ctx, h.dm(), nested)

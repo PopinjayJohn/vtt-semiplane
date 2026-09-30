@@ -1286,6 +1286,49 @@ func writeVault(t testing.TB, dir string, files map[string]string) {
 	}
 }
 
+// volumeCanHold reports whether this volume can hold a file with this exact
+// name, and the name it gives back.
+//
+// It exists because "can this platform create that file" has no portable answer
+// to ask for and a wrong guess is expensive in both directions. Windows forbids
+// `< > : " / \ | ? *` and every control character in a file name, so a fixture
+// naming one of them fails at seed time with a message about the file name and
+// not about the behaviour under test; a macOS volume that normalises filenames
+// can create the file and hand back a different name, which is worse, because
+// the fixture then asserts about a page that is not the one it wrote.
+//
+// The answer is measured by creating the file and listing the directory, not by
+// asking runtime.GOOS: a test that skips on the strength of a platform name is
+// a test that skips for a reason the reader has to take on trust, and it skips
+// for the wrong reason on a Windows volume that is mounted somewhere with a
+// filesystem willing to hold the name.
+func volumeCanHold(t *testing.T, name string) bool {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("probe\n"), 0o600); err != nil {
+		t.Logf("this volume refused the file name %q: %v", name, err)
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read back the probe directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != name {
+		t.Logf("this volume stored the file name %q as %q, so a fixture naming it would assert about a page that is not the one it wrote",
+			name, entryNames(entries))
+		return false
+	}
+	return true
+}
+
+func entryNames(entries []os.DirEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
 // drain closes a response and reads whatever is left, so a test that only wants
 // a status does not leak a connection.
 // drain releases a response whose body no assertion will read.

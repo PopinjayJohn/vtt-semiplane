@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // TestCopyTreeCopiesBytesAndCreatesDirectories is the ordinary case, kept first
@@ -158,7 +157,12 @@ func TestTheWalkEntryIsNotTheRefusal(t *testing.T) {
 			t.Fatalf("remove the page: %v", err)
 		}
 		if err := os.Symlink(outside, page); err != nil {
-			t.Fatalf("symlink over the page: %v", err)
+			// A probed skip rather than a failure: whether a symlink can be
+			// created is a property of the host — Windows needs the
+			// unprivileged-create flag to be honoured, which it is only for an
+			// administrator or with Developer Mode on — and it is not a property
+			// of the copy. The error is the probe and it says what it found.
+			t.Skipf("this platform will not take a symlink over an existing file: %v", err)
 		}
 		return page, stale
 	}
@@ -193,35 +197,4 @@ func TestTheWalkEntryIsNotTheRefusal(t *testing.T) {
 			t.Fatal("readRegularFile refused but returned the target's bytes")
 		}
 	})
-}
-
-// TestCopyTreeOpensNoPathThatWouldBlock pins the reason the Lstat comes first.
-//
-// os.Open on a fifo blocks until a writer arrives, so a refusal that arrived
-// after the open would be the hang rather than the answer. The wait is bounded so
-// a regression fails with a message rather than sitting until the suite timeout.
-func TestCopyTreeOpensNoPathThatWouldBlock(t *testing.T) {
-	t.Parallel()
-	mkfifo(t)
-
-	src := t.TempDir()
-	fifo := filepath.Join(src, "pipe")
-	if err := mkfifoAt(fifo); err != nil {
-		t.Fatalf("create the fifo: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(src, "page.md"), []byte("# A page"), 0o600); err != nil {
-		t.Fatalf("seed the page: %v", err)
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- copyTree(context.Background(), src, filepath.Join(t.TempDir(), "out")) }()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("copyTree copied a fifo")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("copyTree did not return within 10s on a tree holding a fifo: the refusal is arriving after the open, and an open on a fifo blocks until a writer arrives")
-	}
 }

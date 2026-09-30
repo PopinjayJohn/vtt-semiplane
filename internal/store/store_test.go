@@ -180,14 +180,28 @@ func diffSchema(a, b []schemaEntry) []string {
 // TestStateDirPermissions pins the two modes that are part of the threat model
 // under D4: the database holds every secret body in plaintext, so neither the
 // directory nor the file may be group- or world-readable.
+//
+// The modes are the only evidence there is of what was asked for, so the
+// assertion needs a volume that keeps them. Windows has no mode bits: os.Stat
+// synthesises 0777 for a directory and 0666 for a file out of the read-only
+// attribute, so both assertions below report 0777/0666 whatever the migration
+// requested. That is measured rather than assumed, because the same answer comes
+// from a volume mounted without mode support and from a CIFS share, and
+// runtime.GOOS would skip on all three for the same unexamined reason.
 func TestStateDirPermissions(t *testing.T) {
 	t.Parallel()
+	file, dir := keepModeBits(t)
+	if file != 0o600 || dir != 0o700 {
+		t.Skipf("this volume does not keep POSIX mode bits: a file created 0600 reads back %04o and a directory created 0700 reads back %04o, "+
+			"so the mode the migration asked for is not observable here", file, dir)
+	}
+
 	db := newDB(t)
 
-	dir := filepath.Join(db.Vault(), StateDirName)
-	di, err := os.Stat(dir)
+	d := filepath.Join(db.Vault(), StateDirName)
+	di, err := os.Stat(d)
 	if err != nil {
-		t.Fatalf("stat %s: %v", dir, err)
+		t.Fatalf("stat %s: %v", d, err)
 	}
 	if got := di.Mode().Perm(); got != 0o700 {
 		t.Errorf("state dir mode = %04o, want 0700", got)
@@ -200,6 +214,32 @@ func TestStateDirPermissions(t *testing.T) {
 	if got := fi.Mode().Perm(); got != 0o600 {
 		t.Errorf("database mode = %04o, want 0600", got)
 	}
+}
+
+// keepModeBits reports the mode this volume gave a file created 0600 and a
+// directory created 0700, read back through the same os.Stat the assertions
+// under test use. It lives in a directory of its own so it cannot be confused
+// with the state directory it is about.
+func keepModeBits(t *testing.T) (file, dir os.FileMode) {
+	t.Helper()
+	probe := t.TempDir()
+	p := filepath.Join(probe, "file")
+	d := filepath.Join(probe, "dir")
+	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		t.Fatalf("create the mode probe file: %v", err)
+	}
+	if err := os.Mkdir(d, 0o700); err != nil {
+		t.Fatalf("create the mode probe directory: %v", err)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat the mode probe file: %v", err)
+	}
+	di, err := os.Stat(d)
+	if err != nil {
+		t.Fatalf("stat the mode probe directory: %v", err)
+	}
+	return st.Mode().Perm(), di.Mode().Perm()
 }
 
 // TestWriterPoolIsSerialised proves the write pool is a queue, not a crowd. A

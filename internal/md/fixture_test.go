@@ -1,6 +1,7 @@
 package md
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,6 +54,41 @@ func loadFixture(t corpusTB, name string) []byte {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
 	return b
+}
+
+// fixtureEOL reports the line terminator a fixture's bytes currently carry.
+//
+// A fixture is a committed file read at test time, and a checkout is free to
+// rewrite its line endings: git's core.autocrlf is true by default on Git for
+// Windows, and actions/checkout does not override it, so every LF-only fixture
+// arrives as CRLF on a Windows runner. An expectation written with a literal
+// "\n" is then a comparison against the runner's git configuration rather than
+// against this package, and it fails on a tree where nothing changed.
+//
+// The answer is measured from the fixture rather than from runtime.GOOS,
+// because a checkout setting is not the platform: an LF checkout on Windows and
+// a CRLF checkout on Linux both exist, and hard-coding either one would make a
+// test that cannot fail.
+func fixtureEOL(b []byte) string {
+	if bytes.Contains(b, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// inEOL renders an expectation written in LF into the terminator a fixture
+// uses, so a test states its expected bytes once and in one convention.
+//
+// It is a translation and not a normalisation: only the terminator the fixture
+// already carried is accepted, so a rewrite that added a carriage return, or
+// dropped one, or reflowed a line, still differs from the expected bytes and
+// still fails. The alternative — normalising both sides before comparing —
+// would discard exactly the class of defect this package exists to catch.
+func inEOL(literal, eol string) string {
+	if eol == "\n" {
+		return literal
+	}
+	return strings.ReplaceAll(literal, "\n", eol)
 }
 
 // loadCorpus reads every fixture. It is the golden round trip's input, so it

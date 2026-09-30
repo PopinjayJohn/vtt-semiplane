@@ -122,6 +122,7 @@ func TestLockReleaseIsIdempotent(t *testing.T) {
 // the database and the backups.
 func TestLockCreatesItsDirectoryPrivately(t *testing.T) {
 	t.Parallel()
+	skipUnlessModeBitsAreEnforced(t)
 	v := testutil.NewVault(t)
 
 	h, err := Lock(t.Context(), v.Root)

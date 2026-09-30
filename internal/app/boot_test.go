@@ -469,6 +469,18 @@ func TestBannerPrintsWarnings(t *testing.T) {
 		t.Fatalf("chmod %s: %v", locked, err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(f.vault.Root, locked), 0o700) })
+	// A chmod of 000 is a request, and a volume that does not honour it would
+	// let the walk read the directory this test asserts it cannot read — so the
+	// page count below would be right and the "not indexed:" line would be
+	// missing, which reports as a banner defect when the banner is fine. The
+	// refusal is therefore attempted first. Windows has no mode bit to set (the
+	// chmod toggles the read-only attribute and nothing else), root reads a
+	// mode-000 directory, and a volume mounted without mode support ignores the
+	// request; all three are told apart here by doing the read, not by asking
+	// runtime.GOOS.
+	if _, err := os.ReadDir(filepath.Join(f.vault.Root, locked)); err == nil {
+		t.Skipf("this volume let a mode-000 directory be read, so there is no unreadable directory here for the walk to refuse")
+	}
 
 	a := f.boot(t, f.withHandler())
 	banner := f.banner.String()
