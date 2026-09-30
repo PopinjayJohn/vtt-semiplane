@@ -247,8 +247,16 @@ func FuzzResolveNeverEscapes(f *testing.F) {
 		if p.Rel() == "" {
 			t.Fatalf("Resolve(%q) returned the vault root", in)
 		}
-		if !within(root, p.Abs()) {
-			t.Fatalf("Resolve(%q) = %q, which is outside %q", in, p.Abs(), root)
+		// The containment check has to be made against the root Resolve reports,
+		// not the string handed in. Resolve resolves the root deliberately — a
+		// temp dir under /var on macOS is reached through /private/var — so
+		// comparing its resolved answer against an unresolved root fails on
+		// macOS for every input, and comparing it the other way would be a check
+		// that passes on a resolver that did nothing. Using the root from a
+		// successful Resolve keeps the property the fuzzer exists for: whatever
+		// went in, what came out is inside the vault the caller was given.
+		if !within(p.Root(), p.Abs()) {
+			t.Fatalf("Resolve(%q) = %q, which is outside the root it reports, %q", in, p.Abs(), p.Root())
 		}
 		for _, elem := range strings.Split(p.Rel(), "/") {
 			// A name may legitimately contain dots — "notes..md" is a real file
